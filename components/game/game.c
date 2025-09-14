@@ -6,12 +6,26 @@
 #include "terrarium.h"
 #include "reptiles.h"
 #include "environment.h"
-#include "esp_heap_caps.h"
+#include "economy.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define TAG "game"
+
+/* Persistent game state --------------------------------------------------- */
+
+#define MAX_TERRARIUM_ITEMS 16
+#define ITEM_NAME_LEN       32
+
+typedef struct {
+    size_t item_count;                                  /* Number of items */
+    char items[MAX_TERRARIUM_ITEMS][ITEM_NAME_LEN];     /* Item names      */
+    float temperature;                                  /* Environment     */
+    float humidity;
+    float uv_index;
+} terrarium_state_t;
 
 typedef struct {
     char species[32];
@@ -21,39 +35,60 @@ typedef struct {
     float terrarium_min_size;
     bool requires_authorisation;
     bool requires_certificat;
-} reptile_t;
+} reptile_state_t;
+
+typedef struct {
+    reptile_state_t reptile;    /* Stored reptile information */
+    terrarium_state_t terrarium;/* Terrarium inventory and env */
+    economy_t economy;          /* Economy state               */
+} game_state_t;
 
 static lv_obj_t *main_menu;
-static reptile_t *game_state;
+static game_state_t game_state; /* In-RAM game state snapshot */
 
-#define SAVE_PATH "/sdcard/game.dat"
+#define SAVE_PATH "/sdcard/simulrepile.sav"
+
+static bool save_game(void)
+{
+    return storage_save(SAVE_PATH, &game_state, sizeof(game_state));
+}
+
+static bool load_game(void)
+{
+    return storage_load(SAVE_PATH, &game_state, sizeof(game_state));
+}
 
 static void btn_new_game_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Start new game");
-    if (game_state) {
-        free(game_state);
-    }
-    game_state = heap_caps_calloc(1, sizeof(reptile_t), MALLOC_CAP_SPIRAM);
-    if (!game_state) {
-        ESP_LOGE(TAG, "Allocation failed");
-        return;
-    }
+
+    memset(&game_state, 0, sizeof(game_state));
+
     const reptile_info_t *info = reptiles_find("Python regius");
     if (!reptiles_validate(info)) {
         ESP_LOGE(TAG, "Invalid reptile data");
         return;
     }
-    strncpy(game_state->species, info->species, sizeof(game_state->species) - 1);
-    game_state->temperature = info->temperature;
-    game_state->humidity = info->humidity;
-    game_state->uv_index = info->uv_index;
-    game_state->terrarium_min_size = info->terrarium_min_size;
-    game_state->requires_authorisation = info->requires_authorisation;
-    game_state->requires_certificat = info->requires_certificat;
-    terrarium_update_environment(game_state->temperature, game_state->humidity,
-                                 game_state->uv_index);
-    if (!storage_save(SAVE_PATH, game_state, sizeof(reptile_t))) {
+
+    /* Populate reptile state */
+    strncpy(game_state.reptile.species, info->species, sizeof(game_state.reptile.species) - 1);
+    game_state.reptile.temperature = info->temperature;
+    game_state.reptile.humidity = info->humidity;
+    game_state.reptile.uv_index = info->uv_index;
+    game_state.reptile.terrarium_min_size = info->terrarium_min_size;
+    game_state.reptile.requires_authorisation = info->requires_authorisation;
+    game_state.reptile.requires_certificat = info->requires_certificat;
+
+    /* Initial terrarium environment mirrors reptile requirements */
+    game_state.terrarium.temperature = info->temperature;
+    game_state.terrarium.humidity = info->humidity;
+    game_state.terrarium.uv_index = info->uv_index;
+    terrarium_update_environment(info->temperature, info->humidity, info->uv_index);
+
+    /* Initialise economic state */
+    economy_init(&game_state.economy, 100.0f, 100.0f);
+
+    if (!save_game()) {
         ESP_LOGE(TAG, "Failed to save game");
     }
 
@@ -64,21 +99,33 @@ static void btn_new_game_event(lv_event_t *e)
 static void btn_resume_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Resume game");
-    if (!game_state) {
-        game_state = heap_caps_malloc(sizeof(reptile_t), MALLOC_CAP_SPIRAM);
-        if (!game_state) {
-            ESP_LOGE(TAG, "Allocation failed");
-            return;
-        }
-    }
-    if (!storage_load(SAVE_PATH, game_state, sizeof(reptile_t))) {
+
+    if (!load_game()) {
         ESP_LOGE(TAG, "No saved game");
         return;
     }
-    terrarium_update_environment(game_state->temperature, game_state->humidity,
-                                 game_state->uv_index);
-    ESP_LOGI(TAG, "Loaded %s T=%.1f H=%.1f UV=%.1f", game_state->species,
-             game_state->temperature, game_state->humidity, game_state->uv_index);
+
+    /* Restore terrarium environment */
+    terrarium_update_environment(game_state.terrarium.temperature,
+                                 game_state.terrarium.humidity,
+                                 game_state.terrarium.uv_index);
+
+    /* Restore terrarium inventory */
+    for (size_t i = 0; i < game_state.terrarium.item_count; ++i) {
+        terrarium_add_item(game_state.terrarium.items[i]);
+    }
+
+    ESP_LOGI(TAG,
+             "Loaded %s T=%.1f H=%.1f UV=%.1f budget=%.2f day=%u",
+             game_state.reptile.species,
+             game_state.terrarium.temperature,
+             game_state.terrarium.humidity,
+             game_state.terrarium.uv_index,
+             game_state.economy.budget,
+             game_state.economy.day);
+
+    /* Continue to room view */
+    room_show();
 }
 
 static void btn_settings_event(lv_event_t *e)
