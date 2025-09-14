@@ -5,6 +5,7 @@
 #include "room.h"
 #include "terrarium.h"
 #include "reptiles.h"
+#include "environment.h"
 #include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
@@ -95,6 +96,7 @@ void game_init(void)
     if (!reptiles_load()) {
         ESP_LOGE(TAG, "Failed to load reptile data");
     }
+    environment_init();
     ESP_LOGI(TAG, "Game initialized");
 }
 
