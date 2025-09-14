@@ -3,6 +3,7 @@
 #include "storage.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define TAG "game"
 
@@ -13,23 +14,55 @@ typedef struct {
 } reptile_t;
 
 static lv_obj_t *main_menu;
+static reptile_t *game_state;
+
+#define SAVE_PATH "/sdcard/game.dat"
 
 static void btn_new_game_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Start new game");
-    // TODO: implement new game logic
+    if (game_state) {
+        free(game_state);
+    }
+    game_state = calloc(1, sizeof(reptile_t));
+    if (!game_state) {
+        ESP_LOGE(TAG, "Allocation failed");
+        return;
+    }
+    strncpy(game_state->species, "Serpent", sizeof(game_state->species) - 1);
+    game_state->temperature = 28.0f;
+    game_state->humidity = 60.0f;
+    if (!storage_save(SAVE_PATH, game_state, sizeof(reptile_t))) {
+        ESP_LOGE(TAG, "Failed to save game");
+    }
 }
 
 static void btn_resume_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Resume game");
-    // TODO: load saved game from storage
+    if (!game_state) {
+        game_state = malloc(sizeof(reptile_t));
+        if (!game_state) {
+            ESP_LOGE(TAG, "Allocation failed");
+            return;
+        }
+    }
+    if (!storage_load(SAVE_PATH, game_state, sizeof(reptile_t))) {
+        ESP_LOGE(TAG, "No saved game");
+        return;
+    }
+    ESP_LOGI(TAG, "Loaded %s T=%.1f H=%.1f", game_state->species,
+             game_state->temperature, game_state->humidity);
 }
 
 static void btn_settings_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Open settings");
-    // TODO: implement settings UI
+    lv_obj_t *settings = lv_obj_create(NULL);
+    lv_obj_t *label = lv_label_create(settings);
+    lv_label_set_text(label, "Param\xC3\xA8tres");
+    lv_obj_center(label);
+    lv_scr_load(settings);
 }
 
 void game_init(void)
