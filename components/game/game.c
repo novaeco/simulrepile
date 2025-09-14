@@ -2,6 +2,7 @@
 #include "lvgl.h"
 #include "storage.h"
 #include "esp_log.h"
+#include "room.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -35,6 +36,9 @@ static void btn_new_game_event(lv_event_t *e)
     if (!storage_save(SAVE_PATH, game_state, sizeof(reptile_t))) {
         ESP_LOGE(TAG, "Failed to save game");
     }
+
+    /* After creating a new game, open the room selection view */
+    room_show();
 }
 
 static void btn_resume_event(lv_event_t *e)
