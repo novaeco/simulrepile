@@ -34,17 +34,32 @@ void room_show(void)
     lv_obj_t *scr = lv_obj_create(NULL);
     lv_scr_load(scr);
 
-    const int size = 60;
-    const int spacing = 10;
     static terrarium_ctx_t ctx[GRID_SIZE][GRID_SIZE];
+
+    /* Create a container with a 5x5 grid layout */
+    lv_obj_t *grid = lv_obj_create(scr);
+    lv_obj_set_size(grid, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_center(grid);
+
+    static const lv_coord_t col_dsc[] = {
+        LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+        LV_GRID_TEMPLATE_LAST
+    };
+    static const lv_coord_t row_dsc[] = {
+        LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+        LV_GRID_TEMPLATE_LAST
+    };
+
+    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
+    lv_obj_set_style_pad_row(grid, 10, 0);
+    lv_obj_set_style_pad_column(grid, 10, 0);
 
     for (int y = 0; y < GRID_SIZE; ++y) {
         for (int x = 0; x < GRID_SIZE; ++x) {
-            lv_obj_t *btn = lv_btn_create(scr);
-            lv_obj_set_size(btn, size, size);
-            lv_obj_align(btn, LV_ALIGN_TOP_LEFT,
-                         x * (size + spacing) + spacing,
-                         y * (size + spacing) + spacing);
+            lv_obj_t *btn = lv_btn_create(grid);
+            lv_obj_set_size(btn, 60, 60);
+            lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, x, 1,
+                                 LV_GRID_ALIGN_STRETCH, y, 1);
             ctx[y][x].x = x;
             ctx[y][x].y = y;
             lv_obj_add_event_cb(btn, terrarium_event_handler, LV_EVENT_CLICKED, &ctx[y][x]);
