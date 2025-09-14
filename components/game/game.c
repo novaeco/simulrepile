@@ -3,6 +3,7 @@
 #include "storage.h"
 #include "esp_log.h"
 #include "room.h"
+#include "terrarium.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -12,6 +13,7 @@ typedef struct {
     char species[32];
     float temperature;
     float humidity;
+    float uv_index;
 } reptile_t;
 
 static lv_obj_t *main_menu;
@@ -33,6 +35,9 @@ static void btn_new_game_event(lv_event_t *e)
     strncpy(game_state->species, "Serpent", sizeof(game_state->species) - 1);
     game_state->temperature = 28.0f;
     game_state->humidity = 60.0f;
+    game_state->uv_index = 3.0f;
+    terrarium_update_environment(game_state->temperature, game_state->humidity,
+                                 game_state->uv_index);
     if (!storage_save(SAVE_PATH, game_state, sizeof(reptile_t))) {
         ESP_LOGE(TAG, "Failed to save game");
     }
@@ -55,8 +60,10 @@ static void btn_resume_event(lv_event_t *e)
         ESP_LOGE(TAG, "No saved game");
         return;
     }
-    ESP_LOGI(TAG, "Loaded %s T=%.1f H=%.1f", game_state->species,
-             game_state->temperature, game_state->humidity);
+    terrarium_update_environment(game_state->temperature, game_state->humidity,
+                                 game_state->uv_index);
+    ESP_LOGI(TAG, "Loaded %s T=%.1f H=%.1f UV=%.1f", game_state->species,
+             game_state->temperature, game_state->humidity, game_state->uv_index);
 }
 
 static void btn_settings_event(lv_event_t *e)
