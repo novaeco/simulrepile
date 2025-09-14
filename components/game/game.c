@@ -79,11 +79,11 @@ static void btn_new_game_event(lv_event_t *e)
     game_state.reptile.requires_authorisation = info->requires_authorisation;
     game_state.reptile.requires_certificat = info->requires_certificat;
 
-    /* Initial terrarium environment mirrors reptile requirements */
+    /* Host reptile and mirror environment requirements */
+    terrarium_set_reptile(info);
     game_state.terrarium.temperature = info->temperature;
     game_state.terrarium.humidity = info->humidity;
     game_state.terrarium.uv_index = info->uv_index;
-    terrarium_update_environment(info->temperature, info->humidity, info->uv_index);
 
     /* Initialise economic state */
     economy_init(&game_state.economy, 100.0f, 100.0f);
@@ -106,9 +106,11 @@ static void btn_resume_event(lv_event_t *e)
     }
 
     /* Restore terrarium environment */
-    terrarium_update_environment(game_state.terrarium.temperature,
-                                 game_state.terrarium.humidity,
-                                 game_state.terrarium.uv_index);
+    const reptile_info_t *info = reptiles_find(game_state.reptile.species);
+    terrarium_set_reptile(info);
+    game_state.terrarium.temperature = info->temperature;
+    game_state.terrarium.humidity = info->humidity;
+    game_state.terrarium.uv_index = info->uv_index;
 
     /* Restore terrarium inventory */
     for (size_t i = 0; i < game_state.terrarium.item_count; ++i) {

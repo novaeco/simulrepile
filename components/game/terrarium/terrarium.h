@@ -2,6 +2,7 @@
 #define TERRARIUM_H
 
 #include <stdbool.h>
+#include "reptiles.h"
 
 /**
  * @brief Add an item to the terrarium inventory.
@@ -12,6 +13,17 @@
  * @return true on success, false if the list is full or item is NULL.
  */
 bool terrarium_add_item(const char *item);
+
+/**
+ * @brief Set the reptile currently hosted in the terrarium.
+ *
+ * The provided reptile description is stored for later reference so that
+ * environmental parameters can automatically mirror the animal's needs.
+ *
+ * @param reptile Pointer to the reptile information. NULL clears the current
+ *        association.
+ */
+void terrarium_set_reptile(const reptile_info_t *reptile);
 
 /**
  * @brief Synchronise environment parameters with the hosted reptile.
