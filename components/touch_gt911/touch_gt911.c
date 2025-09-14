@@ -3,6 +3,7 @@
 #include "driver/gpio.h"
 #include "lvgl.h"
 #include "esp_log.h"
+#include "input_gestures.h"
 
 #define TAG "gt911"
 
@@ -54,20 +55,40 @@ static void gt911_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     uint8_t status;
     if (gt911_read(0x814E, &status, 1) != ESP_OK || !(status & 0x80)) {
         data->state = LV_INDEV_STATE_RELEASED;
+        input_gestures_update(NULL, 0);
         return;
     }
 
-    uint8_t buf[4];
-    if (gt911_read(0x8150, buf, sizeof(buf)) != ESP_OK) {
+    uint8_t touches = status & 0x0F;
+    if (touches == 0) {
         data->state = LV_INDEV_STATE_RELEASED;
+        input_gestures_update(NULL, 0);
         return;
     }
 
-    uint16_t x = (buf[1] << 8) | buf[0];
-    uint16_t y = (buf[3] << 8) | buf[2];
-    data->point.x = x;
-    data->point.y = y;
+    uint8_t buf[16];
+    size_t read_len = touches * 8;
+    if (read_len > sizeof(buf)) {
+        read_len = sizeof(buf);
+    }
+    if (gt911_read(0x8150, buf, read_len) != ESP_OK) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        input_gestures_update(NULL, 0);
+        return;
+    }
+
+    lv_point_t pts[2];
+    for (uint8_t i = 0; i < touches && i < 2; i++) {
+        uint16_t x = (buf[i * 8 + 1] << 8) | buf[i * 8 + 0];
+        uint16_t y = (buf[i * 8 + 3] << 8) | buf[i * 8 + 2];
+        pts[i].x = x;
+        pts[i].y = y;
+    }
+
+    data->point = pts[0];
     data->state = LV_INDEV_STATE_PRESSED;
+
+    input_gestures_update(pts, touches);
 
     uint8_t clear = 0;
     gt911_write(0x814E, &clear, 1);
