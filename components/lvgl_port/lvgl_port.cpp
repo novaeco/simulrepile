@@ -2,6 +2,8 @@
 #include <lvgl.h>
 #include <LovyanGFX.hpp>
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
+#include <assert.h>
 
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_RGB _panel;
@@ -12,7 +14,34 @@ public:
       auto cfg = _bus.config();
       cfg.panel_width = 1024;
       cfg.panel_height = 600;
-      // TODO: configure RGB pins according to board schematic
+      cfg.pin_hsync = 46;
+      cfg.pin_vsync = 3;
+      cfg.pin_de = 5;
+      cfg.pin_pclk = 7;
+      cfg.pin_r0 = 1;
+      cfg.pin_r1 = 2;
+      cfg.pin_r2 = 42;
+      cfg.pin_r3 = 41;
+      cfg.pin_r4 = 40;
+      cfg.pin_r5 = -1;
+      cfg.pin_r6 = -1;
+      cfg.pin_r7 = -1;
+      cfg.pin_g0 = 39;
+      cfg.pin_g1 = 0;
+      cfg.pin_g2 = 45;
+      cfg.pin_g3 = 48;
+      cfg.pin_g4 = 47;
+      cfg.pin_g5 = 21;
+      cfg.pin_g6 = -1;
+      cfg.pin_g7 = -1;
+      cfg.pin_b0 = 14;
+      cfg.pin_b1 = 38;
+      cfg.pin_b2 = 18;
+      cfg.pin_b3 = 17;
+      cfg.pin_b4 = 10;
+      cfg.pin_b5 = -1;
+      cfg.pin_b6 = -1;
+      cfg.pin_b7 = -1;
       _bus.config(cfg);
     }
     {
@@ -49,6 +78,8 @@ void lvgl_port_init(void)
   size_t buf_sz = 1024 * 40; // 1/15 of screen
   lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(buf_sz * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
   lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(buf_sz * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  assert(buf1 && esp_ptr_external_ram(buf1));
+  assert(buf2 && esp_ptr_external_ram(buf2));
   static lv_disp_draw_buf_t draw_buf;
   lv_disp_draw_buf_init(&draw_buf, buf1, buf2, buf_sz);
 
