@@ -4,8 +4,11 @@
 #include "esp_log.h"
 #include "room.h"
 #include "terrarium.h"
+#include "reptiles.h"
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #define TAG "game"
 
@@ -14,6 +17,9 @@ typedef struct {
     float temperature;
     float humidity;
     float uv_index;
+    float terrarium_min_size;
+    bool requires_authorisation;
+    bool requires_certificat;
 } reptile_t;
 
 static lv_obj_t *main_menu;
@@ -27,15 +33,23 @@ static void btn_new_game_event(lv_event_t *e)
     if (game_state) {
         free(game_state);
     }
-    game_state = calloc(1, sizeof(reptile_t));
+    game_state = heap_caps_calloc(1, sizeof(reptile_t), MALLOC_CAP_SPIRAM);
     if (!game_state) {
         ESP_LOGE(TAG, "Allocation failed");
         return;
     }
-    strncpy(game_state->species, "Serpent", sizeof(game_state->species) - 1);
-    game_state->temperature = 28.0f;
-    game_state->humidity = 60.0f;
-    game_state->uv_index = 3.0f;
+    const reptile_info_t *info = reptiles_find("Python regius");
+    if (!reptiles_validate(info)) {
+        ESP_LOGE(TAG, "Invalid reptile data");
+        return;
+    }
+    strncpy(game_state->species, info->species, sizeof(game_state->species) - 1);
+    game_state->temperature = info->temperature;
+    game_state->humidity = info->humidity;
+    game_state->uv_index = info->uv_index;
+    game_state->terrarium_min_size = info->terrarium_min_size;
+    game_state->requires_authorisation = info->requires_authorisation;
+    game_state->requires_certificat = info->requires_certificat;
     terrarium_update_environment(game_state->temperature, game_state->humidity,
                                  game_state->uv_index);
     if (!storage_save(SAVE_PATH, game_state, sizeof(reptile_t))) {
@@ -50,7 +64,7 @@ static void btn_resume_event(lv_event_t *e)
 {
     ESP_LOGI(TAG, "Resume game");
     if (!game_state) {
-        game_state = malloc(sizeof(reptile_t));
+        game_state = heap_caps_malloc(sizeof(reptile_t), MALLOC_CAP_SPIRAM);
         if (!game_state) {
             ESP_LOGE(TAG, "Allocation failed");
             return;
@@ -78,7 +92,9 @@ static void btn_settings_event(lv_event_t *e)
 
 void game_init(void)
 {
-    // Placeholder for game state initialization
+    if (!reptiles_load()) {
+        ESP_LOGE(TAG, "Failed to load reptile data");
+    }
     ESP_LOGI(TAG, "Game initialized");
 }
 
