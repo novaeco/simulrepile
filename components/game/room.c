@@ -3,6 +3,11 @@
 #include <stdbool.h>
 #include <string.h>
 
+/**
+ * @file room.c
+ * @brief Display a selectable grid of terrariums.
+ */
+
 #define TAG "room"
 #define GRID_SIZE 5
 
@@ -13,8 +18,7 @@ typedef struct {
     uint8_t y;
 } terrarium_ctx_t;
 
-static void terrarium_event_handler(lv_event_t *e)
-{
+static void terrarium_event_handler(lv_event_t *e) {
     terrarium_ctx_t *ctx = lv_event_get_user_data(e);
     if (!ctx) return;
     if (occupied[ctx->y][ctx->x]) {
@@ -38,6 +42,7 @@ void room_show(void)
 
     /* Create a container with a 5x5 grid layout */
     lv_obj_t *grid = lv_obj_create(scr);
+    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(grid, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_center(grid);
 
@@ -60,9 +65,16 @@ void room_show(void)
             lv_obj_set_size(btn, 60, 60);
             lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, x, 1,
                                  LV_GRID_ALIGN_STRETCH, y, 1);
+
             ctx[y][x].x = x;
             ctx[y][x].y = y;
-            lv_obj_add_event_cb(btn, terrarium_event_handler, LV_EVENT_CLICKED, &ctx[y][x]);
+            lv_obj_add_event_cb(btn, terrarium_event_handler, LV_EVENT_CLICKED,
+                                &ctx[y][x]);
+
+            /* Display cell index for debugging */
+            lv_obj_t *label = lv_label_create(btn);
+            lv_label_set_text_fmt(label, "%d", y * GRID_SIZE + x + 1);
+            lv_obj_center(label);
         }
     }
 }
