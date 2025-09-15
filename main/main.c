@@ -11,6 +11,7 @@
 #include "esp_log.h"
 
 static const char *TAG = "simulrepile";
+static lv_obj_t *mode_selector_screen;
 
 static void lv_tick_task(void *arg)
 {
@@ -30,37 +31,60 @@ static void gui_task(void *arg)
 static void sim_btn_event_handler(lv_event_t *e)
 {
     (void)e;
+    ESP_LOGI(TAG, "Switching to simulation mode");
     game_show_main_menu();
 }
 
 static void real_btn_event_handler(lv_event_t *e)
 {
     (void)e;
+    ESP_LOGI(TAG, "Initializing real mode");
     real_mode_init();
     real_mode_detect_devices();
     dashboard_show();
     xTaskCreate(real_mode_loop, "real_mode", 4096, NULL, 1, NULL);
 }
 
+static lv_obj_t *create_mode_button(lv_obj_t *parent,
+                                    const char *text,
+                                    lv_event_cb_t event_cb,
+                                    lv_coord_t y_offset)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_coord_t width = 320;
+    lv_disp_t *disp = lv_disp_get_default();
+    if (disp) {
+        width = (lv_coord_t)((lv_disp_get_hor_res(disp) * 3) / 5);
+    }
+    lv_obj_set_width(btn, width);
+    lv_obj_set_style_pad_all(btn, 16, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 10, LV_PART_MAIN);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, y_offset);
+    lv_obj_add_event_cb(btn, event_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, text);
+    lv_obj_center(label);
+
+    return btn;
+}
+
 void show_mode_selector(void)
 {
-    lv_obj_t *scr = lv_obj_create(NULL);
+    if (mode_selector_screen == NULL) {
+        mode_selector_screen = lv_obj_create(NULL);
+        lv_obj_set_style_pad_all(mode_selector_screen, 32, LV_PART_MAIN);
 
-    lv_obj_t *btn_sim = lv_btn_create(scr);
-    lv_obj_align(btn_sim, LV_ALIGN_CENTER, 0, -40);
-    lv_obj_t *label_sim = lv_label_create(btn_sim);
-    lv_label_set_text(label_sim, "Simulation");
-    lv_obj_center(label_sim);
-    lv_obj_add_event_cb(btn_sim, sim_btn_event_handler, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *title = lv_label_create(mode_selector_screen);
+        lv_label_set_text(title, "Sélection du mode");
+        lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_align(title, LV_ALIGN_CENTER, 0, -120);
 
-    lv_obj_t *btn_real = lv_btn_create(scr);
-    lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 40);
-    lv_obj_t *label_real = lv_label_create(btn_real);
-    lv_label_set_text(label_real, "Réel");
-    lv_obj_center(label_real);
-    lv_obj_add_event_cb(btn_real, real_btn_event_handler, LV_EVENT_CLICKED, NULL);
+        create_mode_button(mode_selector_screen, "Simulation", sim_btn_event_handler, -30);
+        create_mode_button(mode_selector_screen, "Réel", real_btn_event_handler, 70);
+    }
 
-    lv_scr_load(scr);
+    lv_scr_load(mode_selector_screen);
 }
 
 void app_main(void)
