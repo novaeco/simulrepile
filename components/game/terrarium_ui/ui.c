@@ -3,6 +3,7 @@
 #include "reptiles.h"
 #include "terrarium.h"
 #include "room.h"
+#include "game.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,7 +14,7 @@ static void species_event_cb(lv_event_t *e)
     lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
     const reptile_info_t *info = reptiles_find(buf);
     if (info) {
-        terrarium_set_reptile(info);
+        game_set_reptile(info);
     }
 }
 
@@ -43,6 +44,15 @@ static void equipment_event_cb(lv_event_t *e)
 static void start_event_cb(lv_event_t *e)
 {
     (void)e;
+    game_save();
+    room_show();
+}
+
+static void delete_event_cb(lv_event_t *e)
+{
+    (void)e;
+    game_remove_terrarium(game_get_current_slot());
+    game_save();
     room_show();
 }
 
@@ -101,10 +111,19 @@ void terrarium_ui_show(void)
     /* Start button */
     lv_obj_t *btn_start = lv_btn_create(scr);
     lv_obj_set_size(btn_start, 100, 40);
-    lv_obj_align(btn_start, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_align(btn_start, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
     lv_obj_t *label = lv_label_create(btn_start);
     lv_label_set_text(label, "Start");
     lv_obj_center(label);
     lv_obj_add_event_cb(btn_start, start_event_cb, LV_EVENT_CLICKED, NULL);
+
+    /* Delete button */
+    lv_obj_t *btn_del = lv_btn_create(scr);
+    lv_obj_set_size(btn_del, 100, 40);
+    lv_obj_align(btn_del, LV_ALIGN_BOTTOM_LEFT, 20, -20);
+    lv_obj_t *lbl = lv_label_create(btn_del);
+    lv_label_set_text(lbl, "Delete");
+    lv_obj_center(lbl);
+    lv_obj_add_event_cb(btn_del, delete_event_cb, LV_EVENT_CLICKED, NULL);
 }
 
