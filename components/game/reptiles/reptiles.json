@@ -10,7 +10,9 @@
       "health_max": 100.0
     },
     "legal": {
+      "cites": "NONE",
       "requires_authorisation": false,
+      "requires_cdc": false,
       "requires_certificat": true,
       "fr_allowed": true,
       "eu_allowed": true,
@@ -28,7 +30,9 @@
       "health_max": 120.0
     },
     "legal": {
+      "cites": "II",
       "requires_authorisation": true,
+      "requires_cdc": true,
       "requires_certificat": true,
       "fr_allowed": true,
       "eu_allowed": true,
@@ -46,7 +50,9 @@
       "health_max": 80.0
     },
     "legal": {
+      "cites": "NONE",
       "requires_authorisation": false,
+      "requires_cdc": false,
       "requires_certificat": false,
       "fr_allowed": true,
       "eu_allowed": true,
@@ -64,7 +70,9 @@
       "health_max": 150.0
     },
     "legal": {
+      "cites": "II",
       "requires_authorisation": true,
+      "requires_cdc": true,
       "requires_certificat": true,
       "fr_allowed": true,
       "eu_allowed": false,
@@ -82,7 +90,9 @@
       "health_max": 200.0
     },
     "legal": {
+      "cites": "II",
       "requires_authorisation": true,
+      "requires_cdc": true,
       "requires_certificat": true,
       "fr_allowed": false,
       "eu_allowed": true,
