@@ -13,7 +13,7 @@ foreach(png ${ASSET_PNG})
     get_filename_component(dir ${png} DIRECTORY)
     set(bin ${dir}/${name}.bin)
     list(APPEND ASSET_BIN ${bin})
-    file(RELATIVE_PATH rel ${CMAKE_SOURCE_DIR} ${bin})
+    file(RELATIVE_PATH rel ${CMAKE_CURRENT_SOURCE_DIR} ${bin})
     list(APPEND ASSET_BIN_REL ${rel})
 endforeach()
 
