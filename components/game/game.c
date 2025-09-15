@@ -2,11 +2,13 @@
 #include "economy.h"
 #include "environment.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lvgl.h"
 #include "reptiles.h"
 #include "room.h"
 #include "storage.h"
 #include "terrarium.h"
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -47,6 +49,9 @@ typedef struct {
   bool requires_certificat;
   float growth;
   float health;
+  bool mature;
+  bool sick;
+  bool alive;
 } reptile_state_t;
 
 typedef struct {
@@ -63,6 +68,71 @@ typedef struct {
 
 static lv_obj_t *main_menu;
 static game_state_t game_state; /* In-RAM game state snapshot */
+
+/* Periodic reptile simulation -------------------------------------------- */
+
+#define REPTILE_UPDATE_PERIOD_US (1000 * 1000)
+static esp_timer_handle_t reptile_timer;
+
+static void reptile_tick(void *arg) {
+  (void)arg;
+  for (size_t i = 0; i < game_state.terrarium_count; ++i) {
+    terrarium_slot_t *slot = &game_state.terrariums[i];
+    reptile_state_t *r = &slot->reptile;
+    if (!r->alive)
+      continue;
+
+    const reptile_info_t *info = reptiles_find(r->species);
+    if (!info)
+      continue;
+
+    r->growth += info->needs.growth_rate;
+    if (!r->mature && r->growth >= REPTILE_GROWTH_MATURE) {
+      r->mature = true;
+      ESP_LOGI(TAG, "%s reached maturity", r->species);
+    }
+
+    const terrarium_t *t = terrarium_get_state();
+    slot->terrarium.temperature = t->temperature;
+    slot->terrarium.humidity = t->humidity;
+    slot->terrarium.uv_index = t->uv_index;
+
+    float temp_diff = fabsf(t->temperature - info->needs.temperature);
+    float hum_diff = fabsf(t->humidity - info->needs.humidity);
+    float uv_diff = fabsf(t->uv_index - info->needs.uv_index);
+    float penalty = (temp_diff + hum_diff + uv_diff) * 0.1f;
+
+    r->health -= penalty;
+    if (r->health > info->needs.max_health)
+      r->health = info->needs.max_health;
+
+    float sick_level = info->needs.max_health * REPTILE_HEALTH_SICK_RATIO;
+    if (!r->sick && r->health <= sick_level && r->health > REPTILE_HEALTH_DEAD) {
+      r->sick = true;
+      ESP_LOGW(TAG, "%s requires care", r->species);
+    }
+    if (r->sick && r->health > sick_level) {
+      r->sick = false;
+    }
+
+    if (r->health <= REPTILE_HEALTH_DEAD) {
+      r->health = REPTILE_HEALTH_DEAD;
+      r->alive = false;
+      ESP_LOGE(TAG, "%s died", r->species);
+    }
+  }
+}
+
+static void start_reptile_timer(void) {
+  if (reptile_timer)
+    return;
+  const esp_timer_create_args_t args = {
+      .callback = &reptile_tick,
+      .name = "reptile"};
+  ESP_ERROR_CHECK(esp_timer_create(&args, &reptile_timer));
+  ESP_ERROR_CHECK(
+      esp_timer_start_periodic(reptile_timer, REPTILE_UPDATE_PERIOD_US));
+}
 
 /* Default player regulatory context: adjust at runtime if needed */
 static reptile_user_ctx_t user_ctx = {
@@ -82,6 +152,13 @@ static bool save_game(void) {
     if (!info || !reptiles_validate(info, &user_ctx)) {
       ESP_LOGW(TAG, "Cannot save: non-compliant reptile %s", slot->reptile.species);
       return false;
+    }
+    if (slot->reptile.health < REPTILE_HEALTH_DEAD) {
+      slot->reptile.health = REPTILE_HEALTH_DEAD;
+      slot->reptile.alive = false;
+    }
+    if (slot->reptile.growth >= REPTILE_GROWTH_MATURE) {
+      slot->reptile.mature = true;
     }
     if (i == 0) {
       const terrarium_t *t = terrarium_get_state();
@@ -118,6 +195,13 @@ static bool load_game(void) {
 
   for (size_t i = 0; i < game_state.terrarium_count; ++i) {
     terrarium_slot_t *slot = &game_state.terrariums[i];
+    if (slot->reptile.health <= REPTILE_HEALTH_DEAD) {
+      slot->reptile.health = REPTILE_HEALTH_DEAD;
+      slot->reptile.alive = false;
+    }
+    if (slot->reptile.growth >= REPTILE_GROWTH_MATURE) {
+      slot->reptile.mature = true;
+    }
     const reptile_info_t *info = reptiles_find(slot->reptile.species);
     if (!reptiles_validate(info, &user_ctx)) {
       return false;
@@ -170,6 +254,9 @@ static void btn_new_game_event(lv_event_t *e) {
   slot->reptile.requires_certificat = info->legal.requires_certificat;
   slot->reptile.growth = 0.0f;
   slot->reptile.health = info->needs.max_health;
+  slot->reptile.mature = false;
+  slot->reptile.sick = false;
+  slot->reptile.alive = true;
 
   /* Host reptile and mirror environment requirements */
   terrarium_set_reptile(info);
@@ -193,6 +280,8 @@ static void btn_new_game_event(lv_event_t *e) {
     ESP_LOGE(TAG, "Failed to save game");
   }
 
+  start_reptile_timer();
+
   /* After creating a new game, open the room selection view */
   room_show();
 }
@@ -209,6 +298,8 @@ static void btn_resume_event(lv_event_t *e) {
            slot->reptile.species, slot->terrarium.temperature,
            slot->terrarium.humidity, slot->terrarium.uv_index,
            game_state.economy.budget, game_state.economy.day);
+
+  start_reptile_timer();
 
   /* Continue to room view */
   room_show();

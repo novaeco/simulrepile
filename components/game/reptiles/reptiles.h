@@ -2,6 +2,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Growth and health thresholds */
+#define REPTILE_GROWTH_MATURE 1.0f       /*!< Growth value at maturity          */
+#define REPTILE_HEALTH_SICK_RATIO 0.3f   /*!< Fraction of max health for illness*/
+#define REPTILE_HEALTH_DEAD 0.0f         /*!< Health level indicating death     */
+
 /* CITES appendix classification */
 typedef enum {
     REPTILE_CITES_NONE = 0, /*!< Species not listed in CITES */
