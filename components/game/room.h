@@ -4,7 +4,7 @@
 #include "lvgl.h"
 
 /**
- * @brief Create and display the terrarium selection grid.
+ * @brief Create and display the 5x5 terrarium selection grid.
  */
 void room_show(void);
 
