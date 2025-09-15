@@ -18,6 +18,14 @@ foreach(png ${ASSET_PNG})
 endforeach()
 
 if(ASSET_BIN)
+    list(REMOVE_DUPLICATES ASSET_BIN)
+endif()
+
+if(ASSET_BIN_REL)
+    list(REMOVE_DUPLICATES ASSET_BIN_REL)
+endif()
+
+if(ASSET_BIN)
     # Mark generated assets so that CMake does not require them to exist at
     # configure time. The actual conversion is handled by the custom command
     # below.
@@ -45,14 +53,17 @@ if(ASSET_PNG AND NOT CMAKE_SCRIPT_MODE_FILE)
         message(FATAL_ERROR "Asset generation script not found: ${GEN_SCRIPT}")
     endif()
 
-    add_custom_command(OUTPUT ${ASSET_BIN}
+    set(ASSET_STAMP ${CMAKE_CURRENT_BINARY_DIR}/assets.timestamp)
+
+    add_custom_command(OUTPUT ${ASSET_STAMP}
         COMMAND ${GEN_SCRIPT}
+        COMMAND ${CMAKE_COMMAND} -E touch ${ASSET_STAMP}
         DEPENDS ${ASSET_PNG} ${GEN_SCRIPT}
         WORKING_DIRECTORY ${ASSET_ROOT}
         BYPRODUCTS ${ASSET_BIN}
         VERBATIM
         COMMENT "Generating LVGL assets")
 
-    add_custom_target(gen_assets DEPENDS ${ASSET_BIN})
+    add_custom_target(gen_assets DEPENDS ${ASSET_STAMP})
     add_dependencies(${COMPONENT_LIB} gen_assets)
 endif()
