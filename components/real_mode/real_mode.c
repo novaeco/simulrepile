@@ -59,6 +59,7 @@ terrarium_hw_t g_terrariums[] = {
     },
 };
 const size_t g_terrarium_count = sizeof(g_terrariums)/sizeof(g_terrariums[0]);
+real_mode_state_t g_real_mode_state[sizeof(g_terrariums)/sizeof(g_terrariums[0])] = {0};
 
 void real_mode_init(void)
 {
@@ -78,10 +79,17 @@ void real_mode_loop(void *arg)
     sensor_data_t data;
     while (1) {
         for (size_t i = 0; i < g_terrarium_count; ++i) {
-            if (sensors_read(&g_terrariums[i], &data) == ESP_OK) {
-                actuators_apply(&g_terrariums[i], &data);
+            esp_err_t sret = sensors_read(&g_terrariums[i], &data);
+            if (!g_real_mode_state[i].manual_mode && sret == ESP_OK) {
+                actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
                 dashboard_update(&data);
                 logging_write(&data);
+            } else if (g_real_mode_state[i].manual_mode) {
+                actuators_apply(&g_terrariums[i], NULL, &g_real_mode_state[i]);
+                if (sret == ESP_OK) {
+                    dashboard_update(&data);
+                    logging_write(&data);
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

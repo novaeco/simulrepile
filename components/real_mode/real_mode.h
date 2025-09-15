@@ -57,9 +57,23 @@ typedef struct {
     float co2_ppm;
 } sensor_data_t;
 
+/* Etat runtime d'un terrarium */
+typedef struct {
+    bool manual_mode; /* true : pilotage manuel */
+    struct {
+        bool heater;
+        bool uv;
+        bool neon;
+        bool pump;
+        bool fan;
+        bool humidifier;
+    } actuators;         /* Etats manuels des actionneurs */
+} real_mode_state_t;
+
 /* Configuration multi-terrariums */
 extern terrarium_hw_t g_terrariums[];
 extern const size_t g_terrarium_count;
+extern real_mode_state_t g_real_mode_state[];
 
 /* API principale */
 void real_mode_init(void);

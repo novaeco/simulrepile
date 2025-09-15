@@ -34,8 +34,19 @@ esp_err_t actuators_init(const terrarium_hw_t *hw)
     return ret;
 }
 
-esp_err_t actuators_apply(const terrarium_hw_t *hw, const sensor_data_t *data)
+esp_err_t actuators_apply(const terrarium_hw_t *hw, const sensor_data_t *data,
+                          const real_mode_state_t *state)
 {
+    if (state && state->manual_mode) {
+        gpio_safe_set(hw->heater_gpio, state->actuators.heater);
+        gpio_safe_set(hw->uv_gpio, state->actuators.uv);
+        gpio_safe_set(hw->neon_gpio, state->actuators.neon);
+        gpio_safe_set(hw->pump_gpio, state->actuators.pump);
+        gpio_safe_set(hw->fan_gpio, state->actuators.fan);
+        gpio_safe_set(hw->humidifier_gpio, state->actuators.humidifier);
+        return ESP_OK;
+    }
+
     if (!data) {
         return ESP_ERR_INVALID_ARG;
     }
