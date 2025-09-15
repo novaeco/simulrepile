@@ -10,6 +10,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,15 +18,35 @@ extern "C" {
 
 /* Structure décrivant le câblage matériel d'un terrarium */
 typedef struct {
+    /* Bus de communication */
     i2c_port_t i2c_port;           /* Bus I2C pour capteurs */
+    gpio_num_t i2c_sda_gpio;       /* Broche SDA */
+    gpio_num_t i2c_scl_gpio;       /* Broche SCL */
     spi_host_device_t spi_host;    /* Bus SPI optionnel */
-    uart_port_t uart_port;         /* Bus UART optionnel */
+    uart_port_t uart_port;         /* Bus UART pour MH-Z19B */
+    gpio_num_t uart_tx_gpio;       /* TX vers MH-Z19B */
+    gpio_num_t uart_rx_gpio;       /* RX depuis MH-Z19B */
+
+    /* Adresses des capteurs */
+    uint8_t sht31_addr;            /* Adresse I2C du SHT31 */
+    uint8_t bh1750_addr;           /* Adresse I2C du BH1750 */
+
+    /* Actionneurs */
     gpio_num_t heater_gpio;        /* Chauffage */
     gpio_num_t uv_gpio;            /* UV */
     gpio_num_t neon_gpio;          /* Néon */
     gpio_num_t pump_gpio;          /* Pompe */
     gpio_num_t fan_gpio;           /* Ventilation */
     gpio_num_t humidifier_gpio;    /* Humidificateur */
+
+    /* Seuils de régulation */
+    float temp_low_c;              /* Allumage chauffage */
+    float temp_high_c;             /* Arrêt chauffage */
+    float humidity_low_pct;        /* Allumage pompe/humidif. */
+    float humidity_high_pct;       /* Arrêt pompe/humidif. */
+    float lux_low_lx;              /* Allumage UV/Néon */
+    float lux_high_lx;             /* Arrêt UV/Néon */
+    float co2_high_ppm;            /* Allumage ventilation */
 } terrarium_hw_t;
 
 /* Données de capteurs */
