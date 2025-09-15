@@ -15,4 +15,5 @@ typedef struct {
 bool reptiles_load(void);
 const reptile_info_t *reptiles_get(size_t *count);
 const reptile_info_t *reptiles_find(const char *species);
+/* Validate biological needs and legal compliance */
 bool reptiles_validate(const reptile_info_t *info);
