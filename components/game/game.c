@@ -39,7 +39,9 @@ typedef struct {
   float humidity;
   float uv_index;
   float terrarium_min_size;
+  reptile_cites_t cites;
   bool requires_authorisation;
+  bool requires_cdc;
   bool requires_certificat;
   float growth;
   float health;
@@ -59,13 +61,27 @@ typedef struct {
 static lv_obj_t *main_menu;
 static game_state_t game_state; /* In-RAM game state snapshot */
 
+/* Default player regulatory context: adjust at runtime if needed */
+static reptile_user_ctx_t user_ctx = {
+    .cites_permit = REPTILE_CITES_NONE,
+    .has_authorisation = false,
+    .has_cdc = false,
+    .has_certificat = false,
+    .region = REPTILE_REGION_FR,
+};
+
 #define SAVE_PATH "/sdcard/simulrepile.sav"
 
 static bool save_game(void) {
   for (size_t i = 0; i < game_state.terrarium_count; ++i) {
+    terrarium_slot_t *slot = &game_state.terrariums[i];
+    const reptile_info_t *info = reptiles_find(slot->reptile.species);
+    if (!info || !reptiles_validate(info, &user_ctx)) {
+      ESP_LOGW(TAG, "Cannot save: non-compliant reptile %s", slot->reptile.species);
+      return false;
+    }
     if (i == 0) {
       const terrarium_t *t = terrarium_get_state();
-      terrarium_slot_t *slot = &game_state.terrariums[i];
       slot->terrarium.item_count = t->item_count;
       for (size_t j = 0; j < t->item_count && j < MAX_TERRARIUM_ITEMS; ++j) {
         strncpy(slot->terrarium.items[j], t->items[j], ITEM_NAME_LEN - 1);
@@ -96,7 +112,7 @@ static bool load_game(void) {
 
   terrarium_slot_t *slot = &game_state.terrariums[0];
   const reptile_info_t *info = reptiles_find(slot->reptile.species);
-  if (!reptiles_validate(info)) {
+  if (!reptiles_validate(info, &user_ctx)) {
     return false;
   }
 
@@ -124,7 +140,7 @@ static void btn_new_game_event(lv_event_t *e) {
   terrarium_slot_t *slot = &game_state.terrariums[0];
 
   const reptile_info_t *info = reptiles_find("Python regius");
-  if (!reptiles_validate(info)) {
+  if (!reptiles_validate(info, &user_ctx)) {
     ESP_LOGE(TAG, "Invalid reptile data");
     return;
   }
@@ -136,7 +152,9 @@ static void btn_new_game_event(lv_event_t *e) {
   slot->reptile.humidity = info->needs.humidity;
   slot->reptile.uv_index = info->needs.uv_index;
   slot->reptile.terrarium_min_size = info->needs.terrarium_min_size;
+  slot->reptile.cites = info->legal.cites;
   slot->reptile.requires_authorisation = info->legal.requires_authorisation;
+  slot->reptile.requires_cdc = info->legal.requires_cdc;
   slot->reptile.requires_certificat = info->legal.requires_certificat;
   slot->reptile.growth = 0.0f;
   slot->reptile.health = info->needs.max_health;
