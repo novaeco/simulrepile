@@ -58,6 +58,26 @@ typedef struct {
     float power_w;
 } sensor_data_t;
 
+typedef struct {
+    bool temperature_humidity;
+    bool luminosity;
+    bool co2;
+} sensor_connection_t;
+
+typedef struct {
+    bool heater;
+    bool uv;
+    bool neon;
+    bool pump;
+    bool fan;
+    bool humidifier;
+} actuator_connection_t;
+
+typedef struct {
+    sensor_connection_t sensors;
+    actuator_connection_t actuators;
+} terrarium_device_status_t;
+
 /* Etat runtime d'un terrarium */
 typedef struct {
     bool manual_mode; /* true : pilotage manuel */
@@ -75,10 +95,12 @@ typedef struct {
 extern terrarium_hw_t g_terrariums[];
 extern const size_t g_terrarium_count;
 extern real_mode_state_t g_real_mode_state[];
+extern terrarium_device_status_t g_device_status[];
 
 /* API principale */
 void real_mode_init(void);
 void real_mode_loop(void *arg);
+void real_mode_detect_devices(void);
 
 #ifdef __cplusplus
 }
