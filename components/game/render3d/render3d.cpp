@@ -1,4 +1,5 @@
 #include <LovyanGFX.hpp>
+#include <cstdio>
 #include "render3d.h"
 #include "assets.h"
 
@@ -47,6 +48,28 @@ static void init_sprite(LGFX_Sprite &spr, int w, int h, uint16_t color)
     spr.fillSprite(color);
 }
 
+static float clampf(float v, float min_v, float max_v)
+{
+    if (v < min_v) {
+        return min_v;
+    }
+    if (v > max_v) {
+        return max_v;
+    }
+    return v;
+}
+
+static uint16_t status_color(float ratio)
+{
+    if (ratio >= 0.75f) {
+        return TFT_GREEN;
+    }
+    if (ratio >= 0.45f) {
+        return TFT_YELLOW;
+    }
+    return TFT_RED;
+}
+
 void render_terrarium(Terrarium *t, Camera *cam)
 {
     (void)t;
@@ -72,8 +95,12 @@ void render_terrarium(Terrarium *t, Camera *cam)
     }
 
     lcd.startWrite();
-    int cx = cam_x + (int)(terrarium_sprite.width() * zoom / 2.0f);
-    int cy = cam_y + (int)(terrarium_sprite.height() * zoom / 2.0f);
+    int sprite_w = terrarium_sprite.width();
+    int sprite_h = terrarium_sprite.height();
+    int scaled_w = (int)(sprite_w * zoom);
+    int scaled_h = (int)(sprite_h * zoom);
+    int cx = cam_x + scaled_w / 2;
+    int cy = cam_y + scaled_h / 2;
     terrarium_sprite.pushRotateZoom(cx, cy, 0, zoom, zoom);
 
     int decor_cx = cam_x + (int)((20 + decor_sprite.width() / 2.0f) * zoom);
@@ -83,6 +110,80 @@ void render_terrarium(Terrarium *t, Camera *cam)
     int rept_cx = cam_x + (int)((80 + reptile_sprite.width() / 2.0f) * zoom);
     int rept_cy = cam_y + (int)((80 + reptile_sprite.height() / 2.0f) * zoom);
     reptile_sprite.pushRotateZoom(rept_cx, rept_cy, 0, zoom, zoom);
+
+    int top_left_x = cam_x;
+    int top_left_y = cam_y;
+    if (scaled_w > 0 && scaled_h > 0) {
+        top_left_x = cam_x - scaled_w / 2;
+        top_left_y = cam_y - scaled_h / 2;
+    }
+
+    if (t) {
+        uint16_t border_color = t->selected ? TFT_YELLOW : TFT_DARKGREY;
+        lcd.drawRect(top_left_x, top_left_y, scaled_w, scaled_h, border_color);
+
+        lcd.setTextWrap(false);
+        lcd.setTextSize(1);
+        lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+
+        const char *name = (t->name[0] != '\0') ? t->name : "Terrarium";
+        lcd.setCursor(top_left_x + 4, top_left_y + 10);
+        lcd.print(name);
+
+        if (t->inhabited) {
+            lcd.setCursor(top_left_x + 4, top_left_y + 22);
+            lcd.print(t->species);
+
+            char env_line[48];
+            std::snprintf(env_line, sizeof(env_line), "%.0fC %.0f%% UV%.1f",
+                          t->temperature, t->humidity, t->uv_index);
+            lcd.setCursor(top_left_x + 4, top_left_y + scaled_h - 40);
+            lcd.print(env_line);
+
+            float health = clampf(t->health_ratio, 0.0f, 1.0f);
+            int bar_w = scaled_w - 8;
+            int bar_x = top_left_x + 4;
+            int bar_y = top_left_y + scaled_h - 28;
+            lcd.drawRect(bar_x, bar_y, bar_w, 6, TFT_DARKGREY);
+            int filled = (int)((bar_w - 2) * health);
+            if (filled > 0) {
+                lcd.fillRect(bar_x + 1, bar_y + 1, filled, 4, status_color(health));
+            }
+
+            float growth = clampf(t->growth_ratio, 0.0f, 1.0f);
+            bar_y += 8;
+            lcd.drawRect(bar_x, bar_y, bar_w, 6, TFT_DARKGREY);
+            filled = (int)((bar_w - 2) * growth);
+            if (filled > 0) {
+                lcd.fillRect(bar_x + 1, bar_y + 1, filled, 4, TFT_SKYBLUE);
+            }
+
+            int indicator_y = top_left_y + scaled_h - 12;
+            int indicator_x = top_left_x + 4;
+            lcd.fillRect(indicator_x, indicator_y, 12, 6,
+                         t->heater_on ? TFT_ORANGE : TFT_DARKGREY);
+            lcd.fillRect(indicator_x + 16, indicator_y, 12, 6,
+                         t->light_on ? TFT_YELLOW : TFT_DARKGREY);
+            lcd.fillRect(indicator_x + 32, indicator_y, 12, 6,
+                         t->mist_on ? TFT_CYAN : TFT_DARKGREY);
+
+            if (!t->alive) {
+                lcd.drawLine(top_left_x, top_left_y, top_left_x + scaled_w,
+                             top_left_y + scaled_h, TFT_RED);
+                lcd.drawLine(top_left_x, top_left_y + scaled_h,
+                             top_left_x + scaled_w, top_left_y, TFT_RED);
+            } else if (t->sick) {
+                lcd.drawRect(top_left_x + 2, top_left_y + 2,
+                             scaled_w - 4, scaled_h - 4, TFT_ORANGE);
+            }
+        } else {
+            lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+            lcd.setCursor(top_left_x + scaled_w / 2 - 6,
+                          top_left_y + scaled_h / 2 - 8);
+            lcd.print("+");
+        }
+    }
+
     lcd.endWrite();
 }
 
