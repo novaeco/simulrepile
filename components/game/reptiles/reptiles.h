@@ -7,11 +7,16 @@ typedef struct {
     float humidity;
     float uv_index;
     float terrarium_min_size;
+    float growth_rate;
+    float max_health;
 } reptile_needs_t;
 
 typedef struct {
     bool requires_authorisation;
     bool requires_certificat;
+    bool allowed_fr;
+    bool allowed_eu;
+    bool allowed_international;
 } reptile_legal_t;
 
 typedef struct {

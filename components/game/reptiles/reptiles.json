@@ -5,11 +5,16 @@
       "temperature": 40.0,
       "humidity": 30.0,
       "uv_index": 5.0,
-      "terrarium_min_size": 1.0
+      "terrarium_min_size": 1.0,
+      "growth_rate": 0.02,
+      "health_max": 100.0
     },
     "legal": {
       "requires_authorisation": false,
-      "requires_certificat": true
+      "requires_certificat": true,
+      "fr_allowed": true,
+      "eu_allowed": true,
+      "intl_allowed": true
     }
   },
   {
@@ -18,11 +23,70 @@
       "temperature": 32.0,
       "humidity": 60.0,
       "uv_index": 3.0,
-      "terrarium_min_size": 0.5
+      "terrarium_min_size": 0.5,
+      "growth_rate": 0.015,
+      "health_max": 120.0
     },
     "legal": {
       "requires_authorisation": true,
-      "requires_certificat": true
+      "requires_certificat": true,
+      "fr_allowed": true,
+      "eu_allowed": true,
+      "intl_allowed": false
+    }
+  },
+  {
+    "species": "Eublepharis macularius",
+    "needs": {
+      "temperature": 28.0,
+      "humidity": 40.0,
+      "uv_index": 2.0,
+      "terrarium_min_size": 0.3,
+      "growth_rate": 0.01,
+      "health_max": 80.0
+    },
+    "legal": {
+      "requires_authorisation": false,
+      "requires_certificat": false,
+      "fr_allowed": true,
+      "eu_allowed": true,
+      "intl_allowed": true
+    }
+  },
+  {
+    "species": "Testudo hermanni",
+    "needs": {
+      "temperature": 26.0,
+      "humidity": 50.0,
+      "uv_index": 6.0,
+      "terrarium_min_size": 2.0,
+      "growth_rate": 0.005,
+      "health_max": 150.0
+    },
+    "legal": {
+      "requires_authorisation": true,
+      "requires_certificat": true,
+      "fr_allowed": true,
+      "eu_allowed": false,
+      "intl_allowed": false
+    }
+  },
+  {
+    "species": "Iguana iguana",
+    "needs": {
+      "temperature": 33.0,
+      "humidity": 70.0,
+      "uv_index": 4.0,
+      "terrarium_min_size": 3.0,
+      "growth_rate": 0.03,
+      "health_max": 200.0
+    },
+    "legal": {
+      "requires_authorisation": true,
+      "requires_certificat": true,
+      "fr_allowed": false,
+      "eu_allowed": true,
+      "intl_allowed": true
     }
   }
 ]

@@ -1,80 +1,51 @@
 #include "room.h"
-#include "esp_log.h"
-#include <stdbool.h>
-#include <string.h>
+#include "render3d/render3d.h"
+#include "lvgl.h"
 
-/**
- * @file room.c
- * @brief Display a selectable grid of terrariums.
- */
-
-#define TAG "room"
 #define GRID_SIZE 5
+#define TERRARIUM_SPACING_X 200
+#define TERRARIUM_SPACING_Y 150
 
-static bool occupied[GRID_SIZE][GRID_SIZE];
+static Camera camera = {0, 0, 100};
 
-typedef struct {
-    uint8_t x;
-    uint8_t y;
-} terrarium_ctx_t;
-
-static void terrarium_event_handler(lv_event_t *e) {
-    terrarium_ctx_t *ctx = lv_event_get_user_data(e);
-    if (!ctx) return;
-    if (occupied[ctx->y][ctx->x]) {
-        ESP_LOGW(TAG, "Terrarium %u,%u already occupied", ctx->x, ctx->y);
-        return;
+static void room_render(void)
+{
+    render3d_clear(0x0000); /* black background */
+    for (int y = 0; y < GRID_SIZE; ++y) {
+        for (int x = 0; x < GRID_SIZE; ++x) {
+            Camera local = {
+                .x = camera.x - x * TERRARIUM_SPACING_X,
+                .y = camera.y - y * TERRARIUM_SPACING_Y,
+                .z = camera.z,
+            };
+            render_terrarium(NULL, &local);
+        }
     }
-    occupied[ctx->y][ctx->x] = true;
-    lv_obj_t *btn = lv_event_get_target(e);
-    lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_GREEN), LV_PART_MAIN);
-    lv_obj_add_state(btn, LV_STATE_DISABLED);
-    ESP_LOGI(TAG, "Selected terrarium %u,%u", ctx->x, ctx->y);
+}
+
+static void gesture_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_USER_1) {
+        const lv_point_t *d = lv_event_get_param(e);
+        camera.x -= d->x;
+        camera.y -= d->y;
+        room_render();
+    } else if (code == LV_EVENT_USER_2) {
+        const int *diff = lv_event_get_param(e);
+        camera.z += *diff;
+        if (camera.z < 50) camera.z = 50;
+        if (camera.z > 200) camera.z = 200;
+        room_render();
+    }
 }
 
 void room_show(void)
 {
-    memset(occupied, 0, sizeof(occupied));
     lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_add_event_cb(scr, gesture_handler, LV_EVENT_ALL, NULL);
     lv_scr_load(scr);
-
-    static terrarium_ctx_t ctx[GRID_SIZE][GRID_SIZE];
-
-    /* Create a container with a 5x5 grid layout */
-    lv_obj_t *grid = lv_obj_create(scr);
-    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(grid, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_center(grid);
-
-    static const lv_coord_t col_dsc[] = {
-        LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
-        LV_GRID_TEMPLATE_LAST
-    };
-    static const lv_coord_t row_dsc[] = {
-        LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
-        LV_GRID_TEMPLATE_LAST
-    };
-
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-    lv_obj_set_style_pad_row(grid, 10, 0);
-    lv_obj_set_style_pad_column(grid, 10, 0);
-
-    for (int y = 0; y < GRID_SIZE; ++y) {
-        for (int x = 0; x < GRID_SIZE; ++x) {
-            lv_obj_t *btn = lv_btn_create(grid);
-            lv_obj_set_size(btn, 60, 60);
-            lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, x, 1,
-                                 LV_GRID_ALIGN_STRETCH, y, 1);
-
-            ctx[y][x].x = x;
-            ctx[y][x].y = y;
-            lv_obj_add_event_cb(btn, terrarium_event_handler, LV_EVENT_CLICKED,
-                                &ctx[y][x]);
-
-            /* Display cell index for debugging */
-            lv_obj_t *label = lv_label_create(btn);
-            lv_label_set_text_fmt(label, "%d", y * GRID_SIZE + x + 1);
-            lv_obj_center(label);
-        }
-    }
+    camera.x = camera.y = 0;
+    camera.z = 100;
+    room_render();
 }

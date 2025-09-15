@@ -11,9 +11,14 @@
 typedef struct {
     size_t item_count;
     char items[TERRARIUM_MAX_ITEMS][TERRARIUM_ITEM_NAME_LEN];
+    char decor[TERRARIUM_ITEM_NAME_LEN];
+    char substrate[TERRARIUM_ITEM_NAME_LEN];
     float temperature;
     float humidity;
     float uv_index;
+    bool heater_on;
+    bool light_on;
+    bool mist_on;
 } terrarium_t;
 
 /**
@@ -25,6 +30,16 @@ typedef struct {
  * @return true on success, false if the list is full or item is NULL.
  */
 bool terrarium_add_item(const char *item);
+
+/** Personalisation helpers */
+bool terrarium_set_decor(const char *decor);
+bool terrarium_set_substrate(const char *substrate);
+bool terrarium_add_equipment(const char *equip);
+
+/** Actuator control */
+void terrarium_set_heater(bool on);
+void terrarium_set_light(bool on);
+void terrarium_set_mist(bool on);
 
 /**
  * @brief Set the reptile currently hosted in the terrarium.

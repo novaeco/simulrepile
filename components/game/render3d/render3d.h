@@ -18,7 +18,7 @@ typedef struct Terrarium Terrarium;
 typedef struct Camera {
     int16_t x; /**< X position of the camera. */
     int16_t y; /**< Y position of the camera. */
-    int16_t z; /**< Z position of the camera. */
+    int16_t z; /**< Zoom level (100 = 1x). */
 } Camera;
 
 /**
@@ -31,6 +31,14 @@ typedef struct Camera {
  * @param cam Pointer to active camera description.
  */
 void render_terrarium(Terrarium *t, Camera *cam);
+
+/**
+ * @brief Clear the rendering surface.
+ *
+ * Utility function exposed to C modules so they can reset the drawing surface
+ * before submitting terrarium meshes. Colour follows RGB565 format.
+ */
+void render3d_clear(uint16_t color);
 
 #ifdef __cplusplus
 }
