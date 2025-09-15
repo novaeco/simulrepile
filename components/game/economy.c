@@ -13,6 +13,38 @@
 #define WELLBEING_MAX       100.0f
 #define WELLBEING_MIN       0.0f
 
+/**
+ * @brief Apply the weekly income when a new week starts.
+ */
+static void economy_apply_weekly_credit(economy_t *eco)
+{
+    if (!eco) {
+        return;
+    }
+
+    if (eco->day % 7 == 1) {
+        eco->budget += WEEKLY_CREDIT;
+    }
+}
+
+/**
+ * @brief Deduct mandatory daily expenses from the player budget.
+ */
+static void economy_apply_daily_expenses(economy_t *eco)
+{
+    if (!eco) {
+        return;
+    }
+
+    eco->budget -= FOOD_COST_PER_DAY;
+    eco->budget -= ELECTRICITY_COST;
+    eco->budget -= VETERINARY_COST;
+    eco->budget -= EQUIPMENT_COST;
+}
+
+/**
+ * @brief Adjust the reptile wellbeing according to the available budget.
+ */
 static void economy_apply_wellbeing(economy_t *eco)
 {
     if (!eco) {
@@ -53,16 +85,7 @@ void economy_next_day(economy_t *eco)
 
     eco->day++;
 
-    /* Weekly automatic credit */
-    if (eco->day % 7 == 1) {
-        eco->budget += WEEKLY_CREDIT;
-    }
-
-    /* Daily expenses */
-    eco->budget -= FOOD_COST_PER_DAY;
-    eco->budget -= ELECTRICITY_COST;
-    eco->budget -= VETERINARY_COST;
-    eco->budget -= EQUIPMENT_COST;
-
+    economy_apply_weekly_credit(eco);
+    economy_apply_daily_expenses(eco);
     economy_apply_wellbeing(eco);
 }
