@@ -59,13 +59,22 @@ bool reptiles_load(void) {
         cJSON *humidity = cJSON_GetObjectItem(needs, "humidity");
         cJSON *uv_index = cJSON_GetObjectItem(needs, "uv_index");
         cJSON *terrarium_min_size = cJSON_GetObjectItem(needs, "terrarium_min_size");
+        cJSON *growth_rate = cJSON_GetObjectItem(needs, "growth_rate");
+        cJSON *health_max = cJSON_GetObjectItem(needs, "health_max");
+
         cJSON *requires_authorisation = cJSON_GetObjectItem(legal, "requires_authorisation");
         cJSON *requires_certificat = cJSON_GetObjectItem(legal, "requires_certificat");
+        cJSON *fr_allowed = cJSON_GetObjectItem(legal, "fr_allowed");
+        cJSON *eu_allowed = cJSON_GetObjectItem(legal, "eu_allowed");
+        cJSON *intl_allowed = cJSON_GetObjectItem(legal, "intl_allowed");
 
         if (!cJSON_IsNumber(temperature) || !cJSON_IsNumber(humidity) ||
             !cJSON_IsNumber(uv_index) || !cJSON_IsNumber(terrarium_min_size) ||
+            !cJSON_IsNumber(growth_rate) || !cJSON_IsNumber(health_max) ||
             !cJSON_IsBool(requires_authorisation) ||
-            !cJSON_IsBool(requires_certificat)) {
+            !cJSON_IsBool(requires_certificat) ||
+            !cJSON_IsBool(fr_allowed) || !cJSON_IsBool(eu_allowed) ||
+            !cJSON_IsBool(intl_allowed)) {
             ESP_LOGW(TAG, "Incomplete data for reptile index %d", (int)i);
             continue;
         }
@@ -82,8 +91,13 @@ bool reptiles_load(void) {
         reptiles[i].needs.humidity = (float)humidity->valuedouble;
         reptiles[i].needs.uv_index = (float)uv_index->valuedouble;
         reptiles[i].needs.terrarium_min_size = (float)terrarium_min_size->valuedouble;
+        reptiles[i].needs.growth_rate = (float)growth_rate->valuedouble;
+        reptiles[i].needs.max_health = (float)health_max->valuedouble;
         reptiles[i].legal.requires_authorisation = cJSON_IsTrue(requires_authorisation);
         reptiles[i].legal.requires_certificat = cJSON_IsTrue(requires_certificat);
+        reptiles[i].legal.allowed_fr = cJSON_IsTrue(fr_allowed);
+        reptiles[i].legal.allowed_eu = cJSON_IsTrue(eu_allowed);
+        reptiles[i].legal.allowed_international = cJSON_IsTrue(intl_allowed);
     }
 
     cJSON_Delete(root);
@@ -145,11 +159,16 @@ bool reptiles_validate(const reptile_info_t *info) {
         return false;
     }
     bool bio_ok = info->needs.temperature > 0 && info->needs.humidity > 0 &&
-                  info->needs.uv_index >= 0 && info->needs.terrarium_min_size > 0;
+                  info->needs.uv_index >= 0 && info->needs.terrarium_min_size > 0 &&
+                  info->needs.growth_rate > 0 && info->needs.max_health > 0;
     if (!bio_ok) {
         return false;
     }
-    if (info->legal.requires_authorisation || info->legal.requires_certificat) {
+    bool legal_ok = info->legal.allowed_fr && info->legal.allowed_eu &&
+                    info->legal.allowed_international &&
+                    !info->legal.requires_authorisation &&
+                    !info->legal.requires_certificat;
+    if (!legal_ok) {
         ESP_LOGW(TAG, "Legal requirements not satisfied for %s", info->species);
         return false;
     }

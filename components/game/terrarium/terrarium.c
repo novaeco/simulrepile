@@ -20,12 +20,57 @@ bool terrarium_add_item(const char *item)
     return true;
 }
 
+bool terrarium_set_decor(const char *decor)
+{
+    if (!decor) {
+        return false;
+    }
+    strncpy(state.decor, decor, TERRARIUM_ITEM_NAME_LEN - 1);
+    state.decor[TERRARIUM_ITEM_NAME_LEN - 1] = '\0';
+    ESP_LOGI(TAG, "Decor set: %s", state.decor);
+    return true;
+}
+
+bool terrarium_set_substrate(const char *substrate)
+{
+    if (!substrate) {
+        return false;
+    }
+    strncpy(state.substrate, substrate, TERRARIUM_ITEM_NAME_LEN - 1);
+    state.substrate[TERRARIUM_ITEM_NAME_LEN - 1] = '\0';
+    ESP_LOGI(TAG, "Substrate set: %s", state.substrate);
+    return true;
+}
+
+bool terrarium_add_equipment(const char *equip)
+{
+    return terrarium_add_item(equip);
+}
+
+void terrarium_set_heater(bool on)
+{
+    state.heater_on = on;
+    ESP_LOGI(TAG, "Heater %s", on ? "ON" : "OFF");
+}
+
+void terrarium_set_light(bool on)
+{
+    state.light_on = on;
+    ESP_LOGI(TAG, "Light %s", on ? "ON" : "OFF");
+}
+
+void terrarium_set_mist(bool on)
+{
+    state.mist_on = on;
+    ESP_LOGI(TAG, "Mister %s", on ? "ON" : "OFF");
+}
+
 void terrarium_update_environment(float temperature, float humidity, float uv_index)
 {
     if (current_reptile) {
-        temperature = current_reptile->temperature;
-        humidity = current_reptile->humidity;
-        uv_index = current_reptile->uv_index;
+        temperature = current_reptile->needs.temperature;
+        humidity = current_reptile->needs.humidity;
+        uv_index = current_reptile->needs.uv_index;
     }
     state.temperature = temperature;
     state.humidity = humidity;
@@ -37,9 +82,9 @@ void terrarium_set_reptile(const reptile_info_t *reptile)
 {
     current_reptile = reptile;
     if (reptile) {
-        terrarium_update_environment(reptile->temperature,
-                                    reptile->humidity,
-                                    reptile->uv_index);
+        terrarium_update_environment(reptile->needs.temperature,
+                                    reptile->needs.humidity,
+                                    reptile->needs.uv_index);
     }
 }
 

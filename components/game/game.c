@@ -18,11 +18,16 @@
 
 #define MAX_TERRARIUM_ITEMS 16
 #define ITEM_NAME_LEN 32
-#define MAX_TERRARIUMS 8
+#define MAX_TERRARIUMS 25
 
 typedef struct {
   size_t item_count;                              /* Number of items */
   char items[MAX_TERRARIUM_ITEMS][ITEM_NAME_LEN]; /* Item names      */
+  char decor[ITEM_NAME_LEN];
+  char substrate[ITEM_NAME_LEN];
+  bool heater_on;
+  bool light_on;
+  bool mist_on;
   float temperature;                              /* Environment     */
   float humidity;
   float uv_index;
@@ -36,6 +41,8 @@ typedef struct {
   float terrarium_min_size;
   bool requires_authorisation;
   bool requires_certificat;
+  float growth;
+  float health;
 } reptile_state_t;
 
 typedef struct {
@@ -55,17 +62,26 @@ static game_state_t game_state; /* In-RAM game state snapshot */
 #define SAVE_PATH "/sdcard/simulrepile.sav"
 
 static bool save_game(void) {
-  if (game_state.terrarium_count > 0) {
-    const terrarium_t *t = terrarium_get_state();
-    terrarium_slot_t *slot = &game_state.terrariums[0];
-    slot->terrarium.item_count = t->item_count;
-    for (size_t i = 0; i < t->item_count && i < MAX_TERRARIUM_ITEMS; ++i) {
-      strncpy(slot->terrarium.items[i], t->items[i], ITEM_NAME_LEN - 1);
-      slot->terrarium.items[i][ITEM_NAME_LEN - 1] = '\0';
+  for (size_t i = 0; i < game_state.terrarium_count; ++i) {
+    if (i == 0) {
+      const terrarium_t *t = terrarium_get_state();
+      terrarium_slot_t *slot = &game_state.terrariums[i];
+      slot->terrarium.item_count = t->item_count;
+      for (size_t j = 0; j < t->item_count && j < MAX_TERRARIUM_ITEMS; ++j) {
+        strncpy(slot->terrarium.items[j], t->items[j], ITEM_NAME_LEN - 1);
+        slot->terrarium.items[j][ITEM_NAME_LEN - 1] = '\0';
+      }
+      strncpy(slot->terrarium.decor, t->decor, ITEM_NAME_LEN - 1);
+      slot->terrarium.decor[ITEM_NAME_LEN - 1] = '\0';
+      strncpy(slot->terrarium.substrate, t->substrate, ITEM_NAME_LEN - 1);
+      slot->terrarium.substrate[ITEM_NAME_LEN - 1] = '\0';
+      slot->terrarium.heater_on = t->heater_on;
+      slot->terrarium.light_on = t->light_on;
+      slot->terrarium.mist_on = t->mist_on;
+      slot->terrarium.temperature = t->temperature;
+      slot->terrarium.humidity = t->humidity;
+      slot->terrarium.uv_index = t->uv_index;
     }
-    slot->terrarium.temperature = t->temperature;
-    slot->terrarium.humidity = t->humidity;
-    slot->terrarium.uv_index = t->uv_index;
   }
   return storage_save(SAVE_PATH, &game_state, sizeof(game_state));
 }
@@ -88,6 +104,11 @@ static bool load_game(void) {
   terrarium_update_environment(slot->terrarium.temperature,
                                slot->terrarium.humidity,
                                slot->terrarium.uv_index);
+  terrarium_set_decor(slot->terrarium.decor);
+  terrarium_set_substrate(slot->terrarium.substrate);
+  terrarium_set_heater(slot->terrarium.heater_on);
+  terrarium_set_light(slot->terrarium.light_on);
+  terrarium_set_mist(slot->terrarium.mist_on);
   for (size_t i = 0; i < slot->terrarium.item_count; ++i) {
     terrarium_add_item(slot->terrarium.items[i]);
   }
@@ -111,18 +132,20 @@ static void btn_new_game_event(lv_event_t *e) {
   /* Populate reptile state */
   strncpy(slot->reptile.species, info->species,
           sizeof(slot->reptile.species) - 1);
-  slot->reptile.temperature = info->temperature;
-  slot->reptile.humidity = info->humidity;
-  slot->reptile.uv_index = info->uv_index;
-  slot->reptile.terrarium_min_size = info->terrarium_min_size;
-  slot->reptile.requires_authorisation = info->requires_authorisation;
-  slot->reptile.requires_certificat = info->requires_certificat;
+  slot->reptile.temperature = info->needs.temperature;
+  slot->reptile.humidity = info->needs.humidity;
+  slot->reptile.uv_index = info->needs.uv_index;
+  slot->reptile.terrarium_min_size = info->needs.terrarium_min_size;
+  slot->reptile.requires_authorisation = info->legal.requires_authorisation;
+  slot->reptile.requires_certificat = info->legal.requires_certificat;
+  slot->reptile.growth = 0.0f;
+  slot->reptile.health = info->needs.max_health;
 
   /* Host reptile and mirror environment requirements */
   terrarium_set_reptile(info);
-  slot->terrarium.temperature = info->temperature;
-  slot->terrarium.humidity = info->humidity;
-  slot->terrarium.uv_index = info->uv_index;
+  slot->terrarium.temperature = info->needs.temperature;
+  slot->terrarium.humidity = info->needs.humidity;
+  slot->terrarium.uv_index = info->needs.uv_index;
 
   /* Initialise economic state */
   economy_init(&game_state.economy, 100.0f, 100.0f);

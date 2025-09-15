@@ -20,10 +20,9 @@ void render_terrarium(Terrarium *t, Camera *cam)
 {
     (void)t;
 
-    /* Use camera position if provided. Negative translation mimics viewpoint
-     * shifting in this very simple scene. */
-    int16_t cam_x = cam ? -cam->x : 0;
-    int16_t cam_y = cam ? -cam->y : 0;
+    float zoom = cam ? cam->z / 100.0f : 1.0f;
+    int16_t cam_x = cam ? (int16_t)(-cam->x * zoom) : 0;
+    int16_t cam_y = cam ? (int16_t)(-cam->y * zoom) : 0;
 
     if (!terrarium_sprite.created()) {
         init_sprite(terrarium_sprite, 160, 120, TFT_BROWN);
@@ -32,9 +31,24 @@ void render_terrarium(Terrarium *t, Camera *cam)
     }
 
     lcd.startWrite();
-    terrarium_sprite.pushSprite(cam_x, cam_y);
-    decor_sprite.pushSprite(cam_x + 20, cam_y + 60);
-    reptile_sprite.pushSprite(cam_x + 80, cam_y + 80);
+    int cx = cam_x + (int)(terrarium_sprite.width() * zoom / 2.0f);
+    int cy = cam_y + (int)(terrarium_sprite.height() * zoom / 2.0f);
+    terrarium_sprite.pushRotateZoom(cx, cy, 0, zoom, zoom);
+
+    int decor_cx = cam_x + (int)((20 + decor_sprite.width() / 2.0f) * zoom);
+    int decor_cy = cam_y + (int)((60 + decor_sprite.height() / 2.0f) * zoom);
+    decor_sprite.pushRotateZoom(decor_cx, decor_cy, 0, zoom, zoom);
+
+    int rept_cx = cam_x + (int)((80 + reptile_sprite.width() / 2.0f) * zoom);
+    int rept_cy = cam_y + (int)((80 + reptile_sprite.height() / 2.0f) * zoom);
+    reptile_sprite.pushRotateZoom(rept_cx, rept_cy, 0, zoom, zoom);
+    lcd.endWrite();
+}
+
+void render3d_clear(uint16_t color)
+{
+    lcd.startWrite();
+    lcd.fillScreen(color);
     lcd.endWrite();
 }
 
