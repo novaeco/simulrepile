@@ -69,6 +69,89 @@ typedef struct {
 
 static lv_obj_t *main_menu;
 static game_state_t game_state; /* In-RAM game state snapshot */
+static size_t current_slot;      /* Currently selected terrarium */
+
+size_t game_get_terrarium_count(void) { return game_state.terrarium_count; }
+
+size_t game_get_current_slot(void) { return current_slot; }
+
+size_t game_add_terrarium(void) {
+  if (game_state.terrarium_count >= MAX_TERRARIUMS)
+    return SIZE_MAX;
+  size_t idx = game_state.terrarium_count++;
+  terrarium_slot_t *slot = &game_state.terrariums[idx];
+  memset(slot, 0, sizeof(*slot));
+  slot->reptile.alive = false;
+  environment_register_terrarium(&slot->terrarium.profile,
+                                 terrarium_update_environment,
+                                 slot->terrarium.phase_offset);
+  return idx;
+}
+
+bool game_select_terrarium(size_t index) {
+  if (index >= game_state.terrarium_count)
+    return false;
+  current_slot = index;
+  terrarium_slot_t *slot = &game_state.terrariums[index];
+  const terrarium_t *cur = terrarium_get_state();
+  memset((void *)cur, 0, sizeof(*cur));
+  const reptile_info_t *info = reptiles_find(slot->reptile.species);
+  if (info)
+    terrarium_set_reptile(info);
+  terrarium_update_environment(slot->terrarium.temperature,
+                               slot->terrarium.humidity,
+                               slot->terrarium.uv_index);
+  terrarium_set_decor(slot->terrarium.decor);
+  terrarium_set_substrate(slot->terrarium.substrate);
+  terrarium_set_heater(slot->terrarium.heater_on);
+  terrarium_set_light(slot->terrarium.light_on);
+  terrarium_set_mist(slot->terrarium.mist_on);
+  for (size_t j = 0; j < slot->terrarium.item_count; ++j)
+    terrarium_add_item(slot->terrarium.items[j]);
+  return true;
+}
+
+void game_remove_terrarium(size_t index) {
+  if (index >= game_state.terrarium_count)
+    return;
+  for (size_t i = index + 1; i < game_state.terrarium_count; ++i)
+    game_state.terrariums[i - 1] = game_state.terrariums[i];
+  if (game_state.terrarium_count)
+    game_state.terrarium_count--;
+  if (current_slot >= game_state.terrarium_count)
+    current_slot = game_state.terrarium_count ? game_state.terrarium_count - 1 : 0;
+}
+
+void game_set_reptile(const reptile_info_t *info) {
+  terrarium_set_reptile(info);
+  if (!info)
+    return;
+  terrarium_slot_t *slot = &game_state.terrariums[current_slot];
+  strncpy(slot->reptile.species, info->species,
+          sizeof(slot->reptile.species) - 1);
+  slot->reptile.species[sizeof(slot->reptile.species) - 1] = '\0';
+  slot->reptile.temperature = info->needs.temperature;
+  slot->reptile.humidity = info->needs.humidity;
+  slot->reptile.uv_index = info->needs.uv_index;
+  slot->reptile.terrarium_min_size = info->needs.terrarium_min_size;
+  slot->reptile.cites = info->legal.cites;
+  slot->reptile.requires_authorisation = info->legal.requires_authorisation;
+  slot->reptile.requires_cdc = info->legal.requires_cdc;
+  slot->reptile.requires_certificat = info->legal.requires_certificat;
+  slot->reptile.growth = 0.0f;
+  slot->reptile.health = info->needs.max_health;
+  slot->reptile.mature = false;
+  slot->reptile.sick = false;
+  slot->reptile.alive = true;
+  slot->terrarium.temperature = info->needs.temperature;
+  slot->terrarium.humidity = info->needs.humidity;
+  slot->terrarium.uv_index = info->needs.uv_index;
+  slot->terrarium.profile.day_temp = info->needs.temperature;
+  slot->terrarium.profile.night_temp = info->needs.temperature - 5.0f;
+  slot->terrarium.profile.day_humidity = info->needs.humidity;
+  slot->terrarium.profile.night_humidity = info->needs.humidity + 20.0f;
+  slot->terrarium.profile.day_uv = info->needs.uv_index;
+}
 
 /* Periodic reptile simulation -------------------------------------------- */
 
@@ -146,45 +229,45 @@ static reptile_user_ctx_t user_ctx = {
 
 #define SAVE_PATH "/sdcard/simulrepile.sav"
 
-static bool save_game(void) {
+bool game_save(void) {
+  terrarium_slot_t *slot = &game_state.terrariums[current_slot];
+  const terrarium_t *t = terrarium_get_state();
+  slot->terrarium.item_count = t->item_count;
+  for (size_t j = 0; j < t->item_count && j < MAX_TERRARIUM_ITEMS; ++j) {
+    strncpy(slot->terrarium.items[j], t->items[j], ITEM_NAME_LEN - 1);
+    slot->terrarium.items[j][ITEM_NAME_LEN - 1] = '\0';
+  }
+  strncpy(slot->terrarium.decor, t->decor, ITEM_NAME_LEN - 1);
+  slot->terrarium.decor[ITEM_NAME_LEN - 1] = '\0';
+  strncpy(slot->terrarium.substrate, t->substrate, ITEM_NAME_LEN - 1);
+  slot->terrarium.substrate[ITEM_NAME_LEN - 1] = '\0';
+  slot->terrarium.heater_on = t->heater_on;
+  slot->terrarium.light_on = t->light_on;
+  slot->terrarium.mist_on = t->mist_on;
+  slot->terrarium.temperature = t->temperature;
+  slot->terrarium.humidity = t->humidity;
+  slot->terrarium.uv_index = t->uv_index;
+
   for (size_t i = 0; i < game_state.terrarium_count; ++i) {
-    terrarium_slot_t *slot = &game_state.terrariums[i];
-    const reptile_info_t *info = reptiles_find(slot->reptile.species);
+    terrarium_slot_t *s = &game_state.terrariums[i];
+    const reptile_info_t *info = reptiles_find(s->reptile.species);
     if (!info || !reptiles_validate(info, &user_ctx)) {
-      ESP_LOGW(TAG, "Cannot save: non-compliant reptile %s", slot->reptile.species);
+      ESP_LOGW(TAG, "Cannot save: non-compliant reptile %s", s->reptile.species);
       return false;
     }
-    if (slot->reptile.health < REPTILE_HEALTH_DEAD) {
-      slot->reptile.health = REPTILE_HEALTH_DEAD;
-      slot->reptile.alive = false;
+    if (s->reptile.health < REPTILE_HEALTH_DEAD) {
+      s->reptile.health = REPTILE_HEALTH_DEAD;
+      s->reptile.alive = false;
     }
-    if (slot->reptile.growth >= REPTILE_GROWTH_MATURE) {
-      slot->reptile.mature = true;
-    }
-    if (i == 0) {
-      const terrarium_t *t = terrarium_get_state();
-      slot->terrarium.item_count = t->item_count;
-      for (size_t j = 0; j < t->item_count && j < MAX_TERRARIUM_ITEMS; ++j) {
-        strncpy(slot->terrarium.items[j], t->items[j], ITEM_NAME_LEN - 1);
-        slot->terrarium.items[j][ITEM_NAME_LEN - 1] = '\0';
-      }
-      strncpy(slot->terrarium.decor, t->decor, ITEM_NAME_LEN - 1);
-      slot->terrarium.decor[ITEM_NAME_LEN - 1] = '\0';
-      strncpy(slot->terrarium.substrate, t->substrate, ITEM_NAME_LEN - 1);
-      slot->terrarium.substrate[ITEM_NAME_LEN - 1] = '\0';
-      slot->terrarium.heater_on = t->heater_on;
-      slot->terrarium.light_on = t->light_on;
-      slot->terrarium.mist_on = t->mist_on;
-      slot->terrarium.temperature = t->temperature;
-      slot->terrarium.humidity = t->humidity;
-      slot->terrarium.uv_index = t->uv_index;
+    if (s->reptile.growth >= REPTILE_GROWTH_MATURE) {
+      s->reptile.mature = true;
     }
   }
   game_state.env_time_scale = environment_get_time_scale();
   return storage_save(SAVE_PATH, &game_state, sizeof(game_state));
 }
 
-static bool load_game(void) {
+bool game_load(void) {
   if (!storage_load(SAVE_PATH, &game_state, sizeof(game_state))) {
     return false;
   }
@@ -208,25 +291,12 @@ static bool load_game(void) {
       return false;
     }
     environment_register_terrarium(&slot->terrarium.profile,
-                                    terrarium_update_environment,
-                                    slot->terrarium.phase_offset);
-    if (i == 0) {
-      terrarium_set_reptile(info);
-      terrarium_update_environment(slot->terrarium.temperature,
-                                   slot->terrarium.humidity,
-                                   slot->terrarium.uv_index);
-      terrarium_set_decor(slot->terrarium.decor);
-      terrarium_set_substrate(slot->terrarium.substrate);
-      terrarium_set_heater(slot->terrarium.heater_on);
-      terrarium_set_light(slot->terrarium.light_on);
-      terrarium_set_mist(slot->terrarium.mist_on);
-      for (size_t j = 0; j < slot->terrarium.item_count; ++j) {
-        terrarium_add_item(slot->terrarium.items[j]);
-      }
-    }
+                                   terrarium_update_environment,
+                                   slot->terrarium.phase_offset);
   }
 
-  return true;
+  current_slot = 0;
+  return game_select_terrarium(0);
 }
 
 static void btn_new_game_event(lv_event_t *e) {
@@ -235,6 +305,7 @@ static void btn_new_game_event(lv_event_t *e) {
   memset(&game_state, 0, sizeof(game_state));
   game_state.terrarium_count = 1;
   terrarium_slot_t *slot = &game_state.terrariums[0];
+  current_slot = 0;
 
   const reptile_info_t *info = reptiles_find("Python regius");
   if (!reptiles_validate(info, &user_ctx)) {
@@ -277,7 +348,7 @@ static void btn_new_game_event(lv_event_t *e) {
   /* Initialise economic state */
   economy_init(&game_state.economy, 100.0f, 100.0f);
 
-  if (!save_game()) {
+  if (!game_save()) {
     ESP_LOGE(TAG, "Failed to save game");
   }
 
@@ -289,7 +360,7 @@ static void btn_new_game_event(lv_event_t *e) {
 
 static void btn_resume_event(lv_event_t *e) {
   ESP_LOGI(TAG, "Resume game");
-  if (!load_game()) {
+  if (!game_load()) {
     ESP_LOGE(TAG, "No saved game");
     return;
   }
