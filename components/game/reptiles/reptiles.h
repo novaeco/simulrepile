@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Growth and health thresholds */
 #define REPTILE_GROWTH_MATURE 1.0f       /*!< Growth value at maturity          */
@@ -37,6 +38,11 @@ typedef struct {
     bool requires_authorisation; /*!< Prefectoral authorisation required     */
     bool requires_cdc;          /*!< Certificat de capacité (CDC) required  */
     bool requires_certificat;   /*!< Additional certificate requirement     */
+    bool requires_declaration;  /*!< Préfecture declaration mandatory       */
+    bool requires_marking;      /*!< Identification/marking mandatory       */
+    bool dangerous;             /*!< Species classified as dangerous        */
+    uint16_t max_without_permit;/*!< Max specimens without CDC/APD          */
+    uint16_t max_total;         /*!< Absolute cap on specimens              */
     bool allowed_fr;            /*!< Species permitted in France            */
     bool allowed_eu;            /*!< Species permitted in EU                */
     bool allowed_international; /*!< Species permitted internationally      */
@@ -48,6 +54,10 @@ typedef struct {
     bool has_authorisation;       /*!< Holds prefectoral authorisation   */
     bool has_cdc;                 /*!< Holds certificat de capacité      */
     bool has_certificat;          /*!< Holds additional certificate      */
+    bool has_declaration;         /*!< Prefectoral declaration filed     */
+    bool has_marking_system;      /*!< Identification/marking compliant  */
+    bool has_dangerous_permit;    /*!< Permit for dangerous species      */
+    uint16_t declared_specimens;  /*!< Number of specimens declared      */
     reptile_region_t region;      /*!< Current geographic region         */
 } reptile_user_ctx_t;
 

@@ -12,6 +12,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -50,6 +51,11 @@ typedef struct {
   bool requires_authorisation;
   bool requires_cdc;
   bool requires_certificat;
+  bool requires_declaration;
+  bool requires_marking;
+  bool dangerous;
+  uint16_t max_without_permit;
+  uint16_t max_total;
   float growth;
   float health;
   float max_health;
@@ -85,6 +91,7 @@ static float compute_daily_revenue(void);
 static void advance_simulated_day(void);
 static void commit_slot_from_model(terrarium_slot_t *slot);
 static void update_economy_from_health(void);
+static uint16_t game_count_declared_reptiles(void);
 
 size_t game_get_terrarium_count(void) { return game_state.terrarium_count; }
 
@@ -245,6 +252,16 @@ static void update_economy_from_health(void)
     game_state.economy.wellbeing = 0.0f;
 }
 
+static uint16_t game_count_declared_reptiles(void)
+{
+  uint16_t count = 0;
+  for (size_t i = 0; i < game_state.terrarium_count; ++i) {
+    if (game_state.terrariums[i].reptile.species[0] != '\0')
+      count++;
+  }
+  return count;
+}
+
 static void advance_simulated_day(void)
 {
   float revenue = compute_daily_revenue();
@@ -272,6 +289,11 @@ void game_set_reptile(const reptile_info_t *info) {
   slot->reptile.requires_authorisation = info->legal.requires_authorisation;
   slot->reptile.requires_cdc = info->legal.requires_cdc;
   slot->reptile.requires_certificat = info->legal.requires_certificat;
+  slot->reptile.requires_declaration = info->legal.requires_declaration;
+  slot->reptile.requires_marking = info->legal.requires_marking;
+  slot->reptile.dangerous = info->legal.dangerous;
+  slot->reptile.max_without_permit = info->legal.max_without_permit;
+  slot->reptile.max_total = info->legal.max_total;
   slot->reptile.growth = 0.0f;
   slot->reptile.health = info->needs.max_health;
   slot->reptile.max_health = info->needs.max_health;
@@ -401,6 +423,10 @@ static reptile_user_ctx_t user_ctx = {
     .has_authorisation = false,
     .has_cdc = false,
     .has_certificat = false,
+    .has_declaration = false,
+    .has_marking_system = false,
+    .has_dangerous_permit = false,
+    .declared_specimens = 0,
     .region = REPTILE_REGION_FR,
 };
 
@@ -409,6 +435,8 @@ static reptile_user_ctx_t user_ctx = {
 bool game_save(void) {
   terrarium_slot_t *slot = &game_state.terrariums[current_slot];
   commit_slot_from_model(slot);
+
+  user_ctx.declared_specimens = game_count_declared_reptiles();
 
   for (size_t i = 0; i < game_state.terrarium_count; ++i) {
     terrarium_slot_t *s = &game_state.terrariums[i];
@@ -448,6 +476,8 @@ bool game_load(void) {
 
   simulated_hours_accum = 0.0f;
   environment_set_time_scale(game_state.env_time_scale);
+
+  user_ctx.declared_specimens = game_count_declared_reptiles();
 
   for (size_t i = 0; i < game_state.terrarium_count; ++i) {
     terrarium_slot_t *slot = &game_state.terrariums[i];
@@ -549,9 +579,15 @@ static void btn_new_game_event(lv_event_t *e) {
   current_slot = 0;
   simulated_hours_accum = 0.0f;
 
+  user_ctx.declared_specimens = 1;
   const reptile_info_t *info = reptiles_find("Python regius");
   if (!reptiles_validate(info, &user_ctx)) {
     ESP_LOGE(TAG, "Invalid reptile data");
+    static const char *btns[] = {"OK", NULL};
+    lv_obj_t *msg = lv_msgbox_create(NULL, "Conformit\xC3\xA9", 
+                                     "Autorisation ou d\xC3\xA9claration manquante.",
+                                     btns, false);
+    lv_obj_center(msg);
     return;
   }
 
@@ -566,6 +602,11 @@ static void btn_new_game_event(lv_event_t *e) {
   slot->reptile.requires_authorisation = info->legal.requires_authorisation;
   slot->reptile.requires_cdc = info->legal.requires_cdc;
   slot->reptile.requires_certificat = info->legal.requires_certificat;
+  slot->reptile.requires_declaration = info->legal.requires_declaration;
+  slot->reptile.requires_marking = info->legal.requires_marking;
+  slot->reptile.dangerous = info->legal.dangerous;
+  slot->reptile.max_without_permit = info->legal.max_without_permit;
+  slot->reptile.max_total = info->legal.max_total;
   slot->reptile.growth = 0.0f;
   slot->reptile.health = info->needs.max_health;
   slot->reptile.max_health = info->needs.max_health;

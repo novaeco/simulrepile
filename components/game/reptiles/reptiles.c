@@ -66,6 +66,11 @@ bool reptiles_load(void) {
         cJSON *requires_authorisation = cJSON_GetObjectItem(legal, "requires_authorisation");
         cJSON *requires_cdc = cJSON_GetObjectItem(legal, "requires_cdc");
         cJSON *requires_certificat = cJSON_GetObjectItem(legal, "requires_certificat");
+        cJSON *requires_declaration = cJSON_GetObjectItem(legal, "requires_declaration");
+        cJSON *requires_marking = cJSON_GetObjectItem(legal, "requires_marking");
+        cJSON *dangerous = cJSON_GetObjectItem(legal, "dangerous");
+        cJSON *max_without_permit = cJSON_GetObjectItem(legal, "max_without_permit");
+        cJSON *max_total = cJSON_GetObjectItem(legal, "max_total");
         cJSON *fr_allowed = cJSON_GetObjectItem(legal, "fr_allowed");
         cJSON *eu_allowed = cJSON_GetObjectItem(legal, "eu_allowed");
         cJSON *intl_allowed = cJSON_GetObjectItem(legal, "intl_allowed");
@@ -75,7 +80,9 @@ bool reptiles_load(void) {
             !cJSON_IsNumber(growth_rate) || !cJSON_IsNumber(health_max) ||
             !cJSON_IsString(cites) || !cJSON_IsBool(requires_authorisation) ||
             !cJSON_IsBool(requires_cdc) || !cJSON_IsBool(requires_certificat) ||
-            !cJSON_IsBool(fr_allowed) || !cJSON_IsBool(eu_allowed) ||
+            !cJSON_IsBool(requires_declaration) || !cJSON_IsBool(requires_marking) ||
+            !cJSON_IsBool(dangerous) || !cJSON_IsNumber(max_without_permit) ||
+            !cJSON_IsNumber(max_total) || !cJSON_IsBool(fr_allowed) || !cJSON_IsBool(eu_allowed) ||
             !cJSON_IsBool(intl_allowed)) {
             ESP_LOGW(TAG, "Incomplete data for reptile index %d", (int)i);
             continue;
@@ -107,6 +114,25 @@ bool reptiles_load(void) {
         reptiles[i].legal.requires_authorisation = cJSON_IsTrue(requires_authorisation);
         reptiles[i].legal.requires_cdc = cJSON_IsTrue(requires_cdc);
         reptiles[i].legal.requires_certificat = cJSON_IsTrue(requires_certificat);
+        reptiles[i].legal.requires_declaration = cJSON_IsTrue(requires_declaration);
+        reptiles[i].legal.requires_marking = cJSON_IsTrue(requires_marking);
+        reptiles[i].legal.dangerous = cJSON_IsTrue(dangerous);
+        double max_without_value = max_without_permit->valuedouble;
+        if (max_without_value < 0.0) {
+            max_without_value = 0.0;
+        }
+        if (max_without_value > UINT16_MAX) {
+            max_without_value = UINT16_MAX;
+        }
+        reptiles[i].legal.max_without_permit = (uint16_t)(max_without_value + 0.5);
+        double max_total_value = max_total->valuedouble;
+        if (max_total_value < 0.0) {
+            max_total_value = 0.0;
+        }
+        if (max_total_value > UINT16_MAX) {
+            max_total_value = UINT16_MAX;
+        }
+        reptiles[i].legal.max_total = (uint16_t)(max_total_value + 0.5);
         reptiles[i].legal.allowed_fr = cJSON_IsTrue(fr_allowed);
         reptiles[i].legal.allowed_eu = cJSON_IsTrue(eu_allowed);
         reptiles[i].legal.allowed_international = cJSON_IsTrue(intl_allowed);
@@ -175,20 +201,55 @@ bool reptiles_check_compliance(const reptile_legal_t *legal,
                      (ctx->region == REPTILE_REGION_EU && legal->allowed_eu) ||
                      (ctx->region == REPTILE_REGION_INTL && legal->allowed_international);
     if (!region_ok) {
+        ESP_LOGW(TAG, "Region not authorised for species");
         return false;
     }
 
     if (legal->cites > ctx->cites_permit) {
+        ESP_LOGW(TAG, "Insufficient CITES permit (need %d have %d)",
+                 (int)legal->cites, (int)ctx->cites_permit);
         return false;
     }
     if (legal->requires_authorisation && !ctx->has_authorisation) {
+        ESP_LOGW(TAG, "Missing prefectoral authorisation");
         return false;
     }
     if (legal->requires_cdc && !ctx->has_cdc) {
+        ESP_LOGW(TAG, "Missing certificat de capacit\xC3\xA9");
         return false;
     }
     if (legal->requires_certificat && !ctx->has_certificat) {
+        ESP_LOGW(TAG, "Missing additional certificate");
         return false;
+    }
+    if (legal->requires_declaration && !ctx->has_declaration) {
+        ESP_LOGW(TAG, "Missing mandatory declaration");
+        return false;
+    }
+    if (legal->requires_marking && !ctx->has_marking_system) {
+        ESP_LOGW(TAG, "Missing identification/marking capability");
+        return false;
+    }
+    if (legal->dangerous && !ctx->has_dangerous_permit) {
+        ESP_LOGW(TAG, "Dangerous species permit required");
+        return false;
+    }
+
+    uint16_t declared = ctx->declared_specimens;
+    if (declared > 0U) {
+        if (!ctx->has_cdc && legal->max_without_permit > 0U &&
+            declared > legal->max_without_permit) {
+            ESP_LOGW(TAG,
+                     "Declared specimens %u exceed limit %u without CDC/APD",
+                     (unsigned)declared, (unsigned)legal->max_without_permit);
+            return false;
+        }
+        if (legal->max_total > 0U && declared > legal->max_total) {
+            ESP_LOGW(TAG,
+                     "Declared specimens %u exceed regulatory cap %u",
+                     (unsigned)declared, (unsigned)legal->max_total);
+            return false;
+        }
     }
     return true;
 }
