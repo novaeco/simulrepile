@@ -2,4 +2,8 @@ set(ESP_IDF_COMPAT_HEADER "${CMAKE_CURRENT_LIST_DIR}/tools/esp_idf_compat/gpio_h
 if(EXISTS "${ESP_IDF_COMPAT_HEADER}")
     cmake_path(CONVERT "${ESP_IDF_COMPAT_HEADER}" TO_CMAKE_PATH_LIST ESP_IDF_COMPAT_HEADER_CMAKE_STYLE)
     add_compile_options(-include "${ESP_IDF_COMPAT_HEADER_CMAKE_STYLE}")
+    if(COMMAND idf_build_set_property)
+        idf_build_set_property(COMPILE_OPTIONS "-include" APPEND)
+        idf_build_set_property(COMPILE_OPTIONS "${ESP_IDF_COMPAT_HEADER_CMAKE_STYLE}" APPEND)
+    endif()
 endif()
