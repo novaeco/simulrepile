@@ -3,7 +3,7 @@
 #include "touch_gt911.h"
 #include "storage.h"
 #include "game.h"
-#include "real_terrarium.h"
+#include "real_mode.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -35,8 +35,8 @@ static void sim_btn_event_handler(lv_event_t *e)
 static void real_btn_event_handler(lv_event_t *e)
 {
     (void)e;
-    real_terrarium_init();
-    real_terrarium_show_main_screen();
+    real_mode_init();
+    xTaskCreate(real_mode_loop, "real_mode", 4096, NULL, 1, NULL);
 }
 
 void show_mode_selector(void)
