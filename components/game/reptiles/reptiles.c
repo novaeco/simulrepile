@@ -48,16 +48,22 @@ bool reptiles_load(void) {
     for (size_t i = 0; i < reptile_count; ++i) {
         cJSON *item = cJSON_GetArrayItem(root, i);
         cJSON *species = cJSON_GetObjectItem(item, "species");
-        cJSON *temperature = cJSON_GetObjectItem(item, "temperature");
-        cJSON *humidity = cJSON_GetObjectItem(item, "humidity");
-        cJSON *uv_index = cJSON_GetObjectItem(item, "uv_index");
-        cJSON *terrarium_min_size = cJSON_GetObjectItem(item, "terrarium_min_size");
-        cJSON *requires_authorisation = cJSON_GetObjectItem(item, "requires_authorisation");
-        cJSON *requires_certificat = cJSON_GetObjectItem(item, "requires_certificat");
+        cJSON *needs = cJSON_GetObjectItem(item, "needs");
+        cJSON *legal = cJSON_GetObjectItem(item, "legal");
+        if (!cJSON_IsString(species) || !cJSON_IsObject(needs) || !cJSON_IsObject(legal)) {
+            ESP_LOGW(TAG, "Incomplete data for reptile index %d", (int)i);
+            continue;
+        }
 
-        if (!cJSON_IsString(species) || !cJSON_IsNumber(temperature) ||
-            !cJSON_IsNumber(humidity) || !cJSON_IsNumber(uv_index) ||
-            !cJSON_IsNumber(terrarium_min_size) ||
+        cJSON *temperature = cJSON_GetObjectItem(needs, "temperature");
+        cJSON *humidity = cJSON_GetObjectItem(needs, "humidity");
+        cJSON *uv_index = cJSON_GetObjectItem(needs, "uv_index");
+        cJSON *terrarium_min_size = cJSON_GetObjectItem(needs, "terrarium_min_size");
+        cJSON *requires_authorisation = cJSON_GetObjectItem(legal, "requires_authorisation");
+        cJSON *requires_certificat = cJSON_GetObjectItem(legal, "requires_certificat");
+
+        if (!cJSON_IsNumber(temperature) || !cJSON_IsNumber(humidity) ||
+            !cJSON_IsNumber(uv_index) || !cJSON_IsNumber(terrarium_min_size) ||
             !cJSON_IsBool(requires_authorisation) ||
             !cJSON_IsBool(requires_certificat)) {
             ESP_LOGW(TAG, "Incomplete data for reptile index %d", (int)i);
@@ -72,12 +78,12 @@ bool reptiles_load(void) {
         strcpy(sp, species->valuestring);
 
         reptiles[i].species = sp;
-        reptiles[i].temperature = (float)temperature->valuedouble;
-        reptiles[i].humidity = (float)humidity->valuedouble;
-        reptiles[i].uv_index = (float)uv_index->valuedouble;
-        reptiles[i].terrarium_min_size = (float)terrarium_min_size->valuedouble;
-        reptiles[i].requires_authorisation = cJSON_IsTrue(requires_authorisation);
-        reptiles[i].requires_certificat = cJSON_IsTrue(requires_certificat);
+        reptiles[i].needs.temperature = (float)temperature->valuedouble;
+        reptiles[i].needs.humidity = (float)humidity->valuedouble;
+        reptiles[i].needs.uv_index = (float)uv_index->valuedouble;
+        reptiles[i].needs.terrarium_min_size = (float)terrarium_min_size->valuedouble;
+        reptiles[i].legal.requires_authorisation = cJSON_IsTrue(requires_authorisation);
+        reptiles[i].legal.requires_certificat = cJSON_IsTrue(requires_certificat);
     }
 
     cJSON_Delete(root);
@@ -104,16 +110,46 @@ const reptile_info_t *reptiles_find(const char *species) {
     return NULL;
 }
 
+bool reptiles_add(const reptile_info_t *info) {
+    if (!info || !reptiles_validate(info)) {
+        return false;
+    }
+
+    reptile_info_t *new_array = heap_caps_realloc(reptiles, (reptile_count + 1) * sizeof(reptile_info_t),
+                                                  MALLOC_CAP_SPIRAM);
+    if (!new_array) {
+        ESP_LOGE(TAG, "PSRAM reallocation failed");
+        return false;
+    }
+    reptiles = new_array;
+
+    reptile_info_t *dest = &reptiles[reptile_count];
+    memset(dest, 0, sizeof(*dest));
+
+    char *sp = heap_caps_malloc(strlen(info->species) + 1, MALLOC_CAP_SPIRAM);
+    if (!sp) {
+        ESP_LOGE(TAG, "PSRAM allocation failed for species");
+        return false;
+    }
+    strcpy(sp, info->species);
+
+    dest->species = sp;
+    dest->needs = info->needs;
+    dest->legal = info->legal;
+    reptile_count++;
+    return true;
+}
+
 bool reptiles_validate(const reptile_info_t *info) {
     if (!info) {
         return false;
     }
-    bool bio_ok = info->temperature > 0 && info->humidity > 0 &&
-                  info->uv_index >= 0 && info->terrarium_min_size > 0;
+    bool bio_ok = info->needs.temperature > 0 && info->needs.humidity > 0 &&
+                  info->needs.uv_index >= 0 && info->needs.terrarium_min_size > 0;
     if (!bio_ok) {
         return false;
     }
-    if (info->requires_authorisation || info->requires_certificat) {
+    if (info->legal.requires_authorisation || info->legal.requires_certificat) {
         ESP_LOGW(TAG, "Legal requirements not satisfied for %s", info->species);
         return false;
     }
