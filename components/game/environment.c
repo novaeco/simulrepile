@@ -7,12 +7,13 @@
 #define TAG "environment"
 
 #define ENV_UPDATE_PERIOD_US (1000 * 1000)
-#define MAX_TERRARIUMS 8
+#define MAX_TERRARIUMS 25
 
 typedef struct {
     env_profile_t profile;              /**< Day/night profile */
     environment_update_cb_t callback;   /**< Update callback  */
     float phase_offset;                 /**< Local time offset in hours */
+    void *user_data;                    /**< Opaque pointer passed back */
 } terrarium_env_t;
 
 static terrarium_env_t terrariums[MAX_TERRARIUMS];
@@ -35,16 +36,39 @@ float environment_get_time_scale(void)
 
 bool environment_register_terrarium(const env_profile_t *profile,
                                     environment_update_cb_t cb,
+                                    void *user_data,
                                     float phase_offset)
 {
-    if (!profile || !cb || terrarium_count >= MAX_TERRARIUMS) {
+    if (!profile || terrarium_count >= MAX_TERRARIUMS) {
         return false;
     }
     terrariums[terrarium_count].profile = *profile;
     terrariums[terrarium_count].callback = cb;
     terrariums[terrarium_count].phase_offset = phase_offset;
+    terrariums[terrarium_count].user_data = user_data;
     terrarium_count++;
     return true;
+}
+
+bool environment_update_terrarium(void *user_data,
+                                  const env_profile_t *profile,
+                                  float phase_offset)
+{
+    for (size_t i = 0; i < terrarium_count; ++i) {
+        if (terrariums[i].user_data == user_data) {
+            if (profile) {
+                terrariums[i].profile = *profile;
+            }
+            terrariums[i].phase_offset = phase_offset;
+            return true;
+        }
+    }
+    return false;
+}
+
+void environment_reset(void)
+{
+    terrarium_count = 0;
 }
 
 /* Compute environment and synchronise with each registered terrarium */
@@ -62,7 +86,9 @@ static void environment_tick(void *arg)
         float temp = p->night_temp + (p->day_temp - p->night_temp) * ratio;
         float humidity = p->night_humidity + (p->day_humidity - p->night_humidity) * ratio;
         float uv = p->day_uv * ratio; /* UV drops to 0 at night */
-        terrariums[i].callback(temp, humidity, uv);
+        if (terrariums[i].callback) {
+            terrariums[i].callback(terrariums[i].user_data, temp, humidity, uv);
+        }
     }
 }
 

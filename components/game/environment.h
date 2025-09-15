@@ -16,7 +16,8 @@ typedef struct {
 } env_profile_t;
 
 /** Callback invoked when an environment update occurs. */
-typedef void (*environment_update_cb_t)(float temperature,
+typedef void (*environment_update_cb_t)(void *user_data,
+                                        float temperature,
                                         float humidity,
                                         float uv_index);
 
@@ -30,7 +31,14 @@ typedef void (*environment_update_cb_t)(float temperature,
  */
 bool environment_register_terrarium(const env_profile_t *profile,
                                     environment_update_cb_t cb,
+                                    void *user_data,
                                     float phase_offset_hours);
+
+bool environment_update_terrarium(void *user_data,
+                                  const env_profile_t *profile,
+                                  float phase_offset_hours);
+
+void environment_reset(void);
 
 /**
  * @brief Configure the accelerated time scale.

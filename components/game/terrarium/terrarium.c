@@ -67,11 +67,19 @@ void terrarium_set_mist(bool on)
 
 void terrarium_update_environment(float temperature, float humidity, float uv_index)
 {
-    if (current_reptile) {
-        temperature = current_reptile->needs.temperature;
-        humidity = current_reptile->needs.humidity;
-        uv_index = current_reptile->needs.uv_index;
+    if (temperature < 0.0f) {
+        temperature = 0.0f;
     }
+    if (humidity < 0.0f) {
+        humidity = 0.0f;
+    }
+    if (humidity > 100.0f) {
+        humidity = 100.0f;
+    }
+    if (uv_index < 0.0f) {
+        uv_index = 0.0f;
+    }
+
     state.temperature = temperature;
     state.humidity = humidity;
     state.uv_index = uv_index;
