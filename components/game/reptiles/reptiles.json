@@ -1,20 +1,28 @@
 [
   {
     "species": "Pogona vitticeps",
-    "temperature": 40.0,
-    "humidity": 30.0,
-    "uv_index": 5.0,
-    "terrarium_min_size": 1.0,
-    "requires_authorisation": false,
-    "requires_certificat": true
+    "needs": {
+      "temperature": 40.0,
+      "humidity": 30.0,
+      "uv_index": 5.0,
+      "terrarium_min_size": 1.0
+    },
+    "legal": {
+      "requires_authorisation": false,
+      "requires_certificat": true
+    }
   },
   {
     "species": "Python regius",
-    "temperature": 32.0,
-    "humidity": 60.0,
-    "uv_index": 3.0,
-    "terrarium_min_size": 0.5,
-    "requires_authorisation": true,
-    "requires_certificat": true
+    "needs": {
+      "temperature": 32.0,
+      "humidity": 60.0,
+      "uv_index": 3.0,
+      "terrarium_min_size": 0.5
+    },
+    "legal": {
+      "requires_authorisation": true,
+      "requires_certificat": true
+    }
   }
 ]
