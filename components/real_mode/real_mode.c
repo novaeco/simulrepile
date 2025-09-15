@@ -80,6 +80,9 @@ void real_mode_loop(void *arg)
     while (1) {
         for (size_t i = 0; i < g_terrarium_count; ++i) {
             esp_err_t sret = sensors_read(&g_terrariums[i], &data);
+            if (sret == ESP_OK) {
+                actuators_watchdog_feed(&g_terrariums[i]);
+            }
             if (!g_real_mode_state[i].manual_mode && sret == ESP_OK) {
                 actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
                 dashboard_update(&data);
