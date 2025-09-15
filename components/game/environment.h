@@ -23,12 +23,21 @@ typedef void (*environment_update_cb_t)(float temperature,
 /**
  * @brief Register a terrarium to receive periodic environment updates.
  *
- * @param profile Day/night profile for the terrarium.
- * @param cb      Callback invoked on each update.
+ * @param profile           Day/night profile for the terrarium.
+ * @param cb                Callback invoked on each update.
+ * @param phase_offset_hours Offset in simulated hours for the terrarium's cycle.
  * @return true on success, false if registration capacity is exceeded.
  */
 bool environment_register_terrarium(const env_profile_t *profile,
-                                    environment_update_cb_t cb);
+                                    environment_update_cb_t cb,
+                                    float phase_offset_hours);
+
+/**
+ * @brief Configure the accelerated time scale.
+ *
+ * @param hours_per_second Simulated hours that elapse for each real second.
+ */
+void environment_set_time_scale(float hours_per_second);
 
 /**
  * @brief Start accelerated day/night environment simulation.
