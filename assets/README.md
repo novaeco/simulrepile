@@ -4,4 +4,4 @@ Asset repository.
 - icons/: UI icons
 - sprites/: game sprites
 
-Run `./generate_assets.sh` to convert all PNG files to LVGL-optimized `.bin` files using `lv_img_conv`.
+Run `./generate_assets.sh` to convert all PNG files to LVGL-compatible little-endian RGB565 `.bin` files using the built-in Python converter.

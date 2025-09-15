@@ -17,17 +17,31 @@ foreach(png ${ASSET_PNG})
     list(APPEND ASSET_BIN_REL ${rel})
 endforeach()
 
-add_custom_command(OUTPUT ${ASSET_BIN}
-    COMMAND ${GEN_SCRIPT}
-    DEPENDS ${ASSET_PNG}
-    WORKING_DIRECTORY ${ASSET_ROOT}
-    COMMENT "Generating LVGL assets")
-
-add_custom_target(gen_assets DEPENDS ${ASSET_BIN})
+set(EMBED_ARGS)
+if(ASSET_BIN_REL)
+    set(EMBED_ARGS EMBED_FILES ${ASSET_BIN_REL})
+endif()
 
 idf_component_register(SRCS "assets.c"
                       INCLUDE_DIRS "."
                       REQUIRES storage
-                      EMBED_FILES ${ASSET_BIN_REL})
+                      ${EMBED_ARGS})
 
-add_dependencies(${COMPONENT_LIB} gen_assets)
+if(ASSET_PNG AND NOT CMAKE_SCRIPT_MODE_FILE)
+    if(EXISTS ${GEN_SCRIPT})
+        execute_process(COMMAND ${CMAKE_COMMAND} -E chmod +x ${GEN_SCRIPT})
+    else()
+        message(FATAL_ERROR "Asset generation script not found: ${GEN_SCRIPT}")
+    endif()
+
+    add_custom_command(OUTPUT ${ASSET_BIN}
+        COMMAND ${GEN_SCRIPT}
+        DEPENDS ${ASSET_PNG} ${GEN_SCRIPT}
+        WORKING_DIRECTORY ${ASSET_ROOT}
+        BYPRODUCTS ${ASSET_BIN}
+        VERBATIM
+        COMMENT "Generating LVGL assets")
+
+    add_custom_target(gen_assets DEPENDS ${ASSET_BIN})
+    add_dependencies(${COMPONENT_LIB} gen_assets)
+endif()
