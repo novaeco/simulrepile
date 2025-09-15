@@ -28,6 +28,11 @@ void environment_set_time_scale(float hours_per_second)
     }
 }
 
+float environment_get_time_scale(void)
+{
+    return hours_per_sec;
+}
+
 bool environment_register_terrarium(const env_profile_t *profile,
                                     environment_update_cb_t cb,
                                     float phase_offset)
@@ -71,10 +76,6 @@ void environment_init(void)
     };
     ESP_ERROR_CHECK(esp_timer_create(&args, &env_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(env_timer, ENV_UPDATE_PERIOD_US));
-
-    /* Register default terrarium profile */
-    env_profile_t default_profile = {30.0f, 25.0f, 60.0f, 80.0f, 5.0f};
-    environment_register_terrarium(&default_profile, terrarium_update_environment, 0.0f);
 
     ESP_LOGI(TAG, "Accelerated day/night cycle started");
 }

@@ -38,6 +38,7 @@ bool environment_register_terrarium(const env_profile_t *profile,
  * @param hours_per_second Simulated hours that elapse for each real second.
  */
 void environment_set_time_scale(float hours_per_second);
+float environment_get_time_scale(void);
 
 /**
  * @brief Start accelerated day/night environment simulation.
