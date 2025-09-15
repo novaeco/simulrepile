@@ -4,6 +4,7 @@
 #include "dashboard.h"
 #include "logging.h"
 #include "esp_log.h"
+#include <string.h>
 
 static const char *TAG = "real_mode";
 
@@ -65,11 +66,22 @@ terrarium_device_status_t g_device_status[sizeof(g_terrariums)/sizeof(g_terrariu
 void real_mode_init(void)
 {
     ESP_LOGI(TAG, "Initialisation du mode réel (%d modules)", (int)g_terrarium_count);
+    memset(g_real_mode_state, 0, sizeof(g_real_mode_state));
+    memset(g_device_status, 0, sizeof(g_device_status));
     for (size_t i = 0; i < g_terrarium_count; ++i) {
-        sensors_init(&g_terrariums[i]);
-        actuators_init(&g_terrariums[i]);
+        esp_err_t sret = sensors_init(&g_terrariums[i]);
+        if (sret != ESP_OK) {
+            ESP_LOGE(TAG, "Echec init capteurs terrarium %d: %s", (int)i, esp_err_to_name(sret));
+        }
+        esp_err_t aret = actuators_init(&g_terrariums[i]);
+        if (aret != ESP_OK) {
+            ESP_LOGE(TAG, "Echec init actionneurs terrarium %d: %s", (int)i, esp_err_to_name(aret));
+        }
     }
-    logging_init();
+    esp_err_t lret = logging_init();
+    if (lret != ESP_OK) {
+        ESP_LOGE(TAG, "Journalisation indisponible: %s", esp_err_to_name(lret));
+    }
     dashboard_init();
 }
 
@@ -93,16 +105,23 @@ void real_mode_loop(void *arg)
             if (sret == ESP_OK) {
                 actuators_watchdog_feed(&g_terrariums[i]);
             }
+            esp_err_t aret;
             if (g_real_mode_state[i].manual_mode) {
-                actuators_apply(&g_terrariums[i], NULL, &g_real_mode_state[i]);
+                aret = actuators_apply(&g_terrariums[i], NULL, &g_real_mode_state[i]);
             } else {
-                actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
+                aret = actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
+            }
+            if (aret != ESP_OK) {
+                ESP_LOGW(TAG, "Commande actionneurs terrarium %d: %s", (int)i, esp_err_to_name(aret));
             }
 
             dashboard_update(&data);
 
             if (sret == ESP_OK) {
-                logging_write(i, &g_terrariums[i], &data);
+                esp_err_t lret = logging_write(i, &g_terrariums[i], &data);
+                if (lret != ESP_OK) {
+                    ESP_LOGW(TAG, "Echec écriture log terrarium %d: %s", (int)i, esp_err_to_name(lret));
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

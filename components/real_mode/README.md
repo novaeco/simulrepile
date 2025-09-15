@@ -14,6 +14,11 @@
 - Coupure d'urgence : tous les actionneurs sont arrêtés dès que la température interne dépasse 40 °C, limitant les risques d'incendie (NF C15-100, NF EN 60335).
 - Watchdog de communication capteurs (timer ESP-IDF) : si aucune donnée valide n'est reçue pendant 10 s, toutes les sorties sont désactivées afin de satisfaire aux principes de sûreté de fonctionnement de la NF EN 61508.
 
+## Journalisation microSD
+- Chaque mesure valide (température, hygrométrie, luminosité, CO₂) est sauvegardée dans `/sdcard/logs/<terrarium>.csv` ou `.json`.
+- L'état des actionneurs est exporté sous forme de masque binaire (`0x00XXXXXX`) permettant de tracer les ordres électriques pour répondre aux exigences de traçabilité (NF EN 50110-1).
+- La consommation énergétique est recalculée à chaque échantillon en tenant compte du temps depuis la mesure précédente, fournissant un cumul Wh conforme aux recommandations d'efficacité énergétique de la directive 2012/27/UE.
+
 ## Détection dynamique & repli
 - Au lancement du mode réel, `real_mode_detect_devices()` interroge chaque périphérique (SHT31, BH1750, MH-Z19B, sorties GPIO) via un handshake I²C/UART/GPIO. Les équipements répondant à la requête sont marqués `is_connected=true` dans `g_device_status`, les autres sont forcés à `false`.
 - Le dashboard n'affiche les mesures que pour les capteurs détectés. Les éléments absents sont signalés par le texte « Non connecté » en grisé et les actionneurs correspondants sont désactivés (switch LVGL barré).
