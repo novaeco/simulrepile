@@ -41,6 +41,7 @@ esp_err_t sensors_read(const terrarium_hw_t *hw, sensor_data_t *out_data)
     if (!out_data) {
         return ESP_ERR_INVALID_ARG;
     }
+    out_data->power_w = 0.0f;
 
     esp_err_t ret;
 

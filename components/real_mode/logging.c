@@ -1,42 +1,83 @@
-#include "logging.h"
-#include "esp_log.h"
-#include <stdio.h>
-#include <sys/stat.h>
-#include <time.h>
+/* Logging of sensor data to storage */
 
-#define LOG_DIR "/sdcard/logs"
+#include "logging.h"
+#include "storage/logs.h"
+#include "storage.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include <time.h>
+#include <stdio.h>
+
+/* Nominal power ratings for each actuator (watts) */
+#define HEATER_POWER_W       50.0f
+#define UV_POWER_W           10.0f
+#define NEON_POWER_W         15.0f
+#define PUMP_POWER_W          8.0f
+#define FAN_POWER_W           5.0f
+#define HUMIDIFIER_POWER_W   12.0f
+
+#define MAX_TERRARIUMS 8
 
 static const char *TAG = "logging";
+static time_t s_last_ts[MAX_TERRARIUMS];
 
 esp_err_t logging_init(void)
 {
-    struct stat st = {0};
-    if (stat(LOG_DIR, &st) == -1) {
-        int res = mkdir(LOG_DIR, 0775);
-        if (res != 0) {
-            ESP_LOGE(TAG, "mkdir %s failed", LOG_DIR);
-            return ESP_FAIL;
-        }
+    if (!storage_init()) {
+        ESP_LOGE(TAG, "storage_init failed");
+        return ESP_FAIL;
+    }
+    for (size_t i = 0; i < MAX_TERRARIUMS; ++i) {
+        s_last_ts[i] = 0;
     }
     return ESP_OK;
 }
 
-esp_err_t logging_write(const sensor_data_t *data)
+static float compute_consumption_wh(const terrarium_hw_t *hw,
+                                    size_t idx,
+                                    time_t now)
 {
-    if (!data) {
+    float power_w = 0.0f;
+    if (gpio_get_level(hw->heater_gpio))      power_w += HEATER_POWER_W;
+    if (gpio_get_level(hw->uv_gpio))          power_w += UV_POWER_W;
+    if (gpio_get_level(hw->neon_gpio))        power_w += NEON_POWER_W;
+    if (gpio_get_level(hw->pump_gpio))        power_w += PUMP_POWER_W;
+    if (gpio_get_level(hw->fan_gpio))         power_w += FAN_POWER_W;
+    if (gpio_get_level(hw->humidifier_gpio))  power_w += HUMIDIFIER_POWER_W;
+
+    time_t prev = s_last_ts[idx];
+    s_last_ts[idx] = now;
+    if (prev == 0 || now <= prev) {
+        return 0.0f;
+    }
+    float dt_h = (float)(now - prev) / 3600.0f;
+    return power_w * dt_h;
+}
+
+esp_err_t logging_write(size_t terrarium_idx,
+                        const terrarium_hw_t *hw,
+                        sensor_data_t *data)
+{
+    if (!hw || !data || terrarium_idx >= MAX_TERRARIUMS) {
         return ESP_ERR_INVALID_ARG;
     }
+
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    char filepath[64];
-    strftime(filepath, sizeof(filepath), LOG_DIR "/%Y%m%d.log", tm_info);
-    FILE *f = fopen(filepath, "a");
-    if (!f) {
-        ESP_LOGE(TAG, "fopen failed");
+    data->power_w = compute_consumption_wh(hw, terrarium_idx, now);
+
+    storage_log_entry_t entry = {
+        .timestamp = now,
+        .temperature = data->temperature_c,
+        .humidity = data->humidity_pct,
+        .uv_index = data->luminosity_lux,
+        .power = data->power_w,
+    };
+
+    char terrarium[32];
+    snprintf(terrarium, sizeof(terrarium), "terrarium_%zu", terrarium_idx);
+    if (!storage_append_log(terrarium, &entry, STORAGE_LOG_CSV)) {
+        ESP_LOGE(TAG, "append log failed");
         return ESP_FAIL;
     }
-    fprintf(f, "%ld,%.2f,%.2f,%.2f,%.2f\n", now, data->temperature_c,
-            data->humidity_pct, data->luminosity_lux, data->co2_ppm);
-    fclose(f);
     return ESP_OK;
 }
