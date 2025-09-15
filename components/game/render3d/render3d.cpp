@@ -19,7 +19,11 @@ static void init_sprite(LGFX_Sprite &spr, int w, int h, uint16_t color)
 void render_terrarium(Terrarium *t, Camera *cam)
 {
     (void)t;
-    (void)cam;
+
+    /* Use camera position if provided. Negative translation mimics viewpoint
+     * shifting in this very simple scene. */
+    int16_t cam_x = cam ? -cam->x : 0;
+    int16_t cam_y = cam ? -cam->y : 0;
 
     if (!terrarium_sprite.created()) {
         init_sprite(terrarium_sprite, 160, 120, TFT_BROWN);
@@ -28,9 +32,9 @@ void render_terrarium(Terrarium *t, Camera *cam)
     }
 
     lcd.startWrite();
-    terrarium_sprite.pushSprite(0, 0);
-    decor_sprite.pushSprite(20, 60);
-    reptile_sprite.pushSprite(80, 80);
+    terrarium_sprite.pushSprite(cam_x, cam_y);
+    decor_sprite.pushSprite(cam_x + 20, cam_y + 60);
+    reptile_sprite.pushSprite(cam_x + 80, cam_y + 80);
     lcd.endWrite();
 }
 
