@@ -60,6 +60,7 @@ terrarium_hw_t g_terrariums[] = {
 };
 const size_t g_terrarium_count = sizeof(g_terrariums)/sizeof(g_terrariums[0]);
 real_mode_state_t g_real_mode_state[sizeof(g_terrariums)/sizeof(g_terrariums[0])] = {0};
+terrarium_device_status_t g_device_status[sizeof(g_terrariums)/sizeof(g_terrariums[0])] = {0};
 
 void real_mode_init(void)
 {
@@ -70,7 +71,16 @@ void real_mode_init(void)
     }
     logging_init();
     dashboard_init();
-    dashboard_show();
+}
+
+void real_mode_detect_devices(void)
+{
+    ESP_LOGI(TAG, "Détection des périphériques réels");
+    for (size_t i = 0; i < g_terrarium_count; ++i) {
+        g_device_status[i].sensors = sensors_detect(&g_terrariums[i]);
+        g_device_status[i].actuators = actuators_detect(&g_terrariums[i]);
+        dashboard_set_device_status(i, &g_device_status[i]);
+    }
 }
 
 void real_mode_loop(void *arg)
@@ -83,16 +93,16 @@ void real_mode_loop(void *arg)
             if (sret == ESP_OK) {
                 actuators_watchdog_feed(&g_terrariums[i]);
             }
-            if (!g_real_mode_state[i].manual_mode && sret == ESP_OK) {
-                actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
-                dashboard_update(&data);
-                logging_write(i, &g_terrariums[i], &data);
-            } else if (g_real_mode_state[i].manual_mode) {
+            if (g_real_mode_state[i].manual_mode) {
                 actuators_apply(&g_terrariums[i], NULL, &g_real_mode_state[i]);
-                if (sret == ESP_OK) {
-                    dashboard_update(&data);
-                    logging_write(i, &g_terrariums[i], &data);
-                }
+            } else {
+                actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
+            }
+
+            dashboard_update(&data);
+
+            if (sret == ESP_OK) {
+                logging_write(i, &g_terrariums[i], &data);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));

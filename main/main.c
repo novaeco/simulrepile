@@ -4,6 +4,7 @@
 #include "storage.h"
 #include "game.h"
 #include "real_mode.h"
+#include "dashboard.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,6 +37,8 @@ static void real_btn_event_handler(lv_event_t *e)
 {
     (void)e;
     real_mode_init();
+    real_mode_detect_devices();
+    dashboard_show();
     xTaskCreate(real_mode_loop, "real_mode", 4096, NULL, 1, NULL);
 }
 
