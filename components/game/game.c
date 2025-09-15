@@ -55,11 +55,44 @@ static game_state_t game_state; /* In-RAM game state snapshot */
 #define SAVE_PATH "/sdcard/simulrepile.sav"
 
 static bool save_game(void) {
+  if (game_state.terrarium_count > 0) {
+    const terrarium_t *t = terrarium_get_state();
+    terrarium_slot_t *slot = &game_state.terrariums[0];
+    slot->terrarium.item_count = t->item_count;
+    for (size_t i = 0; i < t->item_count && i < MAX_TERRARIUM_ITEMS; ++i) {
+      strncpy(slot->terrarium.items[i], t->items[i], ITEM_NAME_LEN - 1);
+      slot->terrarium.items[i][ITEM_NAME_LEN - 1] = '\0';
+    }
+    slot->terrarium.temperature = t->temperature;
+    slot->terrarium.humidity = t->humidity;
+    slot->terrarium.uv_index = t->uv_index;
+  }
   return storage_save(SAVE_PATH, &game_state, sizeof(game_state));
 }
 
 static bool load_game(void) {
-  return storage_load(SAVE_PATH, &game_state, sizeof(game_state));
+  if (!storage_load(SAVE_PATH, &game_state, sizeof(game_state))) {
+    return false;
+  }
+  if (game_state.terrarium_count == 0) {
+    return false;
+  }
+
+  terrarium_slot_t *slot = &game_state.terrariums[0];
+  const reptile_info_t *info = reptiles_find(slot->reptile.species);
+  if (!reptiles_validate(info)) {
+    return false;
+  }
+
+  terrarium_set_reptile(info);
+  terrarium_update_environment(slot->terrarium.temperature,
+                               slot->terrarium.humidity,
+                               slot->terrarium.uv_index);
+  for (size_t i = 0; i < slot->terrarium.item_count; ++i) {
+    terrarium_add_item(slot->terrarium.items[i]);
+  }
+
+  return true;
 }
 
 static void btn_new_game_event(lv_event_t *e) {
@@ -104,37 +137,12 @@ static void btn_new_game_event(lv_event_t *e) {
 
 static void btn_resume_event(lv_event_t *e) {
   ESP_LOGI(TAG, "Resume game");
-
   if (!load_game()) {
     ESP_LOGE(TAG, "No saved game");
     return;
   }
 
-  if (game_state.terrarium_count == 0) {
-    ESP_LOGE(TAG, "No terrarium data");
-    return;
-  }
-
   terrarium_slot_t *slot = &game_state.terrariums[0];
-
-  /* Restore terrarium environment */
-  const reptile_info_t *info = reptiles_find(slot->reptile.species);
-  if (!reptiles_validate(info)) {
-    ESP_LOGE(TAG, "Invalid reptile data");
-    return;
-  }
-
-  /* Rebind terrarium to the stored reptile and mirror saved environment */
-  terrarium_set_reptile(info);
-  terrarium_update_environment(slot->terrarium.temperature,
-                               slot->terrarium.humidity,
-                               slot->terrarium.uv_index);
-
-  /* Restore terrarium inventory */
-  for (size_t i = 0; i < slot->terrarium.item_count; ++i) {
-    terrarium_add_item(slot->terrarium.items[i]);
-  }
-
   ESP_LOGI(TAG, "Loaded %s T=%.1f H=%.1f UV=%.1f budget=%.2f day=%u",
            slot->reptile.species, slot->terrarium.temperature,
            slot->terrarium.humidity, slot->terrarium.uv_index,
