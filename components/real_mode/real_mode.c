@@ -83,12 +83,12 @@ void real_mode_loop(void *arg)
             if (!g_real_mode_state[i].manual_mode && sret == ESP_OK) {
                 actuators_apply(&g_terrariums[i], &data, &g_real_mode_state[i]);
                 dashboard_update(&data);
-                logging_write(&data);
+                logging_write(i, &g_terrariums[i], &data);
             } else if (g_real_mode_state[i].manual_mode) {
                 actuators_apply(&g_terrariums[i], NULL, &g_real_mode_state[i]);
                 if (sret == ESP_OK) {
                     dashboard_update(&data);
-                    logging_write(&data);
+                    logging_write(i, &g_terrariums[i], &data);
                 }
             }
         }

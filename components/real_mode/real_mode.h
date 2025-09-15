@@ -55,6 +55,7 @@ typedef struct {
     float humidity_pct;
     float luminosity_lux;
     float co2_ppm;
+    float power_w;
 } sensor_data_t;
 
 /* Etat runtime d'un terrarium */
