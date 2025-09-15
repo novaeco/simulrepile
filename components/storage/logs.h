@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 #ifdef __cplusplus
@@ -11,6 +12,8 @@ typedef struct {
     float temperature;    /**< Celsius */
     float humidity;       /**< Percent */
     float uv_index;       /**< UV index */
+    float co2;            /**< CO₂ concentration in ppm */
+    uint32_t actuator_mask; /**< Bitmask of actuators enabled */
     float power;          /**< Electrical consumption in watts */
 } storage_log_entry_t;
 

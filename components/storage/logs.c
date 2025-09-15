@@ -1,6 +1,7 @@
 #include "logs.h"
 #include "storage.h"
 #include "esp_log.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -83,21 +84,25 @@ bool storage_append_log(const char *terrarium,
     if (format == STORAGE_LOG_CSV) {
         struct stat st;
         if (stat(path, &st) == 0 && st.st_size == 0) {
-            fprintf(f, "time,temperature,humidity,uv,power\n");
+            fprintf(f, "time,temperature,humidity,uv,co2,actuators,power\n");
         }
-        fprintf(f, "%ld,%.2f,%.2f,%.2f,%.2f\n",
+        fprintf(f, "%ld,%.2f,%.2f,%.2f,%.2f,0x%08"PRIx32",%.2f\n",
                 (long)entry->timestamp,
                 entry->temperature,
                 entry->humidity,
                 entry->uv_index,
+                entry->co2,
+                entry->actuator_mask,
                 entry->power);
     } else {
         fprintf(f,
-                "{\"time\":%ld,\"temperature\":%.2f,\"humidity\":%.2f,\"uv\":%.2f,\"power\":%.2f}\n",
+                "{\"time\":%ld,\"temperature\":%.2f,\"humidity\":%.2f,\"uv\":%.2f,\"co2\":%.2f,\"actuators\":\"0x%08"PRIx32"\",\"power\":%.2f}\n",
                 (long)entry->timestamp,
                 entry->temperature,
                 entry->humidity,
                 entry->uv_index,
+                entry->co2,
+                entry->actuator_mask,
                 entry->power);
     }
     fclose(f);
