@@ -31,6 +31,8 @@ typedef struct {
   float temperature;                              /* Environment     */
   float humidity;
   float uv_index;
+  env_profile_t profile;                          /* Day/night profile */
+  float phase_offset;                             /* Local cycle offset */
 } terrarium_state_t;
 
 typedef struct {
@@ -56,6 +58,7 @@ typedef struct {
   size_t terrarium_count; /* Number of terrariums saved   */
   terrarium_slot_t terrariums[MAX_TERRARIUMS];
   economy_t economy; /* Global economy state         */
+  float env_time_scale;                          /* Simulated hours/sec */
 } game_state_t;
 
 static lv_obj_t *main_menu;
@@ -99,6 +102,7 @@ static bool save_game(void) {
       slot->terrarium.uv_index = t->uv_index;
     }
   }
+  game_state.env_time_scale = environment_get_time_scale();
   return storage_save(SAVE_PATH, &game_state, sizeof(game_state));
 }
 
@@ -110,23 +114,31 @@ static bool load_game(void) {
     return false;
   }
 
-  terrarium_slot_t *slot = &game_state.terrariums[0];
-  const reptile_info_t *info = reptiles_find(slot->reptile.species);
-  if (!reptiles_validate(info, &user_ctx)) {
-    return false;
-  }
+  environment_set_time_scale(game_state.env_time_scale);
 
-  terrarium_set_reptile(info);
-  terrarium_update_environment(slot->terrarium.temperature,
-                               slot->terrarium.humidity,
-                               slot->terrarium.uv_index);
-  terrarium_set_decor(slot->terrarium.decor);
-  terrarium_set_substrate(slot->terrarium.substrate);
-  terrarium_set_heater(slot->terrarium.heater_on);
-  terrarium_set_light(slot->terrarium.light_on);
-  terrarium_set_mist(slot->terrarium.mist_on);
-  for (size_t i = 0; i < slot->terrarium.item_count; ++i) {
-    terrarium_add_item(slot->terrarium.items[i]);
+  for (size_t i = 0; i < game_state.terrarium_count; ++i) {
+    terrarium_slot_t *slot = &game_state.terrariums[i];
+    const reptile_info_t *info = reptiles_find(slot->reptile.species);
+    if (!reptiles_validate(info, &user_ctx)) {
+      return false;
+    }
+    environment_register_terrarium(&slot->terrarium.profile,
+                                    terrarium_update_environment,
+                                    slot->terrarium.phase_offset);
+    if (i == 0) {
+      terrarium_set_reptile(info);
+      terrarium_update_environment(slot->terrarium.temperature,
+                                   slot->terrarium.humidity,
+                                   slot->terrarium.uv_index);
+      terrarium_set_decor(slot->terrarium.decor);
+      terrarium_set_substrate(slot->terrarium.substrate);
+      terrarium_set_heater(slot->terrarium.heater_on);
+      terrarium_set_light(slot->terrarium.light_on);
+      terrarium_set_mist(slot->terrarium.mist_on);
+      for (size_t j = 0; j < slot->terrarium.item_count; ++j) {
+        terrarium_add_item(slot->terrarium.items[j]);
+      }
+    }
   }
 
   return true;
@@ -164,6 +176,15 @@ static void btn_new_game_event(lv_event_t *e) {
   slot->terrarium.temperature = info->needs.temperature;
   slot->terrarium.humidity = info->needs.humidity;
   slot->terrarium.uv_index = info->needs.uv_index;
+  slot->terrarium.profile.day_temp = info->needs.temperature;
+  slot->terrarium.profile.night_temp = info->needs.temperature - 5.0f;
+  slot->terrarium.profile.day_humidity = info->needs.humidity;
+  slot->terrarium.profile.night_humidity = info->needs.humidity + 20.0f;
+  slot->terrarium.profile.day_uv = info->needs.uv_index;
+  slot->terrarium.phase_offset = 0.0f;
+  environment_register_terrarium(&slot->terrarium.profile,
+                                 terrarium_update_environment,
+                                 slot->terrarium.phase_offset);
 
   /* Initialise economic state */
   economy_init(&game_state.economy, 100.0f, 100.0f);
