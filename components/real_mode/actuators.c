@@ -2,9 +2,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 
-#define TEMP_HIGH_C 35.0f
-#define TEMP_LOW_C 20.0f
-
 static const char *TAG = "actuators";
 
 static inline esp_err_t gpio_safe_set(gpio_num_t gpio, int level)
@@ -43,14 +40,29 @@ esp_err_t actuators_apply(const terrarium_hw_t *hw, const sensor_data_t *data)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (data->temperature_c < TEMP_LOW_C) {
+    if (data->temperature_c < hw->temp_low_c) {
         gpio_safe_set(hw->heater_gpio, 1);
-    } else if (data->temperature_c > TEMP_HIGH_C) {
+    } else if (data->temperature_c > hw->temp_high_c) {
         gpio_safe_set(hw->heater_gpio, 0);
     }
 
-    /* Exemple : activer ventilation si CO2 trop élevé */
-    if (data->co2_ppm > 1500.0f) {
+    if (data->humidity_pct < hw->humidity_low_pct) {
+        gpio_safe_set(hw->pump_gpio, 1);
+        gpio_safe_set(hw->humidifier_gpio, 1);
+    } else if (data->humidity_pct > hw->humidity_high_pct) {
+        gpio_safe_set(hw->pump_gpio, 0);
+        gpio_safe_set(hw->humidifier_gpio, 0);
+    }
+
+    if (data->luminosity_lux < hw->lux_low_lx) {
+        gpio_safe_set(hw->uv_gpio, 1);
+        gpio_safe_set(hw->neon_gpio, 1);
+    } else if (data->luminosity_lux > hw->lux_high_lx) {
+        gpio_safe_set(hw->uv_gpio, 0);
+        gpio_safe_set(hw->neon_gpio, 0);
+    }
+
+    if (data->co2_ppm > hw->co2_high_ppm) {
         gpio_safe_set(hw->fan_gpio, 1);
     } else {
         gpio_safe_set(hw->fan_gpio, 0);
