@@ -17,6 +17,17 @@ foreach(png ${ASSET_PNG})
     list(APPEND ASSET_BIN_REL ${rel})
 endforeach()
 
+if(ASSET_BIN)
+    # Mark generated assets so that CMake does not require them to exist at
+    # configure time. The actual conversion is handled by the custom command
+    # below.
+    set_source_files_properties(${ASSET_BIN} PROPERTIES GENERATED TRUE)
+endif()
+
+if(ASSET_BIN_REL)
+    set_source_files_properties(${ASSET_BIN_REL} PROPERTIES GENERATED TRUE)
+endif()
+
 set(EMBED_ARGS)
 if(ASSET_BIN_REL)
     set(EMBED_ARGS EMBED_FILES ${ASSET_BIN_REL})
