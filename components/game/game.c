@@ -18,6 +18,7 @@
 
 #define MAX_TERRARIUM_ITEMS 16
 #define ITEM_NAME_LEN       32
+#define MAX_TERRARIUMS      8
 
 typedef struct {
     size_t item_count;                                  /* Number of items */
@@ -40,7 +41,12 @@ typedef struct {
 typedef struct {
     reptile_state_t reptile;    /* Stored reptile information */
     terrarium_state_t terrarium;/* Terrarium inventory and env */
-    economy_t economy;          /* Economy state               */
+} terrarium_slot_t;
+
+typedef struct {
+    size_t terrarium_count;                  /* Number of terrariums saved   */
+    terrarium_slot_t terrariums[MAX_TERRARIUMS];
+    economy_t economy;                       /* Global economy state         */
 } game_state_t;
 
 static lv_obj_t *main_menu;
@@ -63,6 +69,8 @@ static void btn_new_game_event(lv_event_t *e)
     ESP_LOGI(TAG, "Start new game");
 
     memset(&game_state, 0, sizeof(game_state));
+    game_state.terrarium_count = 1;
+    terrarium_slot_t *slot = &game_state.terrariums[0];
 
     const reptile_info_t *info = reptiles_find("Python regius");
     if (!reptiles_validate(info)) {
@@ -71,19 +79,19 @@ static void btn_new_game_event(lv_event_t *e)
     }
 
     /* Populate reptile state */
-    strncpy(game_state.reptile.species, info->species, sizeof(game_state.reptile.species) - 1);
-    game_state.reptile.temperature = info->temperature;
-    game_state.reptile.humidity = info->humidity;
-    game_state.reptile.uv_index = info->uv_index;
-    game_state.reptile.terrarium_min_size = info->terrarium_min_size;
-    game_state.reptile.requires_authorisation = info->requires_authorisation;
-    game_state.reptile.requires_certificat = info->requires_certificat;
+    strncpy(slot->reptile.species, info->species, sizeof(slot->reptile.species) - 1);
+    slot->reptile.temperature = info->temperature;
+    slot->reptile.humidity = info->humidity;
+    slot->reptile.uv_index = info->uv_index;
+    slot->reptile.terrarium_min_size = info->terrarium_min_size;
+    slot->reptile.requires_authorisation = info->requires_authorisation;
+    slot->reptile.requires_certificat = info->requires_certificat;
 
     /* Host reptile and mirror environment requirements */
     terrarium_set_reptile(info);
-    game_state.terrarium.temperature = info->temperature;
-    game_state.terrarium.humidity = info->humidity;
-    game_state.terrarium.uv_index = info->uv_index;
+    slot->terrarium.temperature = info->temperature;
+    slot->terrarium.humidity = info->humidity;
+    slot->terrarium.uv_index = info->uv_index;
 
     /* Initialise economic state */
     economy_init(&game_state.economy, 100.0f, 100.0f);
@@ -105,24 +113,31 @@ static void btn_resume_event(lv_event_t *e)
         return;
     }
 
+    if (game_state.terrarium_count == 0) {
+        ESP_LOGE(TAG, "No terrarium data");
+        return;
+    }
+
+    terrarium_slot_t *slot = &game_state.terrariums[0];
+
     /* Restore terrarium environment */
-    const reptile_info_t *info = reptiles_find(game_state.reptile.species);
+    const reptile_info_t *info = reptiles_find(slot->reptile.species);
     terrarium_set_reptile(info);
-    game_state.terrarium.temperature = info->temperature;
-    game_state.terrarium.humidity = info->humidity;
-    game_state.terrarium.uv_index = info->uv_index;
+    slot->terrarium.temperature = info->temperature;
+    slot->terrarium.humidity = info->humidity;
+    slot->terrarium.uv_index = info->uv_index;
 
     /* Restore terrarium inventory */
-    for (size_t i = 0; i < game_state.terrarium.item_count; ++i) {
-        terrarium_add_item(game_state.terrarium.items[i]);
+    for (size_t i = 0; i < slot->terrarium.item_count; ++i) {
+        terrarium_add_item(slot->terrarium.items[i]);
     }
 
     ESP_LOGI(TAG,
              "Loaded %s T=%.1f H=%.1f UV=%.1f budget=%.2f day=%u",
-             game_state.reptile.species,
-             game_state.terrarium.temperature,
-             game_state.terrarium.humidity,
-             game_state.terrarium.uv_index,
+             slot->reptile.species,
+             slot->terrarium.temperature,
+             slot->terrarium.humidity,
+             slot->terrarium.uv_index,
              game_state.economy.budget,
              game_state.economy.day);
 
