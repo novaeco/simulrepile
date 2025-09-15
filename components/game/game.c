@@ -6,6 +6,7 @@
 #include "lvgl.h"
 #include "reptiles.h"
 #include "room.h"
+#include "terrarium_ui/ui.h"
 #include "storage.h"
 #include "terrarium.h"
 #include <math.h>
@@ -282,8 +283,8 @@ static void btn_new_game_event(lv_event_t *e) {
 
   start_reptile_timer();
 
-  /* After creating a new game, open the room selection view */
-  room_show();
+  /* After creating a new game, open terrarium customisation UI */
+  terrarium_ui_show();
 }
 
 static void btn_resume_event(lv_event_t *e) {
