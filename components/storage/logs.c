@@ -4,15 +4,16 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "esp_vfs_fat.h"
 #ifdef CONFIG_STORAGE_LOG_GZIP
 #include <zlib.h>
 #endif
 
 #define TAG "storage_log"
 #define LOG_BASE_PATH "/sdcard/logs"
+#define LOG_MOUNT_POINT "/sdcard"
 #define LOG_MIN_FREE_BYTES (1024 * 1024) /* 1 MB */
 
 static bool ensure_path(void)
@@ -51,12 +52,15 @@ static void rotate_log(const char *path)
 
 static bool check_space(const char *path)
 {
-    struct statvfs vfs;
-    if (statvfs("/sdcard", &vfs) != 0) {
-        return true; /* Assume enough space */
+    size_t total_bytes = 0;
+    size_t free_bytes = 0;
+    esp_err_t err = esp_vfs_fat_info(LOG_MOUNT_POINT, &total_bytes, &free_bytes);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to query free space: %s", esp_err_to_name(err));
+        return true; /* Do not block logging if information is unavailable */
     }
-    unsigned long free_bytes = vfs.f_bavail * vfs.f_frsize;
     if (free_bytes < LOG_MIN_FREE_BYTES) {
+        ESP_LOGW(TAG, "Low free space (%zu bytes), rotating log", free_bytes);
         rotate_log(path);
     }
     return true;
