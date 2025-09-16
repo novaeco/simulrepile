@@ -30,5 +30,8 @@ LV_IMG_DECLARE(gImage_reptile_sad);
 LV_IMG_DECLARE(gImage_reptile_manger);
 LV_IMG_DECLARE(gImage_reptile_boire);
 LV_IMG_DECLARE(gImage_reptile_chauffer);
+LV_IMG_DECLARE(gImage_terrarium_ok);
+LV_IMG_DECLARE(gImage_terrarium_alert);
+LV_IMG_DECLARE(gImage_currency_card);
 
 #endif /* __IMAGE_H */

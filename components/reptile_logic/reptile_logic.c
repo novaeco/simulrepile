@@ -1,224 +1,1004 @@
 #include "reptile_logic.h"
+#include "sd.h"
+
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_random.h"
-#include "gpio.h"
-#include "sensors.h"
-#include "sd.h"
-#include <stdbool.h>
+#else
+#include <stdlib.h>
+#include <time.h>
+#ifndef ESP_LOGI
+#define ESP_LOGI(tag, fmt, ...)                                                 \
+  fprintf(stderr, "[I][%s] " fmt "\n", tag, ##__VA_ARGS__)
+#endif
+#ifndef ESP_LOGW
+#define ESP_LOGW(tag, fmt, ...)                                                 \
+  fprintf(stderr, "[W][%s] " fmt "\n", tag, ##__VA_ARGS__)
+#endif
+#ifndef ESP_LOGE
+#define ESP_LOGE(tag, fmt, ...)                                                 \
+  fprintf(stderr, "[E][%s] " fmt "\n", tag, ##__VA_ARGS__)
+#endif
+#endif
+
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
-#include <errno.h>
+
+#define FACILITY_MAGIC 0x52544643u /* 'RTFC' */
+#define FACILITY_VERSION 1u
+
+#define COST_FEEDING_CENTS 180
+#define COST_WATER_CENTS 40
+#define COST_SUBSTRATE_CENTS 950
+#define COST_UV_BULB_CENTS 1600
+#define COST_DECOR_KIT_CENTS 4500
+#define VET_INTERVENTION_CENTS 12500
+#define INCIDENT_FINE_CERT_CENTS 45000
+#define INCIDENT_FINE_ENV_CENTS 20000
+
+#define HOURS_PER_DAY 24.0f
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+typedef struct {
+  uint32_t magic;
+  uint32_t version;
+  reptile_facility_t facility;
+} facility_blob_t;
 
 static const char *TAG = "reptile_logic";
-static bool s_sensors_ready = false;
-static bool s_simulation_mode = false;
-static bool log_once = false;
 
-static const char *get_save_path(void) {
-  static char path[64];
-  const char *base = MOUNT_POINT;
-  if (s_simulation_mode) {
-    snprintf(path, sizeof(path), "%s/sim/reptile_state.bin", base);
-  } else {
-    snprintf(path, sizeof(path), "%s/real/reptile_state.bin", base);
+static void copy_string(char *dst, size_t len, const char *src);
+static void terrarium_reset(terrarium_t *terrarium);
+static void facility_reset(reptile_facility_t *facility);
+static const char *mode_dir(game_mode_t mode);
+static esp_err_t ensure_directories(const reptile_facility_t *facility);
+static const char *facility_get_save_path(const reptile_facility_t *facility);
+static float clampf(float value, float min_val, float max_val);
+static uint32_t random_u32(void);
+static float random_uniform(float min, float max);
+static void degrade_uv(terrarium_t *terrarium, float hours);
+static bool certificates_valid(const terrarium_t *terrarium, time_t now,
+                               bool *expired_out);
+static void update_growth(terrarium_t *terrarium,
+                          const species_profile_t *profile, float hours,
+                          bool environment_ok, bool needs_ok);
+
+static const species_profile_t s_species_db[REPTILE_SPECIES_COUNT] = {
+    {
+        .id = REPTILE_SPECIES_GECKO,
+        .name = "Gecko léopard",
+        .day_temp_min = 28.0f,
+        .day_temp_max = 32.0f,
+        .night_temp_min = 24.0f,
+        .night_temp_max = 27.0f,
+        .humidity_min = 40.0f,
+        .humidity_max = 60.0f,
+        .uv_min = 2.0f,
+        .uv_max = 3.5f,
+        .growth_rate_per_hour = 0.018f,
+        .adult_weight_g = 80.0f,
+        .lifespan_days = 3650,
+        .food_per_day = 6,
+        .water_ml_per_day = 150,
+        .ticket_price_cents = 1200,
+        .upkeep_cents_per_day = 900,
+    },
+    {
+        .id = REPTILE_SPECIES_PYTHON,
+        .name = "Python regius",
+        .day_temp_min = 30.0f,
+        .day_temp_max = 34.0f,
+        .night_temp_min = 26.0f,
+        .night_temp_max = 28.0f,
+        .humidity_min = 55.0f,
+        .humidity_max = 75.0f,
+        .uv_min = 2.5f,
+        .uv_max = 4.0f,
+        .growth_rate_per_hour = 0.015f,
+        .adult_weight_g = 1500.0f,
+        .lifespan_days = 5475,
+        .food_per_day = 2,
+        .water_ml_per_day = 400,
+        .ticket_price_cents = 2200,
+        .upkeep_cents_per_day = 2400,
+    },
+    {
+        .id = REPTILE_SPECIES_TORTOISE,
+        .name = "Tortue d'Hermann",
+        .day_temp_min = 27.0f,
+        .day_temp_max = 32.0f,
+        .night_temp_min = 20.0f,
+        .night_temp_max = 24.0f,
+        .humidity_min = 50.0f,
+        .humidity_max = 70.0f,
+        .uv_min = 3.0f,
+        .uv_max = 4.5f,
+        .growth_rate_per_hour = 0.012f,
+        .adult_weight_g = 900.0f,
+        .lifespan_days = 9125,
+        .food_per_day = 8,
+        .water_ml_per_day = 250,
+        .ticket_price_cents = 1800,
+        .upkeep_cents_per_day = 1500,
+    },
+    {
+        .id = REPTILE_SPECIES_CHAMELEON,
+        .name = "Caméléon panthère",
+        .day_temp_min = 29.0f,
+        .day_temp_max = 33.0f,
+        .night_temp_min = 22.0f,
+        .night_temp_max = 25.0f,
+        .humidity_min = 55.0f,
+        .humidity_max = 85.0f,
+        .uv_min = 4.0f,
+        .uv_max = 5.5f,
+        .growth_rate_per_hour = 0.020f,
+        .adult_weight_g = 150.0f,
+        .lifespan_days = 2555,
+        .food_per_day = 10,
+        .water_ml_per_day = 180,
+        .ticket_price_cents = 2100,
+        .upkeep_cents_per_day = 1700,
+    },
+    {
+        .id = REPTILE_SPECIES_CUSTOM,
+        .name = "Profil personnalisé",
+        .day_temp_min = 26.0f,
+        .day_temp_max = 32.0f,
+        .night_temp_min = 22.0f,
+        .night_temp_max = 28.0f,
+        .humidity_min = 45.0f,
+        .humidity_max = 70.0f,
+        .uv_min = 2.0f,
+        .uv_max = 4.0f,
+        .growth_rate_per_hour = 0.016f,
+        .adult_weight_g = 500.0f,
+        .lifespan_days = 3650,
+        .food_per_day = 4,
+        .water_ml_per_day = 200,
+        .ticket_price_cents = 1500,
+        .upkeep_cents_per_day = 1100,
+    },
+};
+
+const species_profile_t *reptile_species_get(reptile_species_id_t id) {
+  if (id >= REPTILE_SPECIES_COUNT) {
+    return NULL;
   }
+  return &s_species_db[id];
+}
+
+static void copy_string(char *dst, size_t len, const char *src) {
+  if (!dst || len == 0) {
+    return;
+  }
+  if (!src) {
+    dst[0] = '\0';
+    return;
+  }
+  size_t copy_len = strnlen(src, len - 1);
+  memcpy(dst, src, copy_len);
+  dst[copy_len] = '\0';
+}
+
+static uint32_t random_u32(void) {
+#ifdef ESP_PLATFORM
+  return esp_random();
+#else
+  return (uint32_t)rand();
+#endif
+}
+
+static float random_uniform(float min, float max) {
+  if (max <= min) {
+    return min;
+  }
+  float ratio = (float)random_u32() / (float)UINT32_MAX;
+  return min + (max - min) * ratio;
+}
+
+static float clampf(float value, float min_val, float max_val) {
+  if (value < min_val) {
+    return min_val;
+  }
+  if (value > max_val) {
+    return max_val;
+  }
+  return value;
+}
+
+static void terrarium_reset(terrarium_t *terrarium) {
+  memset(terrarium, 0, sizeof(*terrarium));
+  terrarium->temperature_c = 28.0f;
+  terrarium->humidity_pct = 55.0f;
+  terrarium->uv_index = 3.0f;
+  terrarium->satiety = 0.85f;
+  terrarium->hydration = 0.85f;
+  terrarium->growth = 0.0f;
+  terrarium->stage = REPTILE_GROWTH_HATCHLING;
+  terrarium->weight_g = 0.0f;
+  terrarium->age_days = 0;
+  terrarium->age_fraction = 0.0f;
+  terrarium->feed_debt = 0.0f;
+  terrarium->water_debt = 0.0f;
+  terrarium->uv_wear = 0.0f;
+  terrarium->pathology = REPTILE_PATHOLOGY_NONE;
+  terrarium->incident = REPTILE_INCIDENT_NONE;
+  terrarium->pathology_timer_h = 0.0f;
+  terrarium->compliance_timer_h = 0.0f;
+  terrarium->needs_maintenance = false;
+  terrarium->audit_locked = false;
+  terrarium->maintenance_hours = 0;
+  terrarium->operating_cost_cents_per_day = 0;
+  terrarium->revenue_cents_per_day = 0;
+  terrarium->last_update = time(NULL);
+  copy_string(terrarium->config.substrate, sizeof(terrarium->config.substrate),
+              "Terreau tropical");
+  copy_string(terrarium->config.heating, sizeof(terrarium->config.heating),
+              "Câble 25W");
+  copy_string(terrarium->config.decor, sizeof(terrarium->config.decor),
+              "Branches + cachettes");
+  copy_string(terrarium->config.uv_setup, sizeof(terrarium->config.uv_setup),
+              "UVB T5 5%");
+}
+
+static void facility_reset(reptile_facility_t *facility) {
+  for (uint32_t i = 0; i < REPTILE_MAX_TERRARIUMS; ++i) {
+    terrarium_reset(&facility->terrariums[i]);
+  }
+  facility->terrarium_count = REPTILE_MAX_TERRARIUMS;
+  facility->inventory.feeders = 180;
+  facility->inventory.supplement_doses = 120;
+  facility->inventory.substrate_bags = 24;
+  facility->inventory.uv_bulbs = 12;
+  facility->inventory.decor_kits = 10;
+  facility->inventory.water_reserve_l = 300;
+  facility->economy.cash_cents = 350000; /* 3 500 € */
+  facility->economy.daily_income_cents = 0;
+  facility->economy.daily_expenses_cents = 0;
+  facility->economy.fines_cents = 0;
+  facility->economy.days_elapsed = 0;
+  facility->cycle.is_daytime = true;
+  facility->cycle.day_ms = 8U * 60U * 1000U;
+  facility->cycle.night_ms = 4U * 60U * 1000U;
+  facility->cycle.elapsed_in_phase_ms = 0;
+  facility->cycle.cycle_index = 0;
+  facility->alerts_active = 0;
+  facility->pathology_active = 0;
+  facility->compliance_alerts = 0;
+  facility->mature_count = 0;
+  facility->last_persist_time = 0;
+  facility->average_growth = 0.0f;
+
+  const species_profile_t *gecko = reptile_species_get(REPTILE_SPECIES_GECKO);
+  const species_profile_t *python = reptile_species_get(REPTILE_SPECIES_PYTHON);
+  const species_profile_t *tortoise =
+      reptile_species_get(REPTILE_SPECIES_TORTOISE);
+  const species_profile_t *chameleon =
+      reptile_species_get(REPTILE_SPECIES_CHAMELEON);
+
+  if (gecko) {
+    reptile_terrarium_set_species(&facility->terrariums[0], gecko,
+                                  "Gecko 01");
+  }
+  if (python) {
+    reptile_terrarium_set_species(&facility->terrariums[1], python,
+                                  "Python 01");
+  }
+  if (tortoise) {
+    reptile_terrarium_set_species(&facility->terrariums[2], tortoise,
+                                  "Tortue 01");
+  }
+  if (chameleon) {
+    reptile_terrarium_set_species(&facility->terrariums[3], chameleon,
+                                  "Caméléon 01");
+  }
+}
+
+static const char *mode_dir(game_mode_t mode) {
+  switch (mode) {
+  case GAME_MODE_REAL:
+    return "real";
+  case GAME_MODE_SIMULATION:
+  default:
+    return "sim";
+  }
+}
+
+static esp_err_t ensure_directories(const reptile_facility_t *facility) {
+  (void)facility;
+  const char *base = MOUNT_POINT;
+  if (mkdir(base, 0777) != 0 && errno != EEXIST) {
+    ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", base, errno);
+  }
+
+  char sim_dir[64];
+  snprintf(sim_dir, sizeof(sim_dir), "%s/sim", base);
+  if (mkdir(sim_dir, 0777) != 0 && errno != EEXIST) {
+    ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", sim_dir, errno);
+  }
+  char real_dir[64];
+  snprintf(real_dir, sizeof(real_dir), "%s/real", base);
+  if (mkdir(real_dir, 0777) != 0 && errno != EEXIST) {
+    ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", real_dir, errno);
+  }
+  return ESP_OK;
+}
+
+static const char *facility_get_save_path(const reptile_facility_t *facility) {
+  static char path[96];
+  const char *slot = (facility->slot[0] != '\0') ? facility->slot : "slot_a";
+  snprintf(path, sizeof(path), "%s/%s/%s.bin", MOUNT_POINT,
+           mode_dir(facility->mode), slot);
   return path;
 }
 
-static void reptile_set_defaults(reptile_t *r);
-
-esp_err_t reptile_init(reptile_t *r, bool simulation) {
-  if (!r) {
+esp_err_t reptile_facility_save(const reptile_facility_t *facility) {
+  if (!facility) {
     return ESP_ERR_INVALID_ARG;
   }
 
-  const char *base = MOUNT_POINT;
-  char sim_dir[64];
-  char real_dir[64];
-  snprintf(sim_dir, sizeof(sim_dir), "%s/sim", base);
-  snprintf(real_dir, sizeof(real_dir), "%s/real", base);
-  if (mkdir(sim_dir, 0777) != 0 && errno != EEXIST) {
-    ESP_LOGW(TAG, "Création du répertoire %s échouée", sim_dir);
-  }
-  if (mkdir(real_dir, 0777) != 0 && errno != EEXIST) {
-    ESP_LOGW(TAG, "Création du répertoire %s échouée", real_dir);
-  }
+  facility_blob_t blob = {
+      .magic = FACILITY_MAGIC,
+      .version = FACILITY_VERSION,
+      .facility = *facility,
+  };
+  blob.facility.last_persist_time = time(NULL);
 
-  s_simulation_mode = simulation;
-  if (!simulation) {
-    esp_err_t err = sensors_init();
-    if (err == ESP_OK) {
-      s_sensors_ready = true;
-    } else {
-      ESP_LOGW(TAG, "Capteurs non initialisés");
-      s_sensors_ready = false;
-    }
-  } else {
-    s_sensors_ready = false;
-  }
-
-  reptile_set_defaults(r);
-
-  return ESP_OK;
-}
-
-static void reptile_set_defaults(reptile_t *r) {
-  r->faim = 100;
-  r->eau = 100;
-  r->temperature = 30;
-  r->humidite = 50;
-  r->humeur = 100;
-  r->event = REPTILE_EVENT_NONE;
-  r->last_update = time(NULL);
-}
-
-void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
-  if (!r) {
-    return;
-  }
-
-  uint32_t decay = elapsed_ms / 1000U; /* 1 point per second */
-
-  r->faim = (r->faim > decay) ? (r->faim - decay) : 0;
-  r->eau = (r->eau > decay) ? (r->eau - decay) : 0;
-  r->humeur = (r->humeur > decay) ? (r->humeur - decay) : 0;
-
-  if (s_simulation_mode) {
-    uint32_t randv = esp_random();
-    float temp = 26.0f + (float)(randv % 80) / 10.0f; /* 26.0 - 33.9 */
-    randv = esp_random();
-    float hum = 40.0f + (float)(randv % 200) / 10.0f; /* 40.0 - 59.9 */
-    r->temperature = (uint32_t)temp;
-    r->humidite = (uint32_t)hum;
-  } else if (s_sensors_ready) {
-
-    float temp = sensors_read_temperature();
-    float hum = sensors_read_humidity();
-
-    if (!isnan(temp)) {
-      r->temperature = (uint32_t)temp;
-    }
-
-    if (!isnan(hum)) {
-      if (hum < 0.f)
-        hum = 0.f;
-      else if (hum > 100.f)
-        hum = 100.f;
-      r->humidite = (uint32_t)hum;
-    }
-  } else if (!s_simulation_mode && !s_sensors_ready && !log_once) {
-    ESP_LOGW(TAG, "Capteurs indisponibles");
-    log_once = true;
-  }
-
-  r->last_update += (time_t)decay;
-}
-
-esp_err_t reptile_save(reptile_t *r) {
-  if (!r) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  const char *path = get_save_path();
+  const char *path = facility_get_save_path(facility);
   FILE *f = fopen(path, "wb");
   if (!f) {
-    ESP_LOGE(TAG, "Impossible d'ouvrir le fichier de sauvegarde SD");
+    ESP_LOGE(TAG, "Impossible d'ouvrir %s en écriture", path);
     return ESP_FAIL;
   }
-  size_t written = fwrite(r, sizeof(reptile_t), 1, f);
+  size_t written = fwrite(&blob, sizeof(blob), 1, f);
   fclose(f);
   if (written != 1) {
-    ESP_LOGE(TAG, "Écriture incomplète de la sauvegarde SD");
+    ESP_LOGE(TAG, "Écriture incomplète pour %s", path);
     return ESP_FAIL;
   }
+  ESP_LOGI(TAG, "État sauvegardé dans %s", path);
   return ESP_OK;
 }
 
-esp_err_t reptile_load(reptile_t *r) {
-  if (!r) {
+esp_err_t reptile_facility_load(reptile_facility_t *facility) {
+  if (!facility) {
     return ESP_ERR_INVALID_ARG;
   }
-  const char *path = get_save_path();
+
+  const char *path = facility_get_save_path(facility);
   FILE *f = fopen(path, "rb");
   if (!f) {
     return ESP_FAIL;
   }
-  size_t read = fread(r, 1, sizeof(reptile_t), f);
+  facility_blob_t blob;
+  size_t read = fread(&blob, sizeof(blob), 1, f);
   fclose(f);
-  return (read == sizeof(reptile_t)) ? ESP_OK : ESP_FAIL;
+  if (read != 1 || blob.magic != FACILITY_MAGIC ||
+      blob.version != FACILITY_VERSION) {
+    ESP_LOGW(TAG, "Fichier de sauvegarde %s invalide", path);
+    return ESP_FAIL;
+  }
 
+  bool simulation = facility->simulation_mode;
+  bool sensors_available = facility->sensors_available;
+  game_mode_t mode = facility->mode;
+  char slot_copy[sizeof(facility->slot)];
+  copy_string(slot_copy, sizeof(slot_copy), facility->slot);
+
+  *facility = blob.facility;
+  facility->simulation_mode = simulation;
+  facility->sensors_available = sensors_available;
+  facility->mode = mode;
+  copy_string(facility->slot, sizeof(facility->slot), slot_copy);
+
+  if (facility->terrarium_count > REPTILE_MAX_TERRARIUMS) {
+    facility->terrarium_count = REPTILE_MAX_TERRARIUMS;
+  }
+
+  ESP_LOGI(TAG, "État chargé depuis %s", path);
+  return ESP_OK;
 }
 
-void reptile_feed(reptile_t *r) {
-  if (!r) {
+esp_err_t reptile_facility_set_slot(reptile_facility_t *facility,
+                                    const char *slot_name) {
+  if (!facility) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  char new_slot[sizeof(facility->slot)];
+  if (slot_name && slot_name[0] != '\0') {
+    copy_string(new_slot, sizeof(new_slot), slot_name);
+  } else {
+    copy_string(new_slot, sizeof(new_slot), "slot_a");
+  }
+  copy_string(facility->slot, sizeof(facility->slot), new_slot);
+
+  if (reptile_facility_load(facility) != ESP_OK) {
+    facility_reset(facility);
+    return reptile_facility_save(facility);
+  }
+  return ESP_OK;
+}
+
+esp_err_t reptile_facility_init(reptile_facility_t *facility, bool simulation,
+                                const char *slot_name, game_mode_t mode) {
+  if (!facility) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+#ifndef ESP_PLATFORM
+  static bool s_seeded = false;
+  if (!s_seeded) {
+    s_seeded = true;
+    srand((unsigned)time(NULL));
+  }
+#endif
+
+  memset(facility, 0, sizeof(*facility));
+  facility->simulation_mode = simulation;
+  facility->mode = mode;
+  facility->sensors_available = !simulation;
+  if (!slot_name || slot_name[0] == '\0') {
+    copy_string(facility->slot, sizeof(facility->slot), "slot_a");
+  } else {
+    copy_string(facility->slot, sizeof(facility->slot), slot_name);
+  }
+
+  ensure_directories(facility);
+  facility_reset(facility);
+
+  if (reptile_facility_load(facility) != ESP_OK) {
+    ESP_LOGI(TAG, "Initialisation d'un nouvel élevage (%s)",
+             facility_get_save_path(facility));
+    reptile_facility_save(facility);
+  }
+  return ESP_OK;
+}
+
+static void degrade_uv(terrarium_t *terrarium, float hours) {
+  terrarium->uv_wear += hours / (24.0f * 30.0f);
+  if (terrarium->uv_wear >= 1.0f) {
+    terrarium->uv_index -= 0.4f;
+    terrarium->uv_wear -= 1.0f;
+  }
+  terrarium->uv_index = clampf(terrarium->uv_index, 0.0f, 12.0f);
+}
+
+static bool certificates_valid(const terrarium_t *terrarium, time_t now,
+                               bool *expired_out) {
+  bool valid = false;
+  bool expired = false;
+  for (uint32_t i = 0; i < terrarium->certificate_count; ++i) {
+    const reptile_certificate_t *cert = &terrarium->certificates[i];
+    if (!cert->valid) {
+      continue;
+    }
+    if (cert->expiry_date == 0 || cert->expiry_date > now) {
+      valid = true;
+    } else {
+      expired = true;
+    }
+  }
+  if (expired_out) {
+    *expired_out = expired && !valid;
+  }
+  return valid;
+}
+
+static void update_growth(terrarium_t *terrarium,
+                          const species_profile_t *profile, float hours,
+                          bool environment_ok, bool needs_ok) {
+  if (environment_ok && needs_ok &&
+      terrarium->pathology == REPTILE_PATHOLOGY_NONE) {
+    float delta = profile->growth_rate_per_hour * hours;
+    terrarium->growth = clampf(terrarium->growth + delta, 0.0f, 1.2f);
+  } else {
+    terrarium->growth = clampf(terrarium->growth - 0.01f * hours, 0.0f, 1.2f);
+  }
+
+  terrarium->age_fraction += hours / HOURS_PER_DAY;
+  if (terrarium->age_fraction >= 1.0f) {
+    uint32_t add_days = (uint32_t)terrarium->age_fraction;
+    terrarium->age_days += add_days;
+    terrarium->age_fraction -= (float)add_days;
+  }
+
+  if (terrarium->age_days > profile->lifespan_days &&
+      terrarium->growth >= 0.8f) {
+    terrarium->stage = REPTILE_GROWTH_SENIOR;
+  } else if (terrarium->growth >= 0.6f) {
+    terrarium->stage = REPTILE_GROWTH_ADULT;
+  } else if (terrarium->growth >= 0.25f) {
+    terrarium->stage = REPTILE_GROWTH_JUVENILE;
+  } else {
+    terrarium->stage = REPTILE_GROWTH_HATCHLING;
+  }
+
+  terrarium->weight_g = profile->adult_weight_g * MIN(terrarium->growth, 1.0f);
+}
+
+void reptile_facility_tick(reptile_facility_t *facility, uint32_t elapsed_ms) {
+  if (!facility || elapsed_ms == 0) {
     return;
   }
-  r->faim = (r->faim + 10 > 100) ? 100 : r->faim + 10;
-  if (!s_simulation_mode) {
-    /* Physically pulse the feeder servo */
-    reptile_feed_gpio();
+
+  float hours = (float)elapsed_ms / 3600000.0f;
+  reptile_day_cycle_t *cycle = &facility->cycle;
+  uint32_t phase_target = cycle->is_daytime ? cycle->day_ms : cycle->night_ms;
+  cycle->elapsed_in_phase_ms += elapsed_ms;
+  while (phase_target > 0 && cycle->elapsed_in_phase_ms >= phase_target) {
+    cycle->elapsed_in_phase_ms -= phase_target;
+    cycle->is_daytime = !cycle->is_daytime;
+    cycle->cycle_index++;
+    phase_target = cycle->is_daytime ? cycle->day_ms : cycle->night_ms;
+    if (cycle->is_daytime) {
+      facility->economy.days_elapsed++;
+      facility->economy.daily_income_cents = 0;
+      facility->economy.daily_expenses_cents = 0;
+    }
   }
-  reptile_save(r);
+
+  uint32_t pathology_count = 0;
+  uint32_t incident_count = 0;
+  uint32_t compliance_count = 0;
+  uint32_t mature_count = 0;
+  uint32_t occupied_count = 0;
+  float growth_sum = 0.0f;
+  time_t now = time(NULL);
+
+  for (uint32_t i = 0; i < facility->terrarium_count; ++i) {
+    terrarium_t *terrarium = &facility->terrariums[i];
+    if (!terrarium->occupied) {
+      continue;
+    }
+    occupied_count++;
+    growth_sum += terrarium->growth;
+
+    const species_profile_t *profile = &terrarium->species;
+    if (profile->name[0] == '\0') {
+      continue;
+    }
+
+    float target_temp_min =
+        cycle->is_daytime ? profile->day_temp_min : profile->night_temp_min;
+    float target_temp_max =
+        cycle->is_daytime ? profile->day_temp_max : profile->night_temp_max;
+    float target_temp_mid = (target_temp_min + target_temp_max) * 0.5f;
+
+    if (facility->simulation_mode) {
+      terrarium->temperature_c +=
+          (target_temp_mid - terrarium->temperature_c) * 0.12f;
+      terrarium->temperature_c += random_uniform(-0.3f, 0.3f);
+    }
+    terrarium->temperature_c =
+        clampf(terrarium->temperature_c, target_temp_min - 3.0f,
+               target_temp_max + 3.0f);
+
+    float humidity_mid = (profile->humidity_min + profile->humidity_max) * 0.5f;
+    if (facility->simulation_mode) {
+      terrarium->humidity_pct +=
+          (humidity_mid - terrarium->humidity_pct) * 0.10f;
+      terrarium->humidity_pct += random_uniform(-1.5f, 1.5f);
+    }
+    terrarium->humidity_pct = clampf(terrarium->humidity_pct, 0.0f, 100.0f);
+
+    float uv_mid = (profile->uv_min + profile->uv_max) * 0.5f;
+    if (facility->simulation_mode) {
+      terrarium->uv_index += (uv_mid - terrarium->uv_index) * 0.15f;
+      terrarium->uv_index += random_uniform(-0.08f, 0.08f);
+    }
+    degrade_uv(terrarium, hours);
+
+    if (terrarium->uv_index < profile->uv_min - 0.1f &&
+        facility->inventory.uv_bulbs > 0) {
+      facility->inventory.uv_bulbs--;
+      terrarium->uv_index = uv_mid;
+      facility->economy.daily_expenses_cents += COST_UV_BULB_CENTS;
+      facility->economy.cash_cents -= COST_UV_BULB_CENTS;
+    }
+
+    float satiety_loss = (0.02f + (float)profile->food_per_day * 0.0025f) * hours;
+    terrarium->satiety = clampf(terrarium->satiety - satiety_loss, 0.0f, 1.0f);
+    terrarium->feed_debt +=
+        (float)profile->food_per_day * hours / HOURS_PER_DAY;
+    if (terrarium->satiety < 0.40f || terrarium->feed_debt >= 1.0f) {
+      uint32_t required = (uint32_t)floorf(terrarium->feed_debt);
+      if (terrarium->satiety < 0.40f && required == 0) {
+        required = 1;
+      }
+      if (required > 0 && facility->inventory.feeders >= required) {
+        facility->inventory.feeders -= required;
+        terrarium->satiety = clampf(terrarium->satiety + 0.38f + 0.06f * required,
+                                    0.0f, 1.0f);
+        terrarium->feed_debt -= (float)required;
+        int64_t cost = (int64_t)required * COST_FEEDING_CENTS;
+        facility->economy.daily_expenses_cents += cost;
+        facility->economy.cash_cents -= cost;
+      }
+      terrarium->feed_debt = clampf(terrarium->feed_debt, 0.0f, 5.0f);
+    }
+
+    float hydration_loss =
+        (0.018f + (float)profile->water_ml_per_day * 0.0008f) * hours;
+    terrarium->hydration =
+        clampf(terrarium->hydration - hydration_loss, 0.0f, 1.0f);
+    terrarium->water_debt +=
+        (float)profile->water_ml_per_day * hours / 1000.0f;
+    if (terrarium->hydration < 0.40f || terrarium->water_debt >= 0.5f) {
+      uint32_t liters = (uint32_t)ceilf(terrarium->water_debt);
+      if (liters == 0) {
+        liters = 1;
+      }
+      if (facility->inventory.water_reserve_l >= liters) {
+        facility->inventory.water_reserve_l -= liters;
+        terrarium->hydration = clampf(
+            terrarium->hydration + 0.35f + 0.05f * (float)liters, 0.0f, 1.0f);
+        terrarium->water_debt -= (float)liters;
+        int64_t cost = (int64_t)liters * COST_WATER_CENTS;
+        facility->economy.daily_expenses_cents += cost;
+        facility->economy.cash_cents -= cost;
+      }
+      if (terrarium->water_debt < 0.0f) {
+        terrarium->water_debt = 0.0f;
+      }
+    }
+
+    terrarium->maintenance_hours += (uint32_t)lroundf(hours);
+    if (terrarium->maintenance_hours > 144) {
+      terrarium->needs_maintenance = true;
+    }
+
+    bool temp_ok = terrarium->temperature_c >= target_temp_min &&
+                   terrarium->temperature_c <= target_temp_max;
+    bool humidity_ok = terrarium->humidity_pct >= profile->humidity_min &&
+                       terrarium->humidity_pct <= profile->humidity_max;
+    bool uv_ok = terrarium->uv_index >= profile->uv_min &&
+                 terrarium->uv_index <= profile->uv_max;
+    bool needs_ok = terrarium->satiety > 0.35f && terrarium->hydration > 0.35f;
+    bool environment_ok = temp_ok && humidity_ok && uv_ok;
+
+    reptile_pathology_t previous_pathology = terrarium->pathology;
+    if (!environment_ok || !needs_ok) {
+      terrarium->pathology_timer_h += hours;
+      if (terrarium->pathology_timer_h > 4.0f &&
+          terrarium->pathology == REPTILE_PATHOLOGY_NONE) {
+        if (!temp_ok || !humidity_ok) {
+          terrarium->pathology = REPTILE_PATHOLOGY_RESPIRATORY;
+        } else if (!needs_ok) {
+          terrarium->pathology = REPTILE_PATHOLOGY_METABOLIC;
+        } else {
+          terrarium->pathology = REPTILE_PATHOLOGY_PARASITIC;
+        }
+        facility->economy.daily_expenses_cents += VET_INTERVENTION_CENTS;
+        facility->economy.cash_cents -= VET_INTERVENTION_CENTS;
+      }
+    } else {
+      terrarium->pathology_timer_h =
+          MAX(0.0f, terrarium->pathology_timer_h - hours * 2.5f);
+      if (terrarium->pathology != REPTILE_PATHOLOGY_NONE &&
+          terrarium->pathology_timer_h < 1.0f) {
+        terrarium->pathology = REPTILE_PATHOLOGY_NONE;
+      }
+    }
+
+    bool expired_cert = false;
+    bool cert_ok = certificates_valid(terrarium, now, &expired_cert);
+    if (!cert_ok) {
+      terrarium->compliance_timer_h += hours;
+      if (terrarium->compliance_timer_h > 6.0f) {
+        reptile_incident_t new_incident =
+            expired_cert ? REPTILE_INCIDENT_CERTIFICATE_EXPIRED
+                         : REPTILE_INCIDENT_CERTIFICATE_MISSING;
+        if (terrarium->incident != new_incident) {
+          terrarium->incident = new_incident;
+          facility->economy.fines_cents += INCIDENT_FINE_CERT_CENTS;
+          facility->economy.cash_cents -= INCIDENT_FINE_CERT_CENTS;
+        }
+      }
+    } else {
+      terrarium->compliance_timer_h = 0.0f;
+      if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING ||
+          terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
+        terrarium->incident = REPTILE_INCIDENT_NONE;
+      }
+    }
+
+    if (!environment_ok && terrarium->pathology_timer_h > 8.0f) {
+      if (terrarium->incident != REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
+        terrarium->incident = REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE;
+        facility->economy.fines_cents += INCIDENT_FINE_ENV_CENTS;
+        facility->economy.cash_cents -= INCIDENT_FINE_ENV_CENTS;
+      }
+    } else if (environment_ok &&
+               terrarium->incident ==
+                   REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
+      terrarium->incident = REPTILE_INCIDENT_NONE;
+    }
+
+    update_growth(terrarium, profile, hours, environment_ok, needs_ok);
+
+    if (terrarium->stage >= REPTILE_GROWTH_ADULT) {
+      mature_count++;
+    }
+
+    if (terrarium->pathology != REPTILE_PATHOLOGY_NONE) {
+      pathology_count++;
+    }
+    if (terrarium->incident != REPTILE_INCIDENT_NONE) {
+      incident_count++;
+      if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING ||
+          terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
+        compliance_count++;
+      }
+    }
+
+    int64_t op_cost = terrarium->operating_cost_cents_per_day;
+    if (op_cost == 0) {
+      op_cost = profile->upkeep_cents_per_day;
+    }
+    int64_t op_expense = (int64_t)llroundf(op_cost * hours / HOURS_PER_DAY);
+    facility->economy.daily_expenses_cents += op_expense;
+    facility->economy.cash_cents -= op_expense;
+
+    if (terrarium->stage >= REPTILE_GROWTH_ADULT) {
+      int64_t revenue = (int64_t)llroundf(
+          terrarium->revenue_cents_per_day * hours / HOURS_PER_DAY);
+      if (revenue == 0) {
+        revenue = (int64_t)llroundf(
+            profile->ticket_price_cents * hours / HOURS_PER_DAY);
+      }
+      facility->economy.daily_income_cents += revenue;
+      facility->economy.cash_cents += revenue;
+    }
+
+    terrarium->last_update = now;
+    if (previous_pathology != terrarium->pathology &&
+        terrarium->pathology == REPTILE_PATHOLOGY_NONE) {
+      terrarium->pathology_timer_h = 0.0f;
+    }
+  }
+
+  facility->alerts_active = incident_count + pathology_count;
+  facility->pathology_active = pathology_count;
+  facility->compliance_alerts = compliance_count;
+  facility->mature_count = mature_count;
+
+  facility->average_growth =
+      (occupied_count > 0) ? (growth_sum / (float)occupied_count) : 0.0f;
 }
 
-void reptile_give_water(reptile_t *r) {
-  if (!r) {
+bool reptile_facility_sensors_available(const reptile_facility_t *facility) {
+  return facility && facility->sensors_available;
+}
+
+terrarium_t *reptile_facility_get_terrarium(reptile_facility_t *facility,
+                                            uint8_t index) {
+  if (!facility || index >= facility->terrarium_count) {
+    return NULL;
+  }
+  return &facility->terrariums[index];
+}
+
+const terrarium_t *reptile_facility_get_terrarium_const(
+    const reptile_facility_t *facility, uint8_t index) {
+  if (!facility || index >= facility->terrarium_count) {
+    return NULL;
+  }
+  return &facility->terrariums[index];
+}
+
+void reptile_facility_compute_metrics(const reptile_facility_t *facility,
+                                      reptile_facility_metrics_t *out) {
+  if (!facility || !out) {
     return;
   }
-  r->eau = (r->eau + 10 > 100) ? 100 : r->eau + 10;
-  if (!s_simulation_mode) {
-    /* Activate the water pump */
-    reptile_water_gpio();
+  memset(out, 0, sizeof(*out));
+  for (uint32_t i = 0; i < facility->terrarium_count; ++i) {
+    const terrarium_t *terrarium = &facility->terrariums[i];
+    if (!terrarium->occupied) {
+      continue;
+    }
+    out->occupied++;
+    out->avg_growth += terrarium->growth;
+    if (terrarium->pathology != REPTILE_PATHOLOGY_NONE) {
+      out->pathologies++;
+    }
+    if (terrarium->incident != REPTILE_INCIDENT_NONE) {
+      out->incidents++;
+    }
+    if (terrarium->stage >= REPTILE_GROWTH_ADULT) {
+      out->mature++;
+    }
   }
-  reptile_save(r);
+  out->free_slots = facility->terrarium_count - out->occupied;
+  if (out->occupied > 0) {
+    out->avg_growth /= (float)out->occupied;
+  }
 }
 
-void reptile_heat(reptile_t *r) {
-  if (!r) {
+void reptile_facility_reset_statistics(reptile_facility_t *facility) {
+  if (!facility) {
     return;
   }
-  r->temperature = (r->temperature + 5 > 50) ? 50 : r->temperature + 5;
-  if (!s_simulation_mode) {
-    /* Drive the heating resistor */
-    reptile_heat_gpio();
-  }
-  reptile_save(r);
+  facility->economy.daily_expenses_cents = 0;
+  facility->economy.daily_income_cents = 0;
+  facility->economy.fines_cents = 0;
 }
 
-void reptile_soothe(reptile_t *r) {
-  if (!r) {
+esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
+                                        const species_profile_t *profile,
+                                        const char *nickname) {
+  if (!terrarium || !profile) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  terrarium_reset(terrarium);
+  terrarium->occupied = true;
+  terrarium->species = *profile;
+  if (nickname && nickname[0] != '\0') {
+    copy_string(terrarium->nickname, sizeof(terrarium->nickname), nickname);
+  } else {
+    copy_string(terrarium->nickname, sizeof(terrarium->nickname),
+                profile->name);
+  }
+  terrarium->temperature_c =
+      (profile->day_temp_min + profile->day_temp_max) * 0.5f;
+  terrarium->humidity_pct =
+      (profile->humidity_min + profile->humidity_max) * 0.5f;
+  terrarium->uv_index = (profile->uv_min + profile->uv_max) * 0.5f;
+  terrarium->operating_cost_cents_per_day = profile->upkeep_cents_per_day;
+  terrarium->revenue_cents_per_day = profile->ticket_price_cents;
+  terrarium->last_update = time(NULL);
+  return ESP_OK;
+}
+
+void reptile_terrarium_set_config(terrarium_t *terrarium,
+                                  const reptile_terrarium_config_t *config) {
+  if (!terrarium || !config) {
     return;
   }
-  /* Petting the reptile improves its mood */
-  r->humeur = (r->humeur + 10 > 100) ? 100 : r->humeur + 10;
-  reptile_save(r);
+  copy_string(terrarium->config.substrate, sizeof(terrarium->config.substrate),
+              config->substrate);
+  copy_string(terrarium->config.heating, sizeof(terrarium->config.heating),
+              config->heating);
+  copy_string(terrarium->config.decor, sizeof(terrarium->config.decor),
+              config->decor);
+  copy_string(terrarium->config.uv_setup, sizeof(terrarium->config.uv_setup),
+              config->uv_setup);
+  terrarium->needs_maintenance = false;
+  terrarium->maintenance_hours = 0;
 }
 
-reptile_event_t reptile_check_events(reptile_t *r) {
-  if (!r) {
-    return REPTILE_EVENT_NONE;
+static esp_err_t update_config_field(char *field, size_t len,
+                                     const char *value) {
+  if (!field || len == 0) {
+    return ESP_ERR_INVALID_ARG;
   }
-
-  reptile_event_t evt = REPTILE_EVENT_NONE;
-
-  if (r->faim <= REPTILE_FAMINE_THRESHOLD || r->eau <= REPTILE_EAU_THRESHOLD ||
-      r->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
-      r->temperature >= REPTILE_TEMP_THRESHOLD_HIGH ||
-      r->humeur <= REPTILE_HUMEUR_THRESHOLD) {
-    evt = REPTILE_EVENT_MALADIE;
-  } else if (r->faim >= 90 && r->eau >= 90 && r->humeur >= 90 &&
-             r->temperature > REPTILE_TEMP_THRESHOLD_LOW &&
-             r->temperature < REPTILE_TEMP_THRESHOLD_HIGH) {
-    evt = REPTILE_EVENT_CROISSANCE;
+  if (!value || value[0] == '\0') {
+    return ESP_ERR_INVALID_ARG;
   }
-
-  if (evt != r->event) {
-    r->event = evt;
-  }
-
-  return evt;
+  copy_string(field, len, value);
+  return ESP_OK;
 }
 
-bool reptile_sensors_available(void) {
-  return !s_simulation_mode && s_sensors_ready;
+esp_err_t reptile_terrarium_set_substrate(terrarium_t *terrarium,
+                                          const char *substrate) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err =
+      update_config_field(terrarium->config.substrate,
+                          sizeof(terrarium->config.substrate), substrate);
+  if (err == ESP_OK) {
+    terrarium->needs_maintenance = false;
+    terrarium->maintenance_hours = 0;
+  }
+  return err;
 }
+
+esp_err_t reptile_terrarium_set_heating(terrarium_t *terrarium,
+                                        const char *heating) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  return update_config_field(terrarium->config.heating,
+                             sizeof(terrarium->config.heating), heating);
+}
+
+esp_err_t reptile_terrarium_set_decor(terrarium_t *terrarium,
+                                      const char *decor) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = update_config_field(
+      terrarium->config.decor, sizeof(terrarium->config.decor), decor);
+  if (err == ESP_OK) {
+    terrarium->needs_maintenance = false;
+  }
+  return err;
+}
+
+esp_err_t reptile_terrarium_set_uv(terrarium_t *terrarium, const char *uv) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  return update_config_field(terrarium->config.uv_setup,
+                             sizeof(terrarium->config.uv_setup), uv);
+}
+
+esp_err_t reptile_terrarium_add_certificate(
+    terrarium_t *terrarium, const reptile_certificate_t *certificate) {
+  if (!terrarium || !certificate) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (terrarium->certificate_count >= REPTILE_MAX_CERTIFICATES) {
+    return ESP_ERR_NO_MEM;
+  }
+  terrarium->certificates[terrarium->certificate_count++] = *certificate;
+  return ESP_OK;
+}
+
+void reptile_inventory_add_feed(reptile_facility_t *facility,
+                                uint32_t quantity) {
+  if (!facility || quantity == 0) {
+    return;
+  }
+  facility->inventory.feeders += quantity;
+  int64_t cost = (int64_t)quantity * COST_FEEDING_CENTS;
+  facility->economy.daily_expenses_cents += cost;
+  facility->economy.cash_cents -= cost;
+}
+
+void reptile_inventory_add_substrate(reptile_facility_t *facility,
+                                     uint32_t quantity) {
+  if (!facility || quantity == 0) {
+    return;
+  }
+  facility->inventory.substrate_bags += quantity;
+  int64_t cost = (int64_t)quantity * COST_SUBSTRATE_CENTS;
+  facility->economy.daily_expenses_cents += cost;
+  facility->economy.cash_cents -= cost;
+}
+
+void reptile_inventory_add_uv_bulbs(reptile_facility_t *facility,
+                                    uint32_t quantity) {
+  if (!facility || quantity == 0) {
+    return;
+  }
+  facility->inventory.uv_bulbs += quantity;
+  int64_t cost = (int64_t)quantity * COST_UV_BULB_CENTS;
+  facility->economy.daily_expenses_cents += cost;
+  facility->economy.cash_cents -= cost;
+}
+
+void reptile_inventory_add_decor(reptile_facility_t *facility,
+                                 uint32_t quantity) {
+  if (!facility || quantity == 0) {
+    return;
+  }
+  facility->inventory.decor_kits += quantity;
+  int64_t cost = (int64_t)quantity * COST_DECOR_KIT_CENTS;
+  facility->economy.daily_expenses_cents += cost;
+  facility->economy.cash_cents -= cost;
+}
+
+void reptile_inventory_add_water(reptile_facility_t *facility,
+                                 uint32_t liters) {
+  if (!facility || liters == 0) {
+    return;
+  }
+  facility->inventory.water_reserve_l += liters;
+  int64_t cost = (int64_t)liters * COST_WATER_CENTS;
+  facility->economy.daily_expenses_cents += cost;
+  facility->economy.cash_cents -= cost;
+}
+
