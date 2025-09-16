@@ -13,7 +13,7 @@ extern "C" {
 
 void reptile_game_init(void);
 void reptile_tick(lv_timer_t *timer);
-const reptile_t *reptile_get_state(void);
+const reptile_facility_t *reptile_get_state(void);
 void reptile_game_stop(void);
 bool reptile_game_is_active(void);
 

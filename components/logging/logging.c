@@ -2,14 +2,15 @@
 #include "sd.h"
 #include "esp_log.h"
 #include "lvgl.h"
-#include <stdio.h>
 #include <inttypes.h>
-#include <sys/stat.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #define LOG_TAG "logging"
 
-static const reptile_t *(*state_cb)(void);
+static const reptile_facility_t *(*facility_cb)(void);
 static lv_timer_t *log_timer;
 
 static const char *LOG_FILE = "/sdcard/reptile_log.csv";
@@ -17,22 +18,34 @@ static const char *LOG_FILE = "/sdcard/reptile_log.csv";
 static void logging_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!state_cb) {
+    if (!facility_cb) {
         return;
     }
-    const reptile_t *r = state_cb();
-    if (!r) {
+    const reptile_facility_t *facility = facility_cb();
+    if (!facility) {
         return;
     }
+    reptile_facility_metrics_t metrics;
+    reptile_facility_compute_metrics(facility, &metrics);
+
     FILE *f = fopen(LOG_FILE, "a");
     if (!f) {
         ESP_LOGE(LOG_TAG, "Failed to open log file");
         return;
     }
+    time_t now = time(NULL);
     fprintf(f,
-            "%ld,%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "\n",
-            (long)r->last_update, r->faim, r->eau,
-            r->temperature, r->humeur, (uint32_t)r->event);
+            "%ld,%s,%lld,%u,%u,%u,%u,%lld,%lld,%lld\n",
+            (long)now,
+            facility->slot,
+            (long long)facility->economy.cash_cents,
+            metrics.occupied,
+            facility->alerts_active,
+            facility->pathology_active,
+            facility->compliance_alerts,
+            (long long)facility->economy.daily_income_cents,
+            (long long)facility->economy.daily_expenses_cents,
+            (long long)facility->economy.fines_cents);
     fflush(f);
     if (ferror(f)) {
         ESP_LOGE(LOG_TAG, "Failed to write log file");
@@ -44,9 +57,9 @@ static void logging_timer_cb(lv_timer_t *t)
     fclose(f);
 }
 
-void logging_init(const reptile_t *(*cb)(void))
+void logging_init(const reptile_facility_t *(*cb)(void))
 {
-    state_cb = cb;
+    facility_cb = cb;
     struct stat st;
     bool need_header = stat(LOG_FILE, &st) != 0;
     FILE *f = fopen(LOG_FILE, "a");
@@ -55,7 +68,9 @@ void logging_init(const reptile_t *(*cb)(void))
         return;
     }
     if (need_header) {
-        fputs("timestamp,faim,eau,temperature,humeur,event\n", f);
+        fputs("timestamp,slot,cash_cents,occupied,alerts,pathologies,compliance,"
+              "daily_income_cents,daily_expenses_cents,fines_cents\n",
+              f);
         fflush(f);
         if (ferror(f)) {
             ESP_LOGE(LOG_TAG, "Failed to write header to log file");

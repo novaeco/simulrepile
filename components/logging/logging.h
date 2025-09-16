@@ -12,7 +12,7 @@ extern "C" {
  *
  * @param cb Callback returning pointer to current reptile state.
  */
-void logging_init(const reptile_t *(*cb)(void));
+void logging_init(const reptile_facility_t *(*cb)(void));
 
 /** Pause periodic logging timer. */
 void logging_pause(void);
