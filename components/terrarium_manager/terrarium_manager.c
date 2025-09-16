@@ -60,6 +60,10 @@ static void terrarium_config_set_defaults(terrarium_config_t *cfg, uint8_t id) {
   cfg->decor = TERRARIUM_DECOR_LIANES;
   snprintf(cfg->reptile_slot, sizeof(cfg->reptile_slot), "terrarium_%02u.bin",
            (unsigned)(id + 1));
+  cfg->dimensions.length_cm = 120;
+  cfg->dimensions.width_cm = 60;
+  cfg->dimensions.height_cm = 60;
+  cfg->species_id[0] = '\0';
 }
 
 static esp_err_t ensure_config_directory(void) {
@@ -124,6 +128,11 @@ static esp_err_t load_config(terrarium_t *terrarium) {
   if (!f) {
     return ESP_FAIL;
   }
+  long file_size = 0;
+  if (fseek(f, 0, SEEK_END) == 0) {
+    file_size = ftell(f);
+    (void)fseek(f, 0, SEEK_SET);
+  }
   terrarium_config_t cfg = terrarium->config;
   size_t read = fread(cfg.name, 1, sizeof(cfg.name), f);
   if (read != sizeof(cfg.name)) {
@@ -147,9 +156,43 @@ static esp_err_t load_config(terrarium_t *terrarium) {
     fclose(f);
     return ESP_FAIL;
   }
+
+  size_t base_size = sizeof(cfg.name) + sizeof(uint8_t) + sizeof(uint8_t) +
+                     sizeof(cfg.reptile_slot);
+  size_t dims_size = sizeof(uint16_t) * 3U;
+  size_t species_size = sizeof(cfg.species_id);
+  bool has_dims = (file_size >= 0) &&
+                  ((size_t)file_size >= (base_size + dims_size));
+  bool has_species = (file_size >= 0) &&
+                     ((size_t)file_size >= (base_size + dims_size + species_size));
+
+  if (has_dims) {
+    uint16_t dims_raw[3] = {cfg.dimensions.length_cm, cfg.dimensions.width_cm,
+                            cfg.dimensions.height_cm};
+    if (fread(dims_raw, sizeof(uint16_t), 3, f) != 3) {
+      fclose(f);
+      return ESP_FAIL;
+    }
+    cfg.dimensions.length_cm = dims_raw[0];
+    cfg.dimensions.width_cm = dims_raw[1];
+    cfg.dimensions.height_cm = dims_raw[2];
+  } else {
+    cfg.dimensions = terrarium->config.dimensions;
+  }
+
+  if (has_species) {
+    if (fread(cfg.species_id, 1, sizeof(cfg.species_id), f) !=
+        sizeof(cfg.species_id)) {
+      fclose(f);
+      return ESP_FAIL;
+    }
+  } else {
+    cfg.species_id[0] = '\0';
+  }
   fclose(f);
   sanitize_string(cfg.name, sizeof(cfg.name));
   sanitize_string(cfg.reptile_slot, sizeof(cfg.reptile_slot));
+  sanitize_string(cfg.species_id, sizeof(cfg.species_id));
   cfg.substrate = (terrarium_substrate_t)substrate;
   cfg.decor = (terrarium_decor_t)decor;
   terrarium->config = cfg;
@@ -190,6 +233,17 @@ static esp_err_t persist_config(const terrarium_t *terrarium) {
     fclose(f);
     return ESP_FAIL;
   }
+  uint16_t dims[3] = {cfg->dimensions.length_cm, cfg->dimensions.width_cm,
+                      cfg->dimensions.height_cm};
+  if (fwrite(dims, sizeof(uint16_t), 3, f) != 3) {
+    fclose(f);
+    return ESP_FAIL;
+  }
+  if (fwrite(cfg->species_id, 1, sizeof(cfg->species_id), f) !=
+      sizeof(cfg->species_id)) {
+    fclose(f);
+    return ESP_FAIL;
+  }
   fclose(f);
   return ESP_OK;
 }
@@ -211,6 +265,23 @@ esp_err_t terrarium_manager_init(bool simulation) {
     terrarium_reset_runtime(terrarium);
     if (load_config(terrarium) != ESP_OK) {
       (void)persist_config(terrarium);
+    }
+    if (terrarium->config.species_id[0] != '\0') {
+      const species_db_entry_t *species =
+          species_db_get_by_id(terrarium->config.species_id);
+      if (species) {
+        terrarium->species_profile = species;
+      } else {
+        ESP_LOGW(TAG,
+                 "Espèce configurée '%s' introuvable pour le terrarium %u,"
+                 " remise à zéro",
+                 terrarium->config.species_id, (unsigned)(terrarium->id + 1));
+        terrarium->config.species_id[0] = '\0';
+        terrarium->species_profile = NULL;
+        (void)persist_config(terrarium);
+      }
+    } else {
+      terrarium->species_profile = NULL;
     }
   }
 
@@ -257,6 +328,24 @@ static esp_err_t load_state_if_needed(terrarium_t *terrarium) {
              (unsigned)(terrarium->id + 1));
     terrarium_manager_reset_state(terrarium);
     reptile_save(&terrarium->reptile);
+  }
+  if (err == ESP_OK) {
+    const species_db_entry_t *species = NULL;
+    if (terrarium->config.species_id[0] != '\0') {
+      species = species_db_get_by_id(terrarium->config.species_id);
+    }
+    terrarium->species_profile = species;
+    const char *stored_species =
+        reptile_get_species_id(&terrarium->reptile);
+    if (species) {
+      if (!stored_species || strcmp(stored_species, species->id) != 0) {
+        reptile_apply_species_profile(&terrarium->reptile, species);
+        reptile_save(&terrarium->reptile);
+      }
+    } else if (stored_species && stored_species[0] != '\0') {
+      reptile_clear_species_profile(&terrarium->reptile);
+      reptile_save(&terrarium->reptile);
+    }
   }
   terrarium->state_loaded = true;
   return ESP_OK;
@@ -318,14 +407,27 @@ esp_err_t terrarium_manager_reset_state(terrarium_t *terrarium) {
   if (!terrarium) {
     return ESP_ERR_INVALID_ARG;
   }
+  reptile_clear_species_profile(&terrarium->reptile);
   terrarium->reptile.faim = 100;
   terrarium->reptile.eau = 100;
-  terrarium->reptile.temperature = 30;
-  terrarium->reptile.humidite = 50;
   terrarium->reptile.humeur = 100;
   terrarium->reptile.event = REPTILE_EVENT_NONE;
   terrarium->reptile.last_update = time(NULL);
   terrarium->state_loaded = true;
+  if (terrarium->config.species_id[0] != '\0') {
+    const species_db_entry_t *species =
+        species_db_get_by_id(terrarium->config.species_id);
+    if (species) {
+      terrarium->species_profile = species;
+      reptile_apply_species_profile(&terrarium->reptile, species);
+    } else {
+      terrarium->species_profile = NULL;
+      terrarium->config.species_id[0] = '\0';
+      (void)persist_config(terrarium);
+    }
+  } else {
+    terrarium->species_profile = NULL;
+  }
   terrarium_reset_runtime(terrarium);
   return ESP_OK;
 }
@@ -338,7 +440,63 @@ esp_err_t terrarium_manager_reload_config(terrarium_t *terrarium) {
   if (!terrarium) {
     return ESP_ERR_INVALID_ARG;
   }
-  return load_config(terrarium);
+  esp_err_t err = load_config(terrarium);
+  if (err != ESP_OK) {
+    return err;
+  }
+  if (terrarium->config.species_id[0] != '\0') {
+    terrarium->species_profile =
+        species_db_get_by_id(terrarium->config.species_id);
+  } else {
+    terrarium->species_profile = NULL;
+  }
+  return ESP_OK;
+}
+
+esp_err_t terrarium_manager_set_species(terrarium_t *terrarium,
+                                        const species_db_entry_t *species) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err;
+  if (species) {
+    strncpy(terrarium->config.species_id, species->id,
+            sizeof(terrarium->config.species_id) - 1U);
+    terrarium->config.species_id[sizeof(terrarium->config.species_id) - 1U] =
+        '\0';
+    err = reptile_apply_species_profile(&terrarium->reptile, species);
+    terrarium->species_profile = species;
+  } else {
+    terrarium->config.species_id[0] = '\0';
+    err = reptile_clear_species_profile(&terrarium->reptile);
+    terrarium->species_profile = NULL;
+  }
+  if (err != ESP_OK) {
+    return err;
+  }
+  terrarium->state_loaded = true;
+  err = terrarium_manager_save_config(terrarium);
+  if (err != ESP_OK) {
+    return err;
+  }
+  if (s_initialized) {
+    err = reptile_save(&terrarium->reptile);
+  }
+  return err;
+}
+
+const species_db_entry_t *
+terrarium_manager_get_species(const terrarium_t *terrarium) {
+  if (!terrarium) {
+    return NULL;
+  }
+  if (terrarium->species_profile) {
+    return terrarium->species_profile;
+  }
+  if (terrarium->config.species_id[0] == '\0') {
+    return NULL;
+  }
+  return species_db_get_by_id(terrarium->config.species_id);
 }
 
 const lv_image_dsc_t *
