@@ -1,4 +1,0 @@
-id,common_name,scientific_name,length_cm,width_cm,height_cm,temp_min_c,temp_max_c,humidity_min_pct,humidity_max_pct,uv_index_min,uv_index_max,certificate_required,certificate_code,legal_reference,protected_status,protected_reference
-pogona_vitticeps,Agame barbu central,Pogona vitticeps,120,60,60,28,38,30,45,4,6,false,,Arrêté du 8 octobre 2018 - annexe 2 (Espèces domestiques),false,
-python_regius,Python royal,Python regius,120,60,60,26,32,50,65,2,3,true,CDC_APA_2022_123,Arrêté du 8 octobre 2018 - annexe 2 (Espèces soumises à CDC),true,Règlement (CE) n° 338/97 annexe B - certificat intra-UE CITES
-eublepharis_macularius,Gecko léopard,Eublepharis macularius,90,45,45,24,32,30,45,2,4,false,,Arrêté du 10 août 2004 modifié (animaux domestiques),false,
