@@ -1,5 +1,6 @@
 #include "sensors.h"
 #include "game_mode.h"
+#include <math.h>
 
 extern const sensor_driver_t sensors_real_driver;
 extern const sensor_driver_t sensors_sim_driver;
@@ -29,7 +30,7 @@ float sensors_read_temperature(void)
     if (s_driver && s_driver->read_temperature) {
         return s_driver->read_temperature();
     }
-    return 0.0f;
+    return NAN;
 }
 
 float sensors_read_humidity(void)
@@ -38,7 +39,46 @@ float sensors_read_humidity(void)
     if (s_driver && s_driver->read_humidity) {
         return s_driver->read_humidity();
     }
-    return 0.0f;
+    return NAN;
+}
+
+float sensors_read_temperature_channel(size_t channel)
+{
+    sensors_select_driver();
+    if (!s_driver) {
+        return NAN;
+    }
+    if (s_driver->read_temperature_channel) {
+        return s_driver->read_temperature_channel(channel);
+    }
+    if (channel == 0 && s_driver->read_temperature) {
+        return s_driver->read_temperature();
+    }
+    return NAN;
+}
+
+float sensors_read_humidity_channel(size_t channel)
+{
+    sensors_select_driver();
+    if (!s_driver) {
+        return NAN;
+    }
+    if (s_driver->read_humidity_channel) {
+        return s_driver->read_humidity_channel(channel);
+    }
+    if (channel == 0 && s_driver->read_humidity) {
+        return s_driver->read_humidity();
+    }
+    return NAN;
+}
+
+size_t sensors_get_channel_count(void)
+{
+    sensors_select_driver();
+    if (s_driver && s_driver->get_channel_count) {
+        return s_driver->get_channel_count();
+    }
+    return (s_driver && (s_driver->read_temperature || s_driver->read_humidity)) ? 1u : 0u;
 }
 
 void sensors_deinit(void)

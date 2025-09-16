@@ -7,163 +7,445 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "settings.h"
+#include "logging.h"
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#define CHART_POINT_COUNT 120
 
 static void feed_task(void *arg);
-static void env_state_cb(const reptile_env_state_t *state, void *ctx);
+static void env_state_cb(size_t index, const reptile_env_terrarium_state_t *state, void *ctx);
+static void pump_btn_cb(lv_event_t *e);
+static void heat_btn_cb(lv_event_t *e);
+static void uv_btn_cb(lv_event_t *e);
+static void feed_btn_cb(lv_event_t *e);
+static void menu_btn_cb(lv_event_t *e);
 
 static lv_obj_t *screen;
-static lv_obj_t *label_temp;
-static lv_obj_t *label_hum;
-static lv_obj_t *label_pump;
-static lv_obj_t *label_heat;
-static lv_obj_t *label_feed;
+static lv_obj_t *feed_status_label;
 static volatile bool feed_running;
 static TaskHandle_t feed_task_handle;
-static reptile_env_state_t s_env_state;
+static size_t s_ui_count;
+
+typedef struct {
+    size_t index;
+    lv_obj_t *card;
+    lv_obj_t *title;
+    lv_obj_t *status_label;
+    lv_obj_t *energy_label;
+    lv_obj_t *alarm_label;
+    lv_obj_t *temp_meter;
+    lv_meter_indicator_t *temp_indicator;
+    lv_obj_t *hum_bar;
+    lv_obj_t *btn_heat;
+    lv_obj_t *btn_heat_label;
+    lv_obj_t *btn_pump;
+    lv_obj_t *btn_pump_label;
+    lv_obj_t *btn_uv;
+    lv_obj_t *btn_uv_label;
+    lv_obj_t *uv_state_label;
+    lv_obj_t *chart;
+    lv_chart_series_t *temp_series;
+    lv_chart_series_t *hum_series;
+    lv_coord_t temp_points[CHART_POINT_COUNT];
+    lv_coord_t hum_points[CHART_POINT_COUNT];
+} terrarium_ui_t;
+
+static terrarium_ui_t s_ui[REPTILE_ENV_MAX_TERRARIUMS];
+static reptile_env_history_entry_t s_history_buf[REPTILE_ENV_HISTORY_LENGTH];
 
 extern lv_obj_t *menu_screen;
 
-static void update_status_labels(void) {
-  if (isnan(s_env_state.temperature))
-    lv_label_set_text(label_temp, "Temp\u00e9rature: Non connect\u00e9");
-  else
-    lv_label_set_text_fmt(label_temp, "Temp\u00e9rature: %.1f \u00b0C", s_env_state.temperature);
-  if (isnan(s_env_state.humidity))
-    lv_label_set_text(label_hum, "Humidit\u00e9: Non connect\u00e9");
-  else
-    lv_label_set_text_fmt(label_hum, "Humidit\u00e9: %.1f %%", s_env_state.humidity);
-  lv_label_set_text(label_pump, s_env_state.pumping ? "Pompe: ON" : "Pompe: OFF");
-  lv_label_set_text(label_heat, s_env_state.heating ? "Chauffage: ON" : "Chauffage: OFF");
-  lv_label_set_text(label_feed, feed_running ? "Nourrissage: ON" : "Nourrissage: OFF");
+static void update_feed_status(void)
+{
+    if (!feed_status_label) {
+        return;
+    }
+    lv_label_set_text(feed_status_label, feed_running ? "Nourrissage: ON" : "Nourrissage: OFF");
 }
 
-static void env_state_cb(const reptile_env_state_t *state, void *ctx) {
-  (void)ctx;
-  s_env_state = *state;
-  if (lvgl_port_lock(-1)) {
-    update_status_labels();
-    lvgl_port_unlock();
-  }
-}
-
-
-static void feed_task(void *arg) {
-  (void)arg;
-  feed_running = true;
-  if (lvgl_port_lock(-1)) {
-    update_status_labels();
-    lvgl_port_unlock();
-  }
-  reptile_feed_gpio();
-  feed_running = false;
-  if (lvgl_port_lock(-1)) {
-    update_status_labels();
-    lvgl_port_unlock();
-  }
-  feed_task_handle = NULL;
-  vTaskDelete(NULL);
-}
-
-static void pump_btn_cb(lv_event_t *e) {
-  (void)e;
-  reptile_env_manual_pump();
-}
-
-static void heat_btn_cb(lv_event_t *e) {
-  (void)e;
-  reptile_env_manual_heat();
-}
-
-static void feed_btn_cb(lv_event_t *e) {
-  (void)e;
-  if (!feed_running)
-    xTaskCreate(feed_task, "feed_task", 2048, NULL, 5, &feed_task_handle);
-}
-
-static void menu_btn_cb(lv_event_t *e) {
-  (void)e;
-  reptile_env_stop();
-  sensors_deinit();
-  if (feed_task_handle) {
-    vTaskDelete(feed_task_handle);
+static void feed_task(void *arg)
+{
+    (void)arg;
+    feed_running = true;
+    if (lvgl_port_lock(-1)) {
+        update_feed_status();
+        lvgl_port_unlock();
+    }
+    reptile_feed_gpio();
+    feed_running = false;
+    if (lvgl_port_lock(-1)) {
+        update_feed_status();
+        lvgl_port_unlock();
+    }
     feed_task_handle = NULL;
-  }
-  feed_running = false;
-  reptile_actuators_deinit();
+    vTaskDelete(NULL);
+}
 
-  if (lvgl_port_lock(-1)) {
-    lv_scr_load(menu_screen);
-    if (screen) {
-      lv_obj_del(screen);
-      screen = NULL;
+static lv_obj_t *create_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb, void *user_data, lv_obj_t **label_out)
+{
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, text);
+    lv_obj_center(label);
+    if (label_out) {
+        *label_out = label;
+    }
+    return btn;
+}
+
+static void configure_meter(lv_obj_t *meter, terrarium_ui_t *ui)
+{
+    lv_meter_scale_t *scale = lv_meter_add_scale(meter);
+    lv_meter_set_scale_range(meter, scale, 0, 45, 270, 135);
+    lv_meter_set_scale_ticks(meter, scale, 10, 2, 10, lv_palette_main(LV_PALETTE_GREY));
+    lv_meter_set_scale_major_ticks(meter, scale, 5, 3, 18, lv_color_black(), 10);
+    ui->temp_indicator = lv_meter_add_needle_line(meter, scale, 4, lv_palette_main(LV_PALETTE_RED), -18);
+}
+
+static void init_terrarium_ui(size_t index,
+                              terrarium_ui_t *ui,
+                              lv_obj_t *parent,
+                              const reptile_env_terrarium_config_t *cfg)
+{
+    memset(ui, 0, sizeof(*ui));
+    ui->index = index;
+    ui->card = lv_obj_create(parent);
+    lv_obj_set_width(ui->card, LV_PCT(100));
+    lv_obj_set_style_pad_all(ui->card, 12, 0);
+    lv_obj_set_style_pad_gap(ui->card, 8, 0);
+    lv_obj_set_flex_flow(ui->card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(ui->card, LV_SCROLLBAR_MODE_OFF);
+
+    ui->title = lv_label_create(ui->card);
+    lv_label_set_text(ui->title, cfg->name[0] ? cfg->name : "Terrarium");
+
+    lv_obj_t *row = lv_obj_create(ui->card);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_style_pad_all(row, 8, 0);
+    lv_obj_set_style_pad_gap(row, 12, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+
+    ui->temp_meter = lv_meter_create(row);
+    lv_obj_set_size(ui->temp_meter, 130, 130);
+    configure_meter(ui->temp_meter, ui);
+
+    ui->hum_bar = lv_bar_create(row);
+    lv_bar_set_range(ui->hum_bar, 0, 100);
+    lv_obj_set_size(ui->hum_bar, 40, 120);
+    lv_bar_set_value(ui->hum_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(ui->hum_bar, lv_palette_main(LV_PALETTE_LIGHT_BLUE), LV_PART_INDICATOR);
+
+    row = lv_obj_create(ui->card);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_style_pad_all(row, 8, 0);
+    lv_obj_set_style_pad_gap(row, 8, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+
+    ui->btn_heat = create_button(row, "Chauffage", heat_btn_cb, ui, &ui->btn_heat_label);
+    ui->btn_pump = create_button(row, "Brumiser", pump_btn_cb, ui, &ui->btn_pump_label);
+    ui->btn_uv = create_button(row, "UV", uv_btn_cb, ui, &ui->btn_uv_label);
+
+    ui->uv_state_label = lv_label_create(ui->card);
+    lv_label_set_text(ui->uv_state_label, "UV: auto");
+
+    ui->status_label = lv_label_create(ui->card);
+    lv_label_set_text(ui->status_label, "");
+
+    ui->energy_label = lv_label_create(ui->card);
+    lv_label_set_text(ui->energy_label, "");
+
+    ui->alarm_label = lv_label_create(ui->card);
+    lv_label_set_text(ui->alarm_label, "");
+
+    ui->chart = lv_chart_create(ui->card);
+    lv_chart_set_point_count(ui->chart, CHART_POINT_COUNT);
+    lv_chart_set_range(ui->chart, LV_CHART_AXIS_PRIMARY_Y, 0, 45);
+    lv_chart_set_range(ui->chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
+    lv_chart_set_div_line_count(ui->chart, 4, 6);
+    lv_chart_set_type(ui->chart, LV_CHART_TYPE_LINE);
+    lv_obj_set_height(ui->chart, 160);
+    ui->temp_series = lv_chart_add_series(ui->chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
+    ui->hum_series = lv_chart_add_series(ui->chart, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_SECONDARY_Y);
+    lv_chart_set_ext_y_array(ui->chart, ui->temp_series, ui->temp_points);
+    lv_chart_set_ext_y_array(ui->chart, ui->hum_series, ui->hum_points);
+    for (size_t i = 0; i < CHART_POINT_COUNT; ++i) {
+        ui->temp_points[i] = LV_CHART_POINT_NONE;
+        ui->hum_points[i] = LV_CHART_POINT_NONE;
+    }
+}
+
+static void describe_alarms(uint32_t flags, char *buffer, size_t len)
+{
+    if (flags == REPTILE_ENV_ALARM_NONE) {
+        snprintf(buffer, len, "Aucune alarme");
+        return;
+    }
+    buffer[0] = '\0';
+    if (flags & REPTILE_ENV_ALARM_SENSOR_FAILURE) {
+        strncat(buffer, "Capteur ", len - strlen(buffer) - 1);
+    }
+    if (flags & REPTILE_ENV_ALARM_TEMP_LOW) {
+        strncat(buffer, "Temp basse ", len - strlen(buffer) - 1);
+    }
+    if (flags & REPTILE_ENV_ALARM_TEMP_HIGH) {
+        strncat(buffer, "Temp haute ", len - strlen(buffer) - 1);
+    }
+    if (flags & REPTILE_ENV_ALARM_HUM_LOW) {
+        strncat(buffer, "Hum basse ", len - strlen(buffer) - 1);
+    }
+    if (flags & REPTILE_ENV_ALARM_HUM_HIGH) {
+        strncat(buffer, "Hum haute ", len - strlen(buffer) - 1);
+    }
+}
+
+static void update_chart(terrarium_ui_t *ui, size_t index)
+{
+    size_t count = reptile_env_get_history(index, s_history_buf, REPTILE_ENV_HISTORY_LENGTH);
+    size_t start = 0;
+    if (count > CHART_POINT_COUNT) {
+        start = count - CHART_POINT_COUNT;
+    }
+    size_t out_idx = 0;
+    for (size_t i = start; i < count; ++i, ++out_idx) {
+        float temp = s_history_buf[i].temperature_c;
+        float hum = s_history_buf[i].humidity_pct;
+        if (!isfinite(temp)) {
+            ui->temp_points[out_idx] = LV_CHART_POINT_NONE;
+        } else {
+            if (temp < 0) {
+                temp = 0;
+            }
+            if (temp > 45) {
+                temp = 45;
+            }
+            ui->temp_points[out_idx] = (lv_coord_t)lroundf(temp);
+        }
+        if (!isfinite(hum)) {
+            ui->hum_points[out_idx] = LV_CHART_POINT_NONE;
+        } else {
+            if (hum < 0) {
+                hum = 0;
+            }
+            if (hum > 100) {
+                hum = 100;
+            }
+            ui->hum_points[out_idx] = (lv_coord_t)lroundf(hum);
+        }
+    }
+    for (; out_idx < CHART_POINT_COUNT; ++out_idx) {
+        ui->temp_points[out_idx] = LV_CHART_POINT_NONE;
+        ui->hum_points[out_idx] = LV_CHART_POINT_NONE;
+    }
+    lv_chart_refresh(ui->chart);
+}
+
+static void update_terrarium_ui(terrarium_ui_t *ui, const reptile_env_terrarium_state_t *state)
+{
+    if (!ui || !state) {
+        return;
+    }
+    if (state->temperature_valid) {
+        float temp = state->temperature_c;
+        if (temp < 0) {
+            temp = 0;
+        }
+        if (temp > 45) {
+            temp = 45;
+        }
+        lv_meter_set_indicator_value(ui->temp_meter, ui->temp_indicator, (int32_t)lroundf(temp));
+    }
+    if (state->humidity_valid) {
+        float hum = state->humidity_pct;
+        if (hum < 0) {
+            hum = 0;
+        }
+        if (hum > 100) {
+            hum = 100;
+        }
+        lv_bar_set_value(ui->hum_bar, (int32_t)lroundf(hum), LV_ANIM_OFF);
+    } else {
+        lv_bar_set_value(ui->hum_bar, 0, LV_ANIM_OFF);
+    }
+
+    char temp_str[16];
+    char hum_str[16];
+    if (state->temperature_valid && isfinite(state->temperature_c)) {
+        snprintf(temp_str, sizeof(temp_str), "%.1f", state->temperature_c);
+    } else {
+        snprintf(temp_str, sizeof(temp_str), "N/A");
+    }
+    if (state->humidity_valid && isfinite(state->humidity_pct)) {
+        snprintf(hum_str, sizeof(hum_str), "%.1f", state->humidity_pct);
+    } else {
+        snprintf(hum_str, sizeof(hum_str), "N/A");
+    }
+
+    lv_label_set_text_fmt(ui->status_label,
+                          "Temp %s/%.1f°C  Hum %s/%.1f%%\nChauffage %s  Pompe %s",
+                          temp_str,
+                          state->target_temperature_c,
+                          hum_str,
+                          state->target_humidity_pct,
+                          state->heating ? "ON" : "OFF",
+                          state->pumping ? "ON" : "OFF");
+
+    float total = state->energy_heat_Wh + state->energy_pump_Wh + state->energy_uv_Wh;
+    lv_label_set_text_fmt(ui->energy_label,
+                          "Énergie: %.2f Wh (Chauffage %.2f / Pompe %.2f / UV %.2f)",
+                          total,
+                          state->energy_heat_Wh,
+                          state->energy_pump_Wh,
+                          state->energy_uv_Wh);
+
+    char alarm_text[128];
+    describe_alarms(state->alarm_flags, alarm_text, sizeof(alarm_text));
+    lv_label_set_text(ui->alarm_label, alarm_text);
+    if (state->alarm_flags != REPTILE_ENV_ALARM_NONE) {
+        lv_obj_set_style_border_color(ui->card, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
+        lv_obj_set_style_border_width(ui->card, 2, LV_PART_MAIN);
+    } else {
+        lv_obj_set_style_border_color(ui->card, lv_color_hex3(0x444), LV_PART_MAIN);
+        lv_obj_set_style_border_width(ui->card, 1, LV_PART_MAIN);
+    }
+
+    lv_label_set_text_fmt(ui->btn_heat_label, state->manual_heat ? "Chauffage (man)" : "Chauffage");
+    lv_label_set_text_fmt(ui->btn_pump_label, state->manual_pump ? "Brumiser (man)" : "Brumiser");
+    lv_label_set_text_fmt(ui->uv_state_label,
+                          "UV: %s (%s)",
+                          state->uv_light ? "ON" : "OFF",
+                          state->manual_uv_override ? "manuel" : "auto");
+    lv_label_set_text(ui->btn_uv_label,
+                      state->manual_uv_override ? "UV (manuel)" : "UV");
+
+    update_chart(ui, ui->index);
+}
+
+static void env_state_cb(size_t index, const reptile_env_terrarium_state_t *state, void *ctx)
+{
+    (void)ctx;
+    logging_real_append(index, state);
+    if (!lvgl_port_lock(-1)) {
+        return;
+    }
+    if (index < s_ui_count) {
+        update_terrarium_ui(&s_ui[index], state);
     }
     lvgl_port_unlock();
-  }
 }
 
-void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp) {
-  (void)panel;
-  (void)tp;
+static void pump_btn_cb(lv_event_t *e)
+{
+    terrarium_ui_t *ui = lv_event_get_user_data(e);
+    if (!ui) {
+        return;
+    }
+    reptile_env_manual_pump(ui->index);
+}
 
-  if (!lvgl_port_lock(-1))
-    return;
+static void heat_btn_cb(lv_event_t *e)
+{
+    terrarium_ui_t *ui = lv_event_get_user_data(e);
+    if (!ui) {
+        return;
+    }
+    reptile_env_manual_heat(ui->index);
+}
 
-  screen = lv_obj_create(NULL);
+static void uv_btn_cb(lv_event_t *e)
+{
+    terrarium_ui_t *ui = lv_event_get_user_data(e);
+    if (!ui) {
+        return;
+    }
+    reptile_env_manual_uv_toggle(ui->index);
+}
 
-  label_temp = lv_label_create(screen);
-  lv_obj_align(label_temp, LV_ALIGN_TOP_LEFT, 10, 10);
+static void feed_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!feed_running) {
+        xTaskCreate(feed_task, "feed_task", 2048, NULL, 5, &feed_task_handle);
+    }
+}
 
-  label_hum = lv_label_create(screen);
-  lv_obj_align(label_hum, LV_ALIGN_TOP_LEFT, 10, 40);
+static void menu_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    reptile_env_stop();
+    logging_real_stop();
+    sensors_deinit();
+    if (feed_task_handle) {
+        vTaskDelete(feed_task_handle);
+        feed_task_handle = NULL;
+        feed_running = false;
+    }
+    reptile_actuators_deinit();
 
-  label_pump = lv_label_create(screen);
-  lv_obj_align(label_pump, LV_ALIGN_TOP_LEFT, 10, 80);
-  lv_obj_t *btn_pump = lv_btn_create(screen);
-  lv_obj_align(btn_pump, LV_ALIGN_TOP_RIGHT, -10, 75);
-  lv_obj_t *lbl = lv_label_create(btn_pump);
-  lv_label_set_text(lbl, "Pompe");
-  lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_pump, pump_btn_cb, LV_EVENT_CLICKED, NULL);
+    if (lvgl_port_lock(-1)) {
+        lv_scr_load(menu_screen);
+        if (screen) {
+            lv_obj_del(screen);
+            screen = NULL;
+        }
+        lvgl_port_unlock();
+    }
+}
 
-  label_heat = lv_label_create(screen);
-  lv_obj_align(label_heat, LV_ALIGN_TOP_LEFT, 10, 120);
-  lv_obj_t *btn_heat = lv_btn_create(screen);
-  lv_obj_align(btn_heat, LV_ALIGN_TOP_RIGHT, -10, 115);
-  lbl = lv_label_create(btn_heat);
-  lv_label_set_text(lbl, "Chauffage");
-  lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_heat, heat_btn_cb, LV_EVENT_CLICKED, NULL);
+void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
+{
+    (void)panel;
+    (void)tp;
 
-  label_feed = lv_label_create(screen);
-  lv_obj_align(label_feed, LV_ALIGN_TOP_LEFT, 10, 160);
-  lv_obj_t *btn_feed = lv_btn_create(screen);
-  lv_obj_align(btn_feed, LV_ALIGN_TOP_RIGHT, -10, 155);
-  lbl = lv_label_create(btn_feed);
-  lv_label_set_text(lbl, "Nourrir");
-  lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_feed, feed_btn_cb, LV_EVENT_CLICKED, NULL);
+    if (!lvgl_port_lock(-1)) {
+        return;
+    }
 
-  lv_obj_t *btn_menu = lv_btn_create(screen);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_MID, 0, -10);
-  lbl = lv_label_create(btn_menu);
-  lv_label_set_text(lbl, "Menu");
-  lv_obj_center(lbl);
-  lv_obj_add_event_cb(btn_menu, menu_btn_cb, LV_EVENT_CLICKED, NULL);
+    screen = lv_obj_create(NULL);
+    lv_obj_set_size(screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(screen, 10, 0);
+    lv_obj_set_style_pad_gap(screen, 12, 0);
 
-  s_env_state.temperature = NAN;
-  s_env_state.humidity = NAN;
-  s_env_state.heating = false;
-  s_env_state.pumping = false;
-  feed_running = false;
-  update_status_labels();
-  lv_disp_load_scr(screen);
-  lvgl_port_unlock();
+    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_set_width(header, LV_PCT(100));
+    lv_obj_set_style_pad_all(header, 8, 0);
+    lv_obj_set_style_pad_gap(header, 12, 0);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
 
-  reptile_env_thresholds_t thr = {
-      .temp_setpoint = g_settings.temp_threshold,
-      .humidity_setpoint = g_settings.humidity_threshold,
-  };
-  reptile_env_start(&thr, env_state_cb, NULL);
+    lv_obj_t *title = lv_label_create(header);
+    lv_label_set_text(title, "Mode réel");
+
+    lv_obj_t *spacer = lv_obj_create(header);
+    lv_obj_remove_style_all(spacer);
+    lv_obj_set_flex_grow(spacer, 1);
+
+    create_button(header, "Menu", menu_btn_cb, NULL, NULL);
+
+    feed_status_label = lv_label_create(screen);
+    update_feed_status();
+
+    create_button(screen, "Nourrir", feed_btn_cb, NULL, NULL);
+
+    const reptile_env_config_t *cfg = &g_settings.env_config;
+    s_ui_count = cfg->terrarium_count;
+    if (s_ui_count > REPTILE_ENV_MAX_TERRARIUMS) {
+        s_ui_count = REPTILE_ENV_MAX_TERRARIUMS;
+    }
+
+    for (size_t i = 0; i < s_ui_count; ++i) {
+        init_terrarium_ui(i, &s_ui[i], screen, &cfg->terrarium[i]);
+    }
+
+    lv_disp_load_scr(screen);
+    lvgl_port_unlock();
+
+    logging_real_start(s_ui_count, cfg);
+    reptile_env_start(cfg, env_state_cb, NULL);
 }
 

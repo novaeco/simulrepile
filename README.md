@@ -87,6 +87,42 @@ Au reset, le firmware affiche un menu minimaliste permettant de choisir entre de
 La sélection est persistée pour la session suivante afin de relancer automatiquement le mode
 précédent.
 
+## Automatisation des terrariums réels
+Le contrôleur d'environnement (`components/env_control/`) pilote désormais jusqu'à quatre
+terrariums physiques en parallèle :
+
+- profils jour/nuit indépendants avec plages cibles température/humidité et hystérésis
+  asymétriques (marche/arrêt) ;
+- planification de l'éclairage UV (heures d'allumage/extinction) avec possibilité de forcer
+  manuellement un terrarium donné ;
+- prise en compte de l'horloge système pour basculer automatiquement entre profils et pour
+  horodater chaque acquisition ;
+- suivi énergétique en Wh (chauffage, brumisation, UV) et gestion d'intervalles minimums entre
+  deux cycles d'actionneurs afin de limiter l'usure.
+
+Chaque minute, un historique circulaire est alimenté pour alimenter les graphiques LVGL et les
+journaux CSV.
+
+### Configuration persistante multi-terrariums
+L'écran de paramètres (`settings_screen_show`) expose une interface tabulaire permettant de
+configurer chaque terrarium (nom, seuils jour/nuit, hystérésis, horaires, UV, intervalles min.).
+Les réglages sont sérialisés via NVS (`KEY_ENV`) et réappliqués au démarrage en même temps que
+les préférences de veille et de niveau de logs. L'appel à `settings_apply()` propage immédiatement
+la configuration vers le contrôleur d'environnement même si le mode réel est déjà actif.
+
+### Journalisation mode réel
+Un enregistreur dédié (`logging_real_start`) consigne, pour chaque terrarium et à chaque mise à
+jour, les mesures, consignes, états des actionneurs, drapeaux d'alarme et consommations
+électriques dans `/sdcard/real/<index>_<nom>.csv`. Les fichiers sont distincts de ceux utilisés en
+simulation et restent ouverts en écriture tant que le mode réel est actif. Ils peuvent être
+analysés a posteriori (ex. import dans un tableur ou un notebook Python).
+
+### Interface LVGL temps réel
+`main/reptile_real.c` refond totalement l'écran réel : jauges température/hygrométrie, graphiques
+glissants, boutons de forçage (chauffage, brumisation, UV), affichage des consommations et des
+alarmes. Les mises à jour sont thread-safe via `lvgl_port_lock()` et chaque terrarium dispose de
+son panneau dédié. Un bouton « Nourrir » global conserve la logique existante.
+
 ### Schéma de dépendances
 ```mermaid
 flowchart TD
@@ -142,6 +178,13 @@ I (123) reptile_game: Initializing LVGL...
 I (456) reptile_game: Game started, touch to feed the reptile!
 ```
 L'écran LCD présente alors l'interface du jeu reptile avec interaction tactile.
+
+Pour vérifier rapidement la structure des journaux temps réel exportés sur microSD, le script
+`tests/validate_real_logs.py` peut être invoqué sur les fichiers CSV collectés :
+
+```sh
+python3 tests/validate_real_logs.py /chemin/vers/real/01_Terrarium.csv
+```
 
 ## Trame CAN
 Le firmware publie toutes les secondes l'état agrégé de l'élevage sur le bus

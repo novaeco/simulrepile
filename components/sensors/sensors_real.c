@@ -16,7 +16,7 @@ static i2c_master_dev_handle_t tmp117_dev = NULL;
 static esp_err_t sensors_real_init(void)
 {
     DEV_I2C_Port port = DEV_I2C_Init();
-    (void)port; // bus handle kept internally
+    (void)port;
 
     bool any_device = false;
     if (DEV_I2C_Probe(SHT31_ADDR) == ESP_OK) {
@@ -113,10 +113,34 @@ static void sensors_real_deinit(void)
     }
 }
 
+static size_t sensors_real_channel_count(void)
+{
+    return 1;
+}
+
+static float sensors_real_read_temperature_channel(size_t channel)
+{
+    if (channel > 0) {
+        return NAN;
+    }
+    return sensors_real_read_temperature();
+}
+
+static float sensors_real_read_humidity_channel(size_t channel)
+{
+    if (channel > 0) {
+        return NAN;
+    }
+    return sensors_real_read_humidity();
+}
+
 const sensor_driver_t sensors_real_driver = {
     .init = sensors_real_init,
     .read_temperature = sensors_real_read_temperature,
     .read_humidity = sensors_real_read_humidity,
     .deinit = sensors_real_deinit,
+    .get_channel_count = sensors_real_channel_count,
+    .read_temperature_channel = sensors_real_read_temperature_channel,
+    .read_humidity_channel = sensors_real_read_humidity_channel,
 };
 

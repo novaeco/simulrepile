@@ -16,6 +16,7 @@
 
 #include "driver/gpio.h"  // ESP-IDF GPIO driver library
 #include "esp_err.h"
+#include <stddef.h>
 
 /* Pin Definitions */
 #define LED_GPIO_PIN     GPIO_NUM_6  /* GPIO pin connected to the LED */
@@ -34,6 +35,7 @@ typedef struct {
     void (*feed)(void);
     void (*water)(void);
     void (*heat)(void);
+    void (*uv)(bool on);
     void (*deinit)(void);
 } actuator_driver_t;
 
@@ -44,6 +46,7 @@ uint8_t DEV_Digital_Read(uint16_t Pin);
 void reptile_feed_gpio(void);
 void reptile_water_gpio(void);
 void reptile_heat_gpio(void);
+void reptile_uv_gpio(bool on);
 esp_err_t reptile_actuators_init(void);
 void reptile_actuators_deinit(void);
 
