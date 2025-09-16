@@ -15,6 +15,24 @@ extern terrarium_hw_t g_terrariums[];
 extern const size_t g_terrarium_count;
 extern terrarium_device_status_t g_device_status[];
 
+static uint8_t sht31_crc8(const uint8_t *data, size_t len)
+{
+    uint8_t crc = 0xFF;
+
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            if (crc & 0x80) {
+                crc = (crc << 1) ^ 0x31;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+
+    return crc;
+}
+
 static int find_hw_index(const terrarium_hw_t *hw)
 {
     for (size_t i = 0; i < g_terrarium_count; ++i) {
@@ -65,6 +83,14 @@ cleanup_read:
     i2c_cmd_link_delete(cmd);
     if (ret != ESP_OK) {
         return ret;
+    }
+
+    uint8_t temp_crc = sht31_crc8(rx_data, 2);
+    uint8_t humidity_crc = sht31_crc8(&rx_data[3], 2);
+    if (temp_crc != rx_data[2] || humidity_crc != rx_data[5]) {
+        ESP_LOGE(TAG, "SHT31 CRC mismatch: temp 0x%02X!=0x%02X, humidity 0x%02X!=0x%02X",
+                 temp_crc, rx_data[2], humidity_crc, rx_data[5]);
+        return ESP_ERR_INVALID_CRC;
     }
 
     uint16_t raw_t = ((uint16_t)rx_data[0] << 8) | rx_data[1];
