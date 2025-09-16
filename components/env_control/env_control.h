@@ -30,6 +30,7 @@ void reptile_env_get_state(reptile_env_state_t *out);
 
 void reptile_env_manual_pump(void);
 void reptile_env_manual_heat(void);
+void reptile_env_set_heating_allowed(bool allowed);
 
 #ifdef __cplusplus
 }

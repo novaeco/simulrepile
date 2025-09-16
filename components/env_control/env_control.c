@@ -13,6 +13,7 @@ static reptile_env_update_cb_t s_cb = NULL;
 static void *s_cb_ctx = NULL;
 static bool s_pump_auto = false;
 static bool s_heat_auto = false;
+static bool s_heat_allowed = true;
 static TaskHandle_t s_pump_task = NULL;
 static TaskHandle_t s_heat_task = NULL;
 
@@ -71,7 +72,7 @@ static void timer_cb(TimerHandle_t t)
             s_pump_auto = false;
     }
 
-    if (s_heat_auto && s_heat_task == NULL)
+    if (s_heat_allowed && s_heat_auto && s_heat_task == NULL)
     {
         xTaskCreate(heat_task, "heat_task", 2048, NULL, 5, &s_heat_task);
     }
@@ -154,6 +155,15 @@ void reptile_env_manual_heat(void)
     if (s_heat_task == NULL)
     {
         xTaskCreate(heat_task, "heat_task", 2048, NULL, 5, &s_heat_task);
+    }
+}
+
+void reptile_env_set_heating_allowed(bool allowed)
+{
+    s_heat_allowed = allowed;
+    if (!allowed)
+    {
+        s_heat_auto = false;
     }
 }
 
