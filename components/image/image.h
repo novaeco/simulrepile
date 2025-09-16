@@ -31,4 +31,14 @@ LV_IMG_DECLARE(gImage_reptile_manger);
 LV_IMG_DECLARE(gImage_reptile_boire);
 LV_IMG_DECLARE(gImage_reptile_chauffer);
 
+/* Terrarium substrate icons */
+LV_IMG_DECLARE(gImage_substrate_sable);
+LV_IMG_DECLARE(gImage_substrate_tropical);
+LV_IMG_DECLARE(gImage_substrate_roche);
+
+/* Terrarium decor icons */
+LV_IMG_DECLARE(gImage_decor_lianes);
+LV_IMG_DECLARE(gImage_decor_rochers);
+LV_IMG_DECLARE(gImage_decor_caverne);
+
 #endif /* __IMAGE_H */

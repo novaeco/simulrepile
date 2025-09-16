@@ -10,6 +10,7 @@ idf_component_register(
         esp_lcd
         fonts
         reptile_logic
+        terrarium_manager
         env_control
         config
         sd
