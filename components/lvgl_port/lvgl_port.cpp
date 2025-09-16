@@ -4,75 +4,22 @@
 #include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include <LovyanGFX.hpp>
 #include <assert.h>
 #include <lvgl.h>
 
 static SemaphoreHandle_t s_lvgl_mutex;
+static bool s_lvgl_port_initialized;
 
-class LGFX : public lgfx::LGFX_Device {
-  lgfx::Panel_RGB _panel;
-  lgfx::Bus_RGB _bus;
-
-public:
-  LGFX() {
-    {
-      auto cfg = _bus.config();
-      cfg.panel_width = 1024;
-      cfg.panel_height = 600;
-      cfg.pin_hsync = 46; // HSYNC
-      cfg.pin_vsync = 3;  // VSYNC
-      cfg.pin_de = 5;     // DE
-      cfg.pin_pclk = 7;   // PCLK
-
-      // RGB565 mapping according to Waveshare ESP32-S3 Touch LCD 7B schematic
-      cfg.pin_r0 = -1;   // R0 (NC)
-      cfg.pin_r1 = -1;   // R1 (NC)
-      cfg.pin_r2 = -1;   // R2 (NC)
-      cfg.pin_r3 = 1;    // R3
-      cfg.pin_r4 = 2;    // R4
-      cfg.pin_r5 = 42;   // R5
-      cfg.pin_r6 = 41;   // R6
-      cfg.pin_r7 = 40;   // R7
-
-      cfg.pin_g0 = -1;   // G0 (NC)
-      cfg.pin_g1 = -1;   // G1 (NC)
-      cfg.pin_g2 = 39;   // G2
-      cfg.pin_g3 = 0;    // G3
-      cfg.pin_g4 = 45;   // G4
-      cfg.pin_g5 = 48;   // G5
-      cfg.pin_g6 = 47;   // G6
-      cfg.pin_g7 = 21;   // G7
-
-      cfg.pin_b0 = -1;   // B0 (NC)
-      cfg.pin_b1 = -1;   // B1 (NC)
-      cfg.pin_b2 = -1;   // B2 (NC)
-      cfg.pin_b3 = 14;   // B3
-      cfg.pin_b4 = 38;   // B4
-      cfg.pin_b5 = 18;   // B5
-      cfg.pin_b6 = 17;   // B6
-      cfg.pin_b7 = 10;   // B7
-      _bus.config(cfg);
-    }
-    {
-      auto cfg = _panel.config();
-      cfg.memory_width = 1024;
-      cfg.memory_height = 600;
-      cfg.panel_width = 1024;
-      cfg.panel_height = 600;
-      _panel.config(cfg);
-    }
-    _panel.setBus(&_bus);
-    setPanel(&_panel);
-  }
-};
-
-static LGFX gfx;
+LGFX &lgfx_get_display(void) {
+  static LGFX display;
+  return display;
+}
 
 static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
                           lv_color_t *color_p) {
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
+  LGFX &gfx = lgfx_get_display();
   gfx.startWrite();
   gfx.setAddrWindow(area->x1, area->y1, w, h);
   gfx.writePixels((lgfx::rgb565_t *)&color_p->full, w * h, true);
@@ -81,7 +28,13 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
 }
 
 void lvgl_port_init(void) {
+  if (s_lvgl_port_initialized) {
+    ESP_LOGW("lvgl", "lvgl_port_init called multiple times; ignoring");
+    return;
+  }
+
   lv_init();
+  LGFX &gfx = lgfx_get_display();
   gfx.init();
 
   s_lvgl_mutex = xSemaphoreCreateRecursiveMutex();
@@ -105,6 +58,7 @@ void lvgl_port_init(void) {
   disp_drv.flush_cb = lvgl_flush_cb;
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
+  s_lvgl_port_initialized = true;
 }
 
 bool lvgl_port_lock(uint32_t timeout_ms) {
