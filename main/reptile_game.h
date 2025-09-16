@@ -19,6 +19,8 @@ bool reptile_game_is_active(void);
 
 void reptile_game_start(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch);
+void reptile_game_prepare_new_game(void);
+void reptile_game_prepare_resume(void);
 
 #ifdef __cplusplus
 }

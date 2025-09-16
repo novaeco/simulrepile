@@ -34,10 +34,13 @@ typedef enum {
   REPTILE_HUMEUR_THRESHOLD = 40,
 } reptile_threshold_t;
 
+enum { REPTILE_SLOT_NAME_MAX = 64 };
+
 esp_err_t reptile_init(reptile_t *r, bool simulation);
 void reptile_update(reptile_t *r, uint32_t elapsed_ms);
 esp_err_t reptile_load(reptile_t *r);
 esp_err_t reptile_save(reptile_t *r);
+esp_err_t reptile_select_save(const char *slot_name, bool simulation);
 void reptile_feed(reptile_t *r);
 void reptile_give_water(reptile_t *r);
 void reptile_heat(reptile_t *r);

@@ -9,20 +9,33 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <string.h>
 
 static const char *TAG = "reptile_logic";
 static bool s_sensors_ready = false;
 static bool s_simulation_mode = false;
 static bool log_once = false;
 
+static char s_sim_slot[REPTILE_SLOT_NAME_MAX] = "reptile_state.bin";
+static char s_real_slot[REPTILE_SLOT_NAME_MAX] = "reptile_state.bin";
+
+static const char *slot_cfg_filename = "slot.cfg";
+
+static void apply_default_slot(bool simulation);
+static void load_slot_cfg(bool simulation);
+static esp_err_t write_slot_cfg(bool simulation);
+static char *get_slot_buffer(bool simulation);
+static const char *get_slot_cfg_path(bool simulation);
+
 static const char *get_save_path(void) {
-  static char path[64];
+  static char path[96];
   const char *base = MOUNT_POINT;
-  if (s_simulation_mode) {
-    snprintf(path, sizeof(path), "%s/sim/reptile_state.bin", base);
-  } else {
-    snprintf(path, sizeof(path), "%s/real/reptile_state.bin", base);
+  const char *slot = s_simulation_mode ? s_sim_slot : s_real_slot;
+  const char *mode_dir = s_simulation_mode ? "sim" : "real";
+  if (!slot || slot[0] == '\0') {
+    slot = "reptile_state.bin";
   }
+  snprintf(path, sizeof(path), "%s/%s/%s", base, mode_dir, slot);
   return path;
 }
 
@@ -46,6 +59,7 @@ esp_err_t reptile_init(reptile_t *r, bool simulation) {
   }
 
   s_simulation_mode = simulation;
+  load_slot_cfg(simulation);
   if (!simulation) {
     esp_err_t err = sensors_init();
     if (err == ESP_OK) {
@@ -61,6 +75,84 @@ esp_err_t reptile_init(reptile_t *r, bool simulation) {
   reptile_set_defaults(r);
 
   return ESP_OK;
+}
+
+static char *get_slot_buffer(bool simulation) {
+  return simulation ? s_sim_slot : s_real_slot;
+}
+
+static void apply_default_slot(bool simulation) {
+  char *buf = get_slot_buffer(simulation);
+  strncpy(buf, "reptile_state.bin", REPTILE_SLOT_NAME_MAX - 1);
+  buf[REPTILE_SLOT_NAME_MAX - 1] = '\0';
+}
+
+static const char *get_slot_cfg_path(bool simulation) {
+  static char path[96];
+  snprintf(path, sizeof(path), "%s/%s/%s", MOUNT_POINT,
+           simulation ? "sim" : "real", slot_cfg_filename);
+  return path;
+}
+
+static esp_err_t write_slot_cfg(bool simulation) {
+  const char *cfg_path = get_slot_cfg_path(simulation);
+  FILE *f = fopen(cfg_path, "w");
+  if (!f) {
+    ESP_LOGW(TAG, "Impossible de persister le slot actif (%s)", cfg_path);
+    return ESP_FAIL;
+  }
+  const char *slot = get_slot_buffer(simulation);
+  if (!slot || slot[0] == '\0') {
+    slot = "reptile_state.bin";
+  }
+  int res = fprintf(f, "%s\n", slot);
+  fclose(f);
+  if (res < 0) {
+    ESP_LOGW(TAG, "Échec d'écriture du slot actif (%s)", cfg_path);
+    return ESP_FAIL;
+  }
+  return ESP_OK;
+}
+
+static void load_slot_cfg(bool simulation) {
+  char *buf = get_slot_buffer(simulation);
+  apply_default_slot(simulation);
+  const char *cfg_path = get_slot_cfg_path(simulation);
+  FILE *f = fopen(cfg_path, "r");
+  if (!f) {
+    (void)write_slot_cfg(simulation);
+    return;
+  }
+  if (fgets(buf, REPTILE_SLOT_NAME_MAX, f)) {
+    size_t len = strcspn(buf, "\r\n");
+    buf[len] = '\0';
+    if (buf[0] == '\0') {
+      apply_default_slot(simulation);
+    }
+  } else {
+    apply_default_slot(simulation);
+  }
+  fclose(f);
+}
+
+esp_err_t reptile_select_save(const char *slot_name, bool simulation) {
+  if (!slot_name || slot_name[0] == '\0') {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (strchr(slot_name, '/') || strchr(slot_name, '\\')) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  char *dest = get_slot_buffer(simulation);
+  size_t len = strlen(slot_name);
+  if (len >= REPTILE_SLOT_NAME_MAX) {
+    len = REPTILE_SLOT_NAME_MAX - 1;
+  }
+  memcpy(dest, slot_name, len);
+  dest[len] = '\0';
+  if (dest[0] == '\0') {
+    apply_default_slot(simulation);
+  }
+  return write_slot_cfg(simulation);
 }
 
 static void reptile_set_defaults(reptile_t *r) {

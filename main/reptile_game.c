@@ -5,9 +5,16 @@
 #include "sleep.h"
 #include "logging.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "game_mode.h"
+#include "sd.h"
+#include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 
 LV_FONT_DECLARE(lv_font_montserrat_24);
 
@@ -42,6 +49,20 @@ static uint32_t soothe_ms_accum;
 
 static const char *TAG = "reptile_game";
 
+#define REPTILE_SAVE_INDEX_FILE "save_index.cfg"
+#define REPTILE_SAVE_PREFIX "reptile_save_"
+#define REPTILE_SAVE_EXT ".bin"
+
+typedef enum {
+  REPTILE_START_AUTO = 0,
+  REPTILE_START_NEW,
+  REPTILE_START_RESUME,
+} reptile_start_mode_t;
+
+static reptile_start_mode_t s_start_mode = REPTILE_START_AUTO;
+static bool s_slot_override_pending;
+static char s_slot_override[REPTILE_SLOT_NAME_MAX];
+
 
 typedef enum {
   ACTION_FEED,
@@ -71,22 +92,141 @@ static void set_bar_color(lv_obj_t *bar, uint32_t value, uint32_t max);
 static void update_sprite(void);
 static void show_action_sprite(action_type_t action);
 static void revert_sprite_cb(lv_timer_t *t);
+static void reptile_set_defaults(reptile_t *state);
+static esp_err_t ensure_save_directory(bool simulation);
+static esp_err_t allocate_new_save_slot(char *slot, size_t len);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
 void reptile_game_init(void) {
 
+  bool start_new = (s_start_mode == REPTILE_START_NEW);
+  bool start_resume = (s_start_mode == REPTILE_START_RESUME);
+
   game_mode_set(GAME_MODE_SIMULATION);
   reptile_init(&reptile, true);
+
+  if (s_slot_override_pending) {
+    esp_err_t slot_err = reptile_select_save(s_slot_override, true);
+    if (slot_err != ESP_OK) {
+      ESP_LOGW(TAG, "Sélection du slot %s impossible (err=0x%x)",
+               s_slot_override, slot_err);
+    } else {
+      ESP_LOGI(TAG, "Slot de sauvegarde actif: %s", s_slot_override);
+    }
+    s_slot_override_pending = false;
+    s_slot_override[0] = '\0';
+  }
+
   last_tick = lv_tick_get();
   update_ms_accum = 0;
   soothe_ms_accum = 0;
-  if (reptile_load(&reptile) != ESP_OK) {
-    reptile_save(&reptile);
+
+  if (start_new) {
+    reptile_set_defaults(&reptile);
+    esp_err_t save_res = reptile_save(&reptile);
+    if (save_res != ESP_OK) {
+      ESP_LOGW(TAG, "Impossible de sauvegarder le nouvel état (err=0x%x)",
+               save_res);
+    }
+  } else {
+    esp_err_t load_res = reptile_load(&reptile);
+    if (load_res != ESP_OK) {
+      if (start_resume) {
+        ESP_LOGW(TAG, "Sauvegarde introuvable, démarrage d'une nouvelle partie");
+      }
+      reptile_set_defaults(&reptile);
+      esp_err_t save_res = reptile_save(&reptile);
+      if (save_res != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "Impossible de persister l'état initial (err=0x%x)", save_res);
+      }
+    }
   }
+
+  s_start_mode = REPTILE_START_AUTO;
 }
 
 const reptile_t *reptile_get_state(void) { return &reptile; }
+
+static void reptile_set_defaults(reptile_t *state) {
+  if (!state) {
+    return;
+  }
+  state->faim = 100;
+  state->eau = 100;
+  state->temperature = 30;
+  state->humidite = 50;
+  state->humeur = 100;
+  state->event = REPTILE_EVENT_NONE;
+  state->last_update = time(NULL);
+}
+
+static esp_err_t ensure_save_directory(bool simulation) {
+  char dir[96];
+  int written = snprintf(dir, sizeof(dir), "%s/%s", MOUNT_POINT,
+                         simulation ? "sim" : "real");
+  if (written < 0 || (size_t)written >= sizeof(dir)) {
+    return ESP_ERR_INVALID_SIZE;
+  }
+  if (mkdir(dir, 0777) != 0) {
+    if (errno != EEXIST) {
+      ESP_LOGW(TAG, "Création du répertoire %s échouée (errno=%d)", dir, errno);
+      return ESP_FAIL;
+    }
+  }
+  return ESP_OK;
+}
+
+static esp_err_t allocate_new_save_slot(char *slot, size_t len) {
+  if (!slot || len == 0) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  esp_err_t err = ensure_save_directory(true);
+  if (err != ESP_OK) {
+    return err;
+  }
+
+  char index_path[128];
+  int written = snprintf(index_path, sizeof(index_path), "%s/sim/%s", MOUNT_POINT,
+                         REPTILE_SAVE_INDEX_FILE);
+  if (written < 0 || (size_t)written >= sizeof(index_path)) {
+    return ESP_ERR_INVALID_SIZE;
+  }
+
+  uint32_t index = 0;
+  FILE *f = fopen(index_path, "r");
+  if (f) {
+    if (fscanf(f, "%u", &index) != 1) {
+      index = 0;
+    }
+    fclose(f);
+  }
+
+  index++;
+  f = fopen(index_path, "w");
+  if (!f) {
+    ESP_LOGW(TAG, "Impossible d'ouvrir %s pour écriture", index_path);
+    return ESP_FAIL;
+  }
+  if (fprintf(f, "%u\n", index) < 0) {
+    ESP_LOGW(TAG, "Impossible d'écrire l'index de sauvegarde dans %s",
+             index_path);
+    fclose(f);
+    return ESP_FAIL;
+  }
+  fclose(f);
+
+  int needed = snprintf(slot, len, REPTILE_SAVE_PREFIX "%04u" REPTILE_SAVE_EXT,
+                        index);
+  if (needed < 0 || (size_t)needed >= len) {
+    if (len > 0) {
+      slot[len - 1] = '\0';
+    }
+    return ESP_ERR_INVALID_SIZE;
+  }
+  return ESP_OK;
+}
 
 static void warning_anim_cb(void *obj, int32_t v) {
   lv_obj_set_style_bg_opa(obj, (lv_opa_t)v, LV_PART_MAIN);
@@ -333,6 +473,27 @@ static void sleep_btn_event_cb(lv_event_t *e) {
   bool enabled = sleep_is_enabled();
   sleep_set_enabled(!enabled);
   lv_label_set_text(lbl_sleep, sleep_is_enabled() ? "Veille ON" : "Veille OFF");
+}
+
+void reptile_game_prepare_new_game(void) {
+  s_start_mode = REPTILE_START_NEW;
+  s_slot_override[0] = '\0';
+  esp_err_t err = allocate_new_save_slot(s_slot_override, sizeof(s_slot_override));
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Allocation d'un nouveau slot échouée (err=0x%x)", err);
+    strncpy(s_slot_override, "reptile_state.bin", sizeof(s_slot_override) - 1);
+    s_slot_override[sizeof(s_slot_override) - 1] = '\0';
+  } else {
+    ESP_LOGI(TAG, "Création d'un nouveau slot de sauvegarde: %s",
+             s_slot_override);
+  }
+  s_slot_override_pending = true;
+}
+
+void reptile_game_prepare_resume(void) {
+  s_start_mode = REPTILE_START_RESUME;
+  s_slot_override_pending = false;
+  s_slot_override[0] = '\0';
 }
 
 void reptile_game_stop(void) {

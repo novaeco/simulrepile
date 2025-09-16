@@ -91,6 +91,22 @@ static void menu_btn_game_cb(lv_event_t *e) {
   start_game_mode();
 }
 
+static void menu_btn_new_game_cb(lv_event_t *e) {
+  (void)e;
+  reptile_game_prepare_new_game();
+  game_mode_set(GAME_MODE_SIMULATION);
+  save_last_mode(APP_MODE_GAME);
+  start_game_mode();
+}
+
+static void menu_btn_resume_cb(lv_event_t *e) {
+  (void)e;
+  reptile_game_prepare_resume();
+  game_mode_set(GAME_MODE_SIMULATION);
+  save_last_mode(APP_MODE_GAME);
+  start_game_mode();
+}
+
 static void menu_btn_real_cb(lv_event_t *e) {
   (void)e;
   game_mode_set(GAME_MODE_REAL);
@@ -347,15 +363,31 @@ void app_main() {
 
     lv_obj_t *btn_game = lv_btn_create(menu_screen);
     lv_obj_set_size(btn_game, 200, 50);
-    lv_obj_align(btn_game, LV_ALIGN_CENTER, 0, -60);
+    lv_obj_align(btn_game, LV_ALIGN_CENTER, 0, -140);
     lv_obj_add_event_cb(btn_game, menu_btn_game_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *label = lv_label_create(btn_game);
     lv_label_set_text(label, "Mode Jeu");
     lv_obj_center(label);
 
+    lv_obj_t *btn_new = lv_btn_create(menu_screen);
+    lv_obj_set_size(btn_new, 200, 50);
+    lv_obj_align(btn_new, LV_ALIGN_CENTER, 0, -70);
+    lv_obj_add_event_cb(btn_new, menu_btn_new_game_cb, LV_EVENT_CLICKED, NULL);
+    label = lv_label_create(btn_new);
+    lv_label_set_text(label, "Nouvelle partie");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_resume = lv_btn_create(menu_screen);
+    lv_obj_set_size(btn_resume, 200, 50);
+    lv_obj_align(btn_resume, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_event_cb(btn_resume, menu_btn_resume_cb, LV_EVENT_CLICKED, NULL);
+    label = lv_label_create(btn_resume);
+    lv_label_set_text(label, "Reprendre");
+    lv_obj_center(label);
+
     lv_obj_t *btn_real = lv_btn_create(menu_screen);
     lv_obj_set_size(btn_real, 200, 50);
-    lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 70);
     lv_obj_add_event_cb(btn_real, menu_btn_real_cb, LV_EVENT_CLICKED, NULL);
     label = lv_label_create(btn_real);
     lv_label_set_text(label, "Mode R\u00e9el");
@@ -363,7 +395,7 @@ void app_main() {
 
     lv_obj_t *btn_settings = lv_btn_create(menu_screen);
     lv_obj_set_size(btn_settings, 200, 50);
-    lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 60);
+    lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 140);
     lv_obj_add_event_cb(btn_settings, menu_btn_settings_cb, LV_EVENT_CLICKED,
                         NULL);
     label = lv_label_create(btn_settings);
