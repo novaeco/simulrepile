@@ -35,14 +35,14 @@ static void logging_timer_cb(lv_timer_t *t)
     }
     time_t now = time(NULL);
     fprintf(f,
-            "%ld,%s,%lld,%u,%u,%u,%u,%lld,%lld,%lld\n",
+            "%ld,%s,%lld,%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%lld,%lld,%lld\n",
             (long)now,
             facility->slot,
             (long long)facility->economy.cash_cents,
-            metrics.occupied,
-            facility->alerts_active,
-            facility->pathology_active,
-            facility->compliance_alerts,
+            (uint32_t)metrics.occupied,
+            (uint32_t)facility->alerts_active,
+            (uint32_t)facility->pathology_active,
+            (uint32_t)facility->compliance_alerts,
             (long long)facility->economy.daily_income_cents,
             (long long)facility->economy.daily_expenses_cents,
             (long long)facility->economy.fines_cents);
