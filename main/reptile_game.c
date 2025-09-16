@@ -1502,7 +1502,3 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_scr_load(screen_main);
   ensure_species_profile();
 }
-
-  screen_main = lv_obj_create(NULL);
-  screen_stats = lv_obj_create(NULL);
-
