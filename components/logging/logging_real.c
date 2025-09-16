@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -110,7 +111,7 @@ void logging_real_append(size_t terrarium_index, const reptile_env_terrarium_sta
     time_t now = time(NULL);
     float total = state->energy_heat_Wh + state->energy_pump_Wh + state->energy_uv_Wh;
     fprintf(f,
-            "%ld,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%u\n",
+            "%ld,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%" PRIu32 "\n",
             (long)now,
             state->temperature_c,
             state->humidity_pct,
