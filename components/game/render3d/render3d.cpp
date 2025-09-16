@@ -1,11 +1,15 @@
 #include <LovyanGFX.hpp>
 #include <cstdio>
-#include "render3d.h"
 #include "assets.h"
+#include "esp_log.h"
+#include "lvgl_port.h"
+#include "render3d.h"
 
 using namespace lgfx;
 
-static LGFX lcd;
+static const char *TAG = "render3d";
+
+static LGFX &lcd = lgfx_get_display();
 static LGFX_Sprite terrarium_sprite(&lcd);
 static LGFX_Sprite decor_sprite(&lcd);
 static LGFX_Sprite reptile_sprite(&lcd);
@@ -21,22 +25,55 @@ extern const unsigned char _binary_assets_textures_decor_bin_end[];
 extern const unsigned char _binary_assets_textures_reptile_bin_start[];
 extern const unsigned char _binary_assets_textures_reptile_bin_end[];
 
-static bool load_texture(asset_blob_t *asset, const char *sd_path,
+static bool load_texture(const char *label, asset_blob_t *asset, const char *sd_path,
                          const unsigned char *blob_start, const unsigned char *blob_end)
 {
     if (assets_load_sd(sd_path, asset)) {
+        ESP_LOGI(TAG, "%s texture loaded from SD path '%s' (%zu bytes)",
+                 label, sd_path, asset->size);
         return true;
     }
-    size_t size = blob_end - blob_start;
-    return assets_load_embedded(blob_start, size, asset);
+
+    ESP_LOGW(TAG, "Unable to load %s texture from SD path '%s', falling back to embedded data",
+             label, sd_path);
+
+    size_t size = 0;
+    if (blob_end > blob_start) {
+        size = (size_t)(blob_end - blob_start);
+    }
+    if (size == 0) {
+        ESP_LOGE(TAG, "Embedded blob for %s texture is empty; using solid color fallback",
+                 label);
+        asset->data = nullptr;
+        asset->size = 0;
+        return false;
+    }
+
+    if (assets_load_embedded(blob_start, size, asset)) {
+        ESP_LOGI(TAG, "%s texture loaded from embedded blob (%zu bytes)",
+                 label, asset->size);
+        return true;
+    }
+
+    ESP_LOGE(TAG, "Failed to load embedded blob for %s texture (%zu bytes); using solid color fallback",
+             label, size);
+    asset->data = nullptr;
+    asset->size = 0;
+    return false;
 }
 
 static void init_sprite_with_texture(LGFX_Sprite &spr, int w, int h, uint16_t color,
-                                    asset_blob_t *tex)
+                                    const char *label, const asset_blob_t *tex)
 {
     init_sprite(spr, w, h, color);
-    if (tex->data && tex->size >= (size_t)(w * h * 2)) {
+    size_t required = (size_t)w * h * sizeof(uint16_t);
+    if (tex && tex->data && tex->size >= required) {
         spr.pushImage(0, 0, w, h, (const uint16_t *)tex->data);
+    } else {
+        size_t available = (tex && tex->data) ? tex->size : 0;
+        ESP_LOGW(TAG,
+                 "Using solid color fallback for %s sprite (texture missing or insufficient: %zu/%zu bytes)",
+                 label, available, required);
     }
 }
 
@@ -79,19 +116,22 @@ void render_terrarium(Terrarium *t, Camera *cam)
     int16_t cam_y = cam ? (int16_t)(-cam->y * zoom) : 0;
 
     if (!terrarium_sprite.created()) {
-        load_texture(&terrarium_tex, "/sdcard/textures/terrarium.bin",
+        load_texture("terrarium", &terrarium_tex, "/sdcard/textures/terrarium.bin",
                      _binary_assets_textures_terrarium_bin_start,
                      _binary_assets_textures_terrarium_bin_end);
-        load_texture(&decor_tex, "/sdcard/textures/decor.bin",
+        load_texture("decor", &decor_tex, "/sdcard/textures/decor.bin",
                      _binary_assets_textures_decor_bin_start,
                      _binary_assets_textures_decor_bin_end);
-        load_texture(&reptile_tex, "/sdcard/textures/reptile.bin",
+        load_texture("reptile", &reptile_tex, "/sdcard/textures/reptile.bin",
                      _binary_assets_textures_reptile_bin_start,
                      _binary_assets_textures_reptile_bin_end);
 
-        init_sprite_with_texture(terrarium_sprite, 160, 120, TFT_BROWN, &terrarium_tex);
-        init_sprite_with_texture(decor_sprite,     40,  40,  TFT_DARKGREEN, &decor_tex);
-        init_sprite_with_texture(reptile_sprite,   40,  20,  TFT_RED, &reptile_tex);
+        init_sprite_with_texture(terrarium_sprite, 160, 120, TFT_BROWN,
+                                 "terrarium", &terrarium_tex);
+        init_sprite_with_texture(decor_sprite,     40,  40,  TFT_DARKGREEN,
+                                 "decor", &decor_tex);
+        init_sprite_with_texture(reptile_sprite,   40,  20,  TFT_RED,
+                                 "reptile", &reptile_tex);
     }
 
     lcd.startWrite();
