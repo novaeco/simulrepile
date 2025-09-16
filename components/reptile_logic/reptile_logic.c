@@ -1,10 +1,10 @@
 #include "reptile_logic.h"
 #include "esp_log.h"
-#include "esp_random.h"
 #include "gpio.h"
 #include "sensors.h"
 #include "sd.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include <math.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -15,6 +15,11 @@ static const char *TAG = "reptile_logic";
 static bool s_sensors_ready = false;
 static bool s_simulation_mode = false;
 static bool log_once = false;
+
+#define REPTILE_MS_PER_DAY ((uint32_t)REPTILE_MINUTES_PER_DAY * REPTILE_MS_PER_MINUTE)
+
+static const double REPTILE_PI = 3.14159265358979323846;
+static const double REPTILE_TWO_PI = 6.28318530717958647692;
 
 static char s_sim_slot[REPTILE_SLOT_NAME_MAX] = "reptile_state.bin";
 static char s_real_slot[REPTILE_SLOT_NAME_MAX] = "reptile_state.bin";
@@ -46,6 +51,35 @@ static void reptile_apply_thresholds(reptile_t *r,
 static uint32_t clamp_u32(uint32_t value, uint32_t min_value,
                           uint32_t max_value);
 static uint32_t midpoint_u32(uint32_t min_value, uint32_t max_value);
+static void reptile_normalize_clock(reptile_clock_t *clock);
+static uint32_t to_u32_positive(double value);
+
+typedef struct {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t reserved;
+} reptile_save_header_t;
+
+typedef struct {
+  reptile_save_header_t header;
+  reptile_t reptile;
+} reptile_save_v2_t;
+
+typedef struct {
+  uint32_t faim;
+  uint32_t eau;
+  uint32_t temperature;
+  uint32_t humidite;
+  uint32_t uv_index;
+  uint32_t humeur;
+  reptile_event_t event;
+  time_t last_update;
+  reptile_environment_thresholds_t thresholds;
+  char species_id[REPTILE_SPECIES_ID_MAX_LEN];
+} reptile_save_legacy_t;
+
+#define REPTILE_SAVE_MAGIC 0x5250544CUL /* 'RPTL' */
+#define REPTILE_SAVE_VERSION 2U
 
 esp_err_t reptile_init(reptile_t *r, bool simulation) {
   if (!r) {
@@ -179,6 +213,32 @@ static uint32_t midpoint_u32(uint32_t min_value, uint32_t max_value) {
   return min_value + (max_value - min_value) / 2U;
 }
 
+static void reptile_normalize_clock(reptile_clock_t *clock) {
+  if (!clock) {
+    return;
+  }
+  uint64_t total_ms = (uint64_t)clock->minutes_of_day * REPTILE_MS_PER_MINUTE +
+                      (uint64_t)clock->minute_ms;
+  if (total_ms >= REPTILE_MS_PER_DAY) {
+    uint32_t extra_days = (uint32_t)(total_ms / REPTILE_MS_PER_DAY);
+    clock->days += extra_days;
+    total_ms -= (uint64_t)extra_days * REPTILE_MS_PER_DAY;
+  }
+  clock->minutes_of_day = (uint32_t)(total_ms / REPTILE_MS_PER_MINUTE);
+  clock->minute_ms = (uint32_t)(total_ms % REPTILE_MS_PER_MINUTE);
+}
+
+static uint32_t to_u32_positive(double value) {
+  if (value <= 0.0) {
+    return 0U;
+  }
+  double rounded = value + 0.5;
+  if (rounded > (double)UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  return (uint32_t)rounded;
+}
+
 static void reptile_apply_thresholds(reptile_t *r,
                                      const reptile_environment_thresholds_t *t) {
   if (!r || !t) {
@@ -229,6 +289,13 @@ static void reptile_set_defaults(reptile_t *r) {
   r->event = REPTILE_EVENT_NONE;
   r->last_update = time(NULL);
   r->species_id[0] = '\0';
+  r->economy.solde = 0;
+  r->economy.revenus_hebdomadaires = 0;
+  r->economy.depenses = 0;
+  r->clock.days = 0;
+  r->clock.minutes_of_day = 8U * 60U;
+  r->clock.minute_ms = 0;
+  (void)reptile_cycle_step(r, 0);
 }
 
 void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
@@ -242,29 +309,11 @@ void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
   r->eau = (r->eau > decay) ? (r->eau - decay) : 0;
   r->humeur = (r->humeur > decay) ? (r->humeur - decay) : 0;
 
-  if (s_simulation_mode) {
-    const reptile_environment_thresholds_t *th = &r->thresholds;
-    uint32_t randv = esp_random();
-    uint32_t temp_range =
-        (uint32_t)(th->temperature_max_c - th->temperature_min_c + 5U);
-    uint32_t temp_base =
-        (th->temperature_min_c > 2U) ? (th->temperature_min_c - 2U) : 0U;
-    r->temperature = temp_base + (randv % (temp_range + 1U));
+  if (s_simulation_mode || !s_sensors_ready) {
+    (void)reptile_cycle_step(r, 0);
+  }
 
-    randv = esp_random();
-    uint32_t hum_range =
-        (uint32_t)(th->humidity_max_pct - th->humidity_min_pct + 10U);
-    uint32_t hum_base =
-        (th->humidity_min_pct > 5U) ? (th->humidity_min_pct - 5U) : 0U;
-    r->humidite = hum_base + (randv % (hum_range + 1U));
-
-    randv = esp_random();
-    uint32_t uv_range =
-        (uint32_t)(th->uv_index_max - th->uv_index_min + 3U);
-    uint32_t uv_base =
-        (th->uv_index_min > 1U) ? (th->uv_index_min - 1U) : 0U;
-    r->uv_index = uv_base + (randv % (uv_range + 1U));
-  } else if (s_sensors_ready) {
+  if (!s_simulation_mode && s_sensors_ready) {
 
     float temp = sensors_read_temperature();
     float hum = sensors_read_humidity();
@@ -296,15 +345,22 @@ esp_err_t reptile_save(reptile_t *r) {
   if (!r) {
     return ESP_ERR_INVALID_ARG;
   }
+  reptile_normalize_clock(&r->clock);
   const char *path = get_save_path();
   FILE *f = fopen(path, "wb");
   if (!f) {
     ESP_LOGE(TAG, "Impossible d'ouvrir le fichier de sauvegarde SD");
     return ESP_FAIL;
   }
-  size_t written = fwrite(r, sizeof(reptile_t), 1, f);
+  reptile_save_v2_t blob = {
+      .header = {.magic = REPTILE_SAVE_MAGIC,
+                 .version = REPTILE_SAVE_VERSION,
+                 .reserved = 0},
+      .reptile = *r,
+  };
+  size_t written = fwrite(&blob, sizeof(blob), 1, f);
   fclose(f);
-  if (written != 1) {
+  if (written != 1U) {
     ESP_LOGE(TAG, "Écriture incomplète de la sauvegarde SD");
     return ESP_FAIL;
   }
@@ -320,10 +376,49 @@ esp_err_t reptile_load(reptile_t *r) {
   if (!f) {
     return ESP_FAIL;
   }
-  size_t read = fread(r, 1, sizeof(reptile_t), f);
-  fclose(f);
-  return (read == sizeof(reptile_t)) ? ESP_OK : ESP_FAIL;
+  reptile_save_header_t header;
+  size_t read = fread(&header, sizeof(header), 1, f);
+  if (read == 1U && header.magic == REPTILE_SAVE_MAGIC) {
+    if (header.version != REPTILE_SAVE_VERSION) {
+      fclose(f);
+      return ESP_FAIL;
+    }
+    reptile_t tmp;
+    if (fread(&tmp, sizeof(tmp), 1, f) != 1U) {
+      fclose(f);
+      return ESP_FAIL;
+    }
+    fclose(f);
+    *r = tmp;
+    reptile_normalize_clock(&r->clock);
+    return ESP_OK;
+  }
 
+  /* Legacy format without header */
+  if (fseek(f, 0, SEEK_SET) != 0) {
+    fclose(f);
+    return ESP_FAIL;
+  }
+  reptile_save_legacy_t legacy;
+  if (fread(&legacy, sizeof(legacy), 1, f) != 1U) {
+    fclose(f);
+    return ESP_FAIL;
+  }
+  fclose(f);
+
+  reptile_set_defaults(r);
+  r->faim = legacy.faim;
+  r->eau = legacy.eau;
+  r->temperature = legacy.temperature;
+  r->humidite = legacy.humidite;
+  r->uv_index = legacy.uv_index;
+  r->humeur = legacy.humeur;
+  r->event = legacy.event;
+  r->last_update = legacy.last_update;
+  reptile_apply_thresholds(r, &legacy.thresholds);
+  memcpy(r->species_id, legacy.species_id, sizeof(r->species_id));
+  r->species_id[sizeof(r->species_id) - 1U] = '\0';
+  return ESP_OK;
 }
 
 void reptile_feed(reptile_t *r) {
@@ -422,6 +517,94 @@ void reptile_get_thresholds(const reptile_t *r,
   *out = r->thresholds;
 }
 
+bool reptile_cycle_step(reptile_t *r, uint32_t elapsed_ms) {
+  if (!r) {
+    return false;
+  }
+
+  reptile_clock_t *clock = &r->clock;
+  uint32_t prev_days = clock->days;
+  uint32_t prev_minutes = clock->minutes_of_day;
+
+  reptile_normalize_clock(clock);
+
+  uint64_t day_ms = (uint64_t)clock->minutes_of_day * REPTILE_MS_PER_MINUTE +
+                    (uint64_t)clock->minute_ms;
+  day_ms += (uint64_t)elapsed_ms;
+  uint32_t added_days = (uint32_t)(day_ms / REPTILE_MS_PER_DAY);
+  uint64_t remainder_ms = day_ms % REPTILE_MS_PER_DAY;
+  clock->days += added_days;
+  clock->minutes_of_day = (uint32_t)(remainder_ms / REPTILE_MS_PER_MINUTE);
+  clock->minute_ms = (uint32_t)(remainder_ms % REPTILE_MS_PER_MINUTE);
+
+  bool time_changed = (clock->minutes_of_day != prev_minutes) ||
+                      (clock->days != prev_days);
+
+  bool env_changed = false;
+  if (s_simulation_mode || !s_sensors_ready) {
+    const reptile_environment_thresholds_t *th = &r->thresholds;
+    double day_fraction = (double)remainder_ms / (double)REPTILE_MS_PER_DAY;
+    double cos_phase = cos(day_fraction * REPTILE_TWO_PI - REPTILE_PI);
+
+    double temp_mid =
+        ((double)th->temperature_min_c + (double)th->temperature_max_c) * 0.5;
+    double temp_amp =
+        ((double)th->temperature_max_c - (double)th->temperature_min_c) * 0.5;
+    double hum_mid =
+        ((double)th->humidity_min_pct + (double)th->humidity_max_pct) * 0.5;
+    double hum_amp =
+        ((double)th->humidity_max_pct - (double)th->humidity_min_pct) * 0.5;
+    double uv_base = (double)th->uv_index_min;
+    double uv_span = (double)(th->uv_index_max - th->uv_index_min);
+
+    double temp_value = temp_mid + temp_amp * cos_phase;
+    double hum_value = hum_mid - hum_amp * cos_phase;
+    double daylight = cos_phase;
+    if (daylight < 0.0) {
+      daylight = 0.0;
+    }
+    double uv_value = uv_base + uv_span * daylight;
+
+    uint32_t new_temp = clamp_u32(to_u32_positive(temp_value),
+                                  th->temperature_min_c,
+                                  th->temperature_max_c);
+    uint32_t new_hum = clamp_u32(to_u32_positive(hum_value),
+                                 th->humidity_min_pct,
+                                 th->humidity_max_pct);
+    uint32_t new_uv = clamp_u32(to_u32_positive(uv_value), th->uv_index_min,
+                                th->uv_index_max);
+
+    if (new_temp != r->temperature) {
+      r->temperature = new_temp;
+      env_changed = true;
+    }
+    if (new_hum != r->humidite) {
+      r->humidite = new_hum;
+      env_changed = true;
+    }
+    if (new_uv != r->uv_index) {
+      r->uv_index = new_uv;
+      env_changed = true;
+    }
+  }
+
+  return env_changed || time_changed;
+}
+
+uint32_t reptile_clock_minutes_of_day(const reptile_t *r) {
+  if (!r) {
+    return 0U;
+  }
+  return r->clock.minutes_of_day % REPTILE_MINUTES_PER_DAY;
+}
+
+uint32_t reptile_clock_days(const reptile_t *r) {
+  if (!r) {
+    return 0U;
+  }
+  return r->clock.days;
+}
+
 esp_err_t reptile_apply_species_profile(reptile_t *r,
                                         const species_db_entry_t *species) {
   if (!r || !species) {
@@ -453,6 +636,7 @@ esp_err_t reptile_apply_species_profile(reptile_t *r,
       midpoint_u32(r->thresholds.uv_index_min, r->thresholds.uv_index_max);
   r->uv_index = clamp_u32(uv_mid, r->thresholds.uv_index_min,
                           r->thresholds.uv_index_max);
+  (void)reptile_cycle_step(r, 0);
   return ESP_OK;
 }
 
@@ -468,6 +652,7 @@ esp_err_t reptile_clear_species_profile(reptile_t *r) {
       midpoint_u32(r->thresholds.humidity_min_pct, r->thresholds.humidity_max_pct);
   r->uv_index =
       midpoint_u32(r->thresholds.uv_index_min, r->thresholds.uv_index_max);
+  (void)reptile_cycle_step(r, 0);
   return ESP_OK;
 }
 
