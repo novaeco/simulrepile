@@ -2,9 +2,13 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <LovyanGFX.hpp>
 #include <assert.h>
 #include <lvgl.h>
+
+static SemaphoreHandle_t s_lvgl_mutex;
 
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_RGB _panel;
@@ -80,6 +84,9 @@ void lvgl_port_init(void) {
   lv_init();
   gfx.init();
 
+  s_lvgl_mutex = xSemaphoreCreateRecursiveMutex();
+  assert(s_lvgl_mutex != nullptr);
+
   size_t buf_sz = 1024 * 40; // 1/15 of screen
   lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
       buf_sz * sizeof(lv_color_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -98,4 +105,20 @@ void lvgl_port_init(void) {
   disp_drv.flush_cb = lvgl_flush_cb;
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
+}
+
+bool lvgl_port_lock(uint32_t timeout_ms) {
+  if (s_lvgl_mutex == nullptr) {
+    return false;
+  }
+  TickType_t timeout_ticks = timeout_ms == LVGL_PORT_LOCK_INFINITE
+                                 ? portMAX_DELAY
+                                 : pdMS_TO_TICKS(timeout_ms);
+  return xSemaphoreTakeRecursive(s_lvgl_mutex, timeout_ticks) == pdTRUE;
+}
+
+void lvgl_port_unlock(void) {
+  if (s_lvgl_mutex != nullptr) {
+    xSemaphoreGiveRecursive(s_lvgl_mutex);
+  }
 }

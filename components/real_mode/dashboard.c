@@ -300,6 +300,11 @@ void dashboard_show(void)
 
 void dashboard_update(const sensor_data_t *data)
 {
+    /*
+     * IMPORTANT: cette fonction manipule des objets LVGL. Tout appel depuis un
+     * autre task que celui exécutant lv_timer_handler() doit être effectué sous
+     * protection lvgl_port_lock()/lvgl_port_unlock().
+     */
     if (data) {
         s_last_data = *data;
         s_has_data = true;
@@ -309,6 +314,7 @@ void dashboard_update(const sensor_data_t *data)
 
 void dashboard_set_device_status(size_t terrarium_idx, const terrarium_device_status_t *status)
 {
+    /* Voir la remarque sur dashboard_update() concernant le verrou LVGL. */
     if (terrarium_idx != 0 || !status) {
         return;
     }

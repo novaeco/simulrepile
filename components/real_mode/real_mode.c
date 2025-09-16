@@ -2,6 +2,7 @@
 #include "sensors.h"
 #include "actuators.h"
 #include "dashboard.h"
+#include "lvgl_port.h"
 #include "logging.h"
 #include "esp_log.h"
 #include <string.h>
@@ -115,7 +116,18 @@ void real_mode_loop(void *arg)
                 ESP_LOGW(TAG, "Commande actionneurs terrarium %d: %s", (int)i, esp_err_to_name(aret));
             }
 
-            dashboard_update(&data);
+            /*
+             * LVGL n'est pas thread-safe : toute mise à jour de l'UI depuis
+             * cette boucle (task distinct du handler LVGL) doit se faire sous
+             * lvgl_port_lock(). Un délai court suffit car le thread GUI ne
+             * garde le verrou que quelques millisecondes.
+             */
+            if (lvgl_port_lock(50)) {
+                dashboard_update(&data);
+                lvgl_port_unlock();
+            } else {
+                ESP_LOGW(TAG, "Impossible d'obtenir le verrou LVGL pour mettre à jour le tableau de bord");
+            }
 
             if (sret == ESP_OK) {
                 esp_err_t lret = logging_write(i, &g_terrariums[i], &data);
