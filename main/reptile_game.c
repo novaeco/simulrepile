@@ -3,6 +3,7 @@
 #include "image.h"
 #include "lvgl_port.h"
 #include "terrarium_manager.h"
+#include "species_db.h"
 #include "sleep.h"
 #include "logging.h"
 #include "esp_log.h"
@@ -29,6 +30,7 @@ static lv_obj_t *bar_eau;
 static lv_obj_t *bar_temp;
 static lv_obj_t *bar_humeur;
 static lv_obj_t *bar_humidite;
+static lv_obj_t *bar_uv;
 static lv_obj_t *img_reptile;
 static bool sprite_is_happy;
 static bool s_game_active;
@@ -37,8 +39,13 @@ static lv_obj_t *label_stat_eau;
 static lv_obj_t *label_stat_temp;
 static lv_obj_t *label_stat_humeur;
 static lv_obj_t *label_stat_humidite;
+static lv_obj_t *label_stat_uv;
 static lv_obj_t *lbl_sleep;
 static lv_obj_t *label_terrarium_name;
+static lv_obj_t *label_species_name;
+static lv_obj_t *label_species_legal;
+static lv_obj_t *label_species_cert;
+static lv_obj_t *btn_species_select;
 static terrarium_t *s_active_terrarium;
 
 typedef struct {
@@ -72,6 +79,11 @@ typedef enum {
 static reptile_start_mode_t s_start_mode = REPTILE_START_AUTO;
 static bool s_slot_override_pending;
 static char s_slot_override[REPTILE_SLOT_NAME_MAX];
+static lv_obj_t *modal_species;
+static lv_obj_t *list_species;
+static lv_obj_t *label_species_details;
+static lv_obj_t *btn_species_confirm;
+static const species_db_entry_t *species_candidate;
 
 
 typedef enum {
@@ -98,7 +110,10 @@ static void terrarium_tile_event_cb(lv_event_t *e);
 static void ui_update_main(void);
 static void ui_update_stats(void);
 static void show_event_popup(reptile_event_t event);
-static void set_bar_color(lv_obj_t *bar, uint32_t value, uint32_t max);
+static void set_generic_bar_color(lv_obj_t *bar, uint32_t value,
+                                  uint32_t max);
+static void set_range_bar_color(lv_obj_t *bar, uint32_t value,
+                                uint32_t min, uint32_t max);
 static void update_sprite(void);
 static void show_action_sprite(action_type_t action);
 static void revert_sprite_cb(lv_timer_t *t);
@@ -107,6 +122,16 @@ static void sync_active_runtime(void);
 static void refresh_tile_styles(void);
 static esp_err_t ensure_save_directory(bool simulation);
 static esp_err_t allocate_new_save_slot(char *slot, size_t len);
+static void update_species_labels(void);
+static bool certificate_is_available(const species_db_entry_t *species);
+static void show_species_selection_modal(bool forced);
+static void hide_species_selection_modal(void);
+static void species_btn_event_cb(lv_event_t *e);
+static void species_select_event_cb(lv_event_t *e);
+static void species_confirm_event_cb(lv_event_t *e);
+static void species_cancel_event_cb(lv_event_t *e);
+static bool terrarium_requires_species_selection(const terrarium_t *terrarium);
+static void ensure_species_profile(void);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -321,31 +346,297 @@ static void show_event_popup(reptile_event_t event) {
   lv_obj_center(mbox);
 }
 
-static void set_bar_color(lv_obj_t *bar, uint32_t value, uint32_t max) {
+static void set_generic_bar_color(lv_obj_t *bar, uint32_t value, uint32_t max) {
+  if (!bar || max == 0U) {
+    return;
+  }
+  uint32_t pct = (value * 100U) / max;
   lv_color_t palette_color;
-
-  if (bar == bar_temp) {
-    if (value < REPTILE_TEMP_THRESHOLD_LOW ||
-        value > REPTILE_TEMP_THRESHOLD_HIGH) {
-      palette_color = lv_palette_main(LV_PALETTE_RED);
-    } else if (value <= REPTILE_TEMP_THRESHOLD_LOW + 1 ||
-               value >= REPTILE_TEMP_THRESHOLD_HIGH - 1) {
-      palette_color = lv_palette_main(LV_PALETTE_YELLOW);
-    } else {
-      palette_color = lv_palette_main(LV_PALETTE_GREEN);
-    }
+  if (pct > 70U) {
+    palette_color = lv_palette_main(LV_PALETTE_GREEN);
+  } else if (pct > 30U) {
+    palette_color = lv_palette_main(LV_PALETTE_YELLOW);
   } else {
-    uint32_t pct = (value * 100) / max;
-    if (pct > 70) {
-      palette_color = lv_palette_main(LV_PALETTE_GREEN);
-    } else if (pct > 30) {
+    palette_color = lv_palette_main(LV_PALETTE_RED);
+  }
+  lv_obj_set_style_bg_color(bar, palette_color, LV_PART_INDICATOR);
+}
+
+static void set_range_bar_color(lv_obj_t *bar, uint32_t value, uint32_t min,
+                                uint32_t max) {
+  if (!bar) {
+    return;
+  }
+  lv_color_t palette_color;
+  if (max <= min) {
+    palette_color = (value == min) ? lv_palette_main(LV_PALETTE_GREEN)
+                                   : lv_palette_main(LV_PALETTE_RED);
+  } else if (value < min || value > max) {
+    palette_color = lv_palette_main(LV_PALETTE_RED);
+  } else {
+    uint32_t span = max - min;
+    uint32_t offset = value - min;
+    uint32_t margin = (span >= 4U) ? (span / 4U) : 1U;
+    if (offset <= margin || (max - value) <= margin) {
       palette_color = lv_palette_main(LV_PALETTE_YELLOW);
     } else {
-      palette_color = lv_palette_main(LV_PALETTE_RED);
+      palette_color = lv_palette_main(LV_PALETTE_GREEN);
     }
   }
-
   lv_obj_set_style_bg_color(bar, palette_color, LV_PART_INDICATOR);
+}
+
+static bool certificate_is_available(const species_db_entry_t *species) {
+  if (!species) {
+    return true;
+  }
+  if (!species->certificate_required) {
+    return true;
+  }
+  if (!species->certificate_code || species->certificate_code[0] == '\0') {
+    return false;
+  }
+  char path[256];
+  static const char *exts[] = {".pdf", ".crt", ".cer"};
+  for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); ++i) {
+    int written = snprintf(path, sizeof(path), "%s/certificates/%s%s", MOUNT_POINT,
+                           species->certificate_code, exts[i]);
+    if (written <= 0 || (size_t)written >= sizeof(path)) {
+      continue;
+    }
+    struct stat st = {0};
+    if (stat(path, &st) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void update_species_labels(void) {
+  if (!label_species_name || !label_species_legal || !label_species_cert) {
+    return;
+  }
+  const species_db_entry_t *species =
+      s_active_terrarium ? terrarium_manager_get_species(s_active_terrarium)
+                         : NULL;
+  if (!species) {
+    lv_label_set_text(label_species_name, "Espèce : aucune");
+    lv_label_set_text(label_species_legal,
+                      "Réf.: non définie\nDimensions min : --");
+    lv_label_set_text(label_species_cert, "Certificat : non requis");
+    return;
+  }
+  lv_label_set_text_fmt(label_species_name, "Espèce : %s (%s)",
+                        species->common_name, species->scientific_name);
+  lv_label_set_text_fmt(label_species_legal,
+                        "Réf.: %s\nMin : %ucm x %ucm x %ucm",
+                        species->legal_reference, species->terrarium_min.length_cm,
+                        species->terrarium_min.width_cm,
+                        species->terrarium_min.height_cm);
+  bool cert_ok = certificate_is_available(species);
+  if (species->certificate_required) {
+    lv_label_set_text_fmt(label_species_cert, "Certificat %s : %s",
+                          species->certificate_code,
+                          cert_ok ? "✅ disponible" : "⚠️ absent");
+  } else {
+    lv_label_set_text(label_species_cert, "Certificat : non requis");
+  }
+}
+
+static void populate_species_details(const species_db_entry_t *species) {
+  if (!label_species_details) {
+    return;
+  }
+  if (!species) {
+    lv_label_set_text(label_species_details,
+                      "Sélectionnez une espèce pour voir le détail.");
+    return;
+  }
+  bool cert_ok = certificate_is_available(species);
+  char buf[320];
+  snprintf(buf, sizeof(buf),
+           "%s (%s)\nTerrarium min : %ucm x %ucm x %ucm\nTemp : %u-%u °C\nHumidité : %u-%u %%\nUV : %u-%u\nRéférence : %s\nCertificat : %s",
+           species->common_name, species->scientific_name,
+           species->terrarium_min.length_cm, species->terrarium_min.width_cm,
+           species->terrarium_min.height_cm, species->environment.temperature_min_c,
+           species->environment.temperature_max_c,
+           species->environment.humidity_min_pct,
+           species->environment.humidity_max_pct, species->environment.uv_index_min,
+           species->environment.uv_index_max,
+           species->legal_reference,
+           species->certificate_required
+               ? (cert_ok ? "Disponible" : "Absent")
+               : "Non requis");
+  lv_label_set_text(label_species_details, buf);
+}
+
+static void hide_species_selection_modal(void) {
+  if (modal_species) {
+    lv_obj_del(modal_species);
+    modal_species = NULL;
+    list_species = NULL;
+    label_species_details = NULL;
+    btn_species_confirm = NULL;
+    species_candidate = NULL;
+  }
+}
+
+static void show_species_selection_modal(bool forced) {
+  if (modal_species || !s_active_terrarium) {
+    return;
+  }
+  species_candidate = NULL;
+
+  modal_species = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(modal_species, LV_PCT(80), LV_PCT(80));
+  lv_obj_center(modal_species);
+  lv_obj_add_flag(modal_species, LV_OBJ_FLAG_MODAL);
+  lv_obj_set_style_pad_all(modal_species, 12, 0);
+  lv_obj_set_style_pad_gap(modal_species, 12, 0);
+  lv_obj_set_style_bg_color(modal_species, lv_palette_lighten(LV_PALETTE_GREY, 1),
+                            LV_PART_MAIN);
+  lv_obj_set_flex_flow(modal_species, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *title = lv_label_create(modal_species);
+  lv_obj_add_style(title, &style_font24, 0);
+  lv_label_set_text(title, forced ? "Sélection d'espèce requise"
+                                  : "Choisir une espèce autorisée");
+
+  list_species = lv_list_create(modal_species);
+  lv_obj_set_size(list_species, LV_PCT(100), LV_PCT(50));
+
+  const terrarium_config_t *cfg = &s_active_terrarium->config;
+  bool has_option = false;
+  for (size_t i = 0; i < species_db_count(); ++i) {
+    const species_db_entry_t *species = species_db_get(i);
+    if (!species_db_dimensions_satisfied(species, cfg->dimensions.length_cm,
+                                         cfg->dimensions.width_cm,
+                                         cfg->dimensions.height_cm)) {
+      continue;
+    }
+    bool cert_ok = certificate_is_available(species);
+    char item[160];
+    snprintf(item, sizeof(item), "%s (%s)%s", species->common_name,
+             species->scientific_name,
+             (!cert_ok && species->certificate_required) ? " ⚠️" : "");
+    lv_obj_t *btn = lv_list_add_btn(list_species, NULL, item);
+    lv_obj_add_event_cb(btn, species_select_event_cb, LV_EVENT_CLICKED,
+                        (void *)species);
+    has_option = true;
+  }
+
+  label_species_details = lv_label_create(modal_species);
+  lv_obj_align(label_species_details, LV_ALIGN_TOP_LEFT, 0, 0);
+  populate_species_details(NULL);
+
+  lv_obj_t *actions = lv_obj_create(modal_species);
+  lv_obj_remove_flag(actions, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(actions, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(actions, 12, 0);
+
+  btn_species_confirm = lv_btn_create(actions);
+  lv_obj_set_width(btn_species_confirm, 150);
+  lv_obj_add_event_cb(btn_species_confirm, species_confirm_event_cb,
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_add_state(btn_species_confirm, LV_STATE_DISABLED);
+  lv_obj_t *lbl_confirm = lv_label_create(btn_species_confirm);
+  lv_obj_add_style(lbl_confirm, &style_font24, 0);
+  lv_label_set_text(lbl_confirm, "Valider");
+  lv_obj_center(lbl_confirm);
+
+  lv_obj_t *btn_cancel = lv_btn_create(actions);
+  lv_obj_set_width(btn_cancel, 150);
+  lv_obj_add_event_cb(btn_cancel, species_cancel_event_cb, LV_EVENT_CLICKED,
+                      NULL);
+  lv_obj_t *lbl_cancel = lv_label_create(btn_cancel);
+  lv_obj_add_style(lbl_cancel, &style_font24, 0);
+  lv_label_set_text(lbl_cancel, forced ? "Plus tard" : "Annuler");
+  lv_obj_center(lbl_cancel);
+
+  if (!has_option) {
+    lv_label_set_text(label_species_details,
+                      "Aucune espèce conforme aux dimensions actuelles.");
+    lv_obj_add_state(btn_species_confirm, LV_STATE_DISABLED);
+  }
+}
+
+static void species_btn_event_cb(lv_event_t *e) {
+  (void)e;
+  if (lvgl_port_lock(-1)) {
+    show_species_selection_modal(false);
+    lvgl_port_unlock();
+  }
+}
+
+static void species_select_event_cb(lv_event_t *e) {
+  const species_db_entry_t *species =
+      (const species_db_entry_t *)lv_event_get_user_data(e);
+  species_candidate = species;
+  populate_species_details(species);
+  if (!btn_species_confirm) {
+    return;
+  }
+  if (species && certificate_is_available(species)) {
+    lv_obj_clear_state(btn_species_confirm, LV_STATE_DISABLED);
+  } else {
+    lv_obj_add_state(btn_species_confirm, LV_STATE_DISABLED);
+  }
+}
+
+static void species_confirm_event_cb(lv_event_t *e) {
+  (void)e;
+  if (!species_candidate || !s_active_terrarium) {
+    return;
+  }
+  if (!certificate_is_available(species_candidate) &&
+      species_candidate->certificate_required) {
+    return;
+  }
+  esp_err_t err = terrarium_manager_set_species(s_active_terrarium,
+                                                species_candidate);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Impossible d'appliquer l'espèce (%s) err=0x%x",
+             species_candidate->id, err);
+    return;
+  }
+  update_species_labels();
+  hide_species_selection_modal();
+  ui_update_main();
+  ui_update_stats();
+  refresh_tile_styles();
+}
+
+static void species_cancel_event_cb(lv_event_t *e) {
+  (void)e;
+  hide_species_selection_modal();
+}
+
+static bool terrarium_requires_species_selection(const terrarium_t *terrarium) {
+  if (!terrarium) {
+    return false;
+  }
+  const species_db_entry_t *species = terrarium_manager_get_species(terrarium);
+  if (!species) {
+    return true;
+  }
+  const terrarium_config_t *cfg = &terrarium->config;
+  if (!species_db_dimensions_satisfied(species, cfg->dimensions.length_cm,
+                                       cfg->dimensions.width_cm,
+                                       cfg->dimensions.height_cm)) {
+    return true;
+  }
+  if (species->certificate_required && !certificate_is_available(species)) {
+    return true;
+  }
+  return false;
+}
+
+static void ensure_species_profile(void) {
+  update_species_labels();
+  if (terrarium_requires_species_selection(s_active_terrarium)) {
+    show_species_selection_modal(true);
+  }
 }
 
 static void sprite_anim_exec_cb(void *obj, int32_t v) {
@@ -497,9 +788,19 @@ void reptile_tick(lv_timer_t *timer) {
   if (reptile->eau <= REPTILE_EAU_THRESHOLD) {
     start_warning_anim(bar_eau);
   }
-  if (reptile->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
-      reptile->temperature >= REPTILE_TEMP_THRESHOLD_HIGH) {
+  reptile_environment_thresholds_t thresholds;
+  reptile_get_thresholds(reptile, &thresholds);
+  if (reptile->temperature < thresholds.temperature_min_c ||
+      reptile->temperature > thresholds.temperature_max_c) {
     start_warning_anim(bar_temp);
+  }
+  if (reptile->humidite < thresholds.humidity_min_pct ||
+      reptile->humidite > thresholds.humidity_max_pct) {
+    start_warning_anim(bar_humidite);
+  }
+  if (reptile->uv_index < thresholds.uv_index_min ||
+      reptile->uv_index > thresholds.uv_index_max) {
+    start_warning_anim(bar_uv);
   }
 }
 
@@ -526,6 +827,7 @@ static void terrarium_tile_event_cb(lv_event_t *e) {
       ui_update_stats();
       refresh_tile_styles();
       lv_scr_load(screen_stats);
+      ensure_species_profile();
     } else {
       ESP_LOGW(TAG, "Sélection du terrarium %u impossible (err=0x%x)",
                (unsigned)(index + 1), err);
@@ -622,6 +924,7 @@ void reptile_game_stop(void) {
   s_game_active = false;
   logging_pause();
   sleep_set_enabled(false);
+  hide_species_selection_modal();
   if (s_active_terrarium) {
     s_active_terrarium->soothe_time_ms = 0;
     s_active_terrarium->soothe_ms_accum = 0;
@@ -683,18 +986,60 @@ static void ui_update_main(void) {
       if (!r) {
         lv_label_set_text(tile->status_label, "Non initialisé");
       } else {
-        lv_label_set_text_fmt(tile->status_label,
-                              "F:%3" PRIu32 " Eau:%3" PRIu32 "\nTemp:%2" PRIu32 "°C Hum:%2" PRIu32 "%%",
-                              r->faim, r->eau, r->temperature, r->humidite);
+        const species_db_entry_t *species =
+            terrarium_manager_get_species(terrarium);
+        const char *species_name = species ? species->common_name : "Aucune espèce";
+        bool dims_ok = species ? species_db_dimensions_satisfied(
+                                     species, terrarium->config.dimensions.length_cm,
+                                     terrarium->config.dimensions.width_cm,
+                                     terrarium->config.dimensions.height_cm)
+                               : false;
+        bool cert_ok = certificate_is_available(species);
+        char status[256];
+        int written = snprintf(status, sizeof(status),
+                               "%s\nF:%3" PRIu32 " Eau:%3" PRIu32
+                               "\nTemp:%2" PRIu32 "°C Hum:%2" PRIu32 "%% UV:%2" PRIu32,
+                               species_name, r->faim, r->eau, r->temperature,
+                               r->humidite, r->uv_index);
+        if (species && written > 0 && (size_t)written < sizeof(status)) {
+          if (!dims_ok) {
+            written += snprintf(status + written, sizeof(status) - (size_t)written,
+                                "\n⚠️ Dimensions insuffisantes");
+          }
+          if (species->certificate_required && !cert_ok &&
+              written > 0 && (size_t)written < sizeof(status)) {
+            snprintf(status + written, sizeof(status) - (size_t)written,
+                     "\n⚠️ Certificat manquant");
+          }
+        }
+        lv_label_set_text(tile->status_label, status);
       }
     }
 
     bool warning = false;
     if (r) {
+      reptile_environment_thresholds_t thresholds;
+      reptile_get_thresholds(r, &thresholds);
+      bool temp_bad = (r->temperature < thresholds.temperature_min_c) ||
+                      (r->temperature > thresholds.temperature_max_c);
+      bool hum_bad = (r->humidite < thresholds.humidity_min_pct) ||
+                     (r->humidite > thresholds.humidity_max_pct);
+      bool uv_bad = (r->uv_index < thresholds.uv_index_min) ||
+                    (r->uv_index > thresholds.uv_index_max);
+      bool cert_bad = false;
+      const species_db_entry_t *species =
+          terrarium_manager_get_species(terrarium);
+      if (species) {
+        bool dims_ok = species_db_dimensions_satisfied(
+            species, terrarium->config.dimensions.length_cm,
+            terrarium->config.dimensions.width_cm,
+            terrarium->config.dimensions.height_cm);
+        bool cert_ok = certificate_is_available(species);
+        cert_bad = (!dims_ok) || (species->certificate_required && !cert_ok);
+      }
       warning = (r->faim <= REPTILE_FAMINE_THRESHOLD ||
-                 r->eau <= REPTILE_EAU_THRESHOLD ||
-                 r->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
-                 r->temperature >= REPTILE_TEMP_THRESHOLD_HIGH);
+                 r->eau <= REPTILE_EAU_THRESHOLD || temp_bad || hum_bad ||
+                 uv_bad || cert_bad);
     }
     lv_color_t base_color = warning ? lv_palette_lighten(LV_PALETTE_RED, 2)
                                     : lv_palette_lighten(LV_PALETTE_GREY, 3);
@@ -718,16 +1063,39 @@ static void ui_update_stats(void) {
   if (label_terrarium_name && s_active_terrarium) {
     lv_label_set_text(label_terrarium_name, s_active_terrarium->config.name);
   }
+  reptile_environment_thresholds_t thresholds;
+  reptile_get_thresholds(reptile, &thresholds);
+
   lv_bar_set_value(bar_faim, reptile->faim, LV_ANIM_ON);
   lv_bar_set_value(bar_eau, reptile->eau, LV_ANIM_ON);
   lv_bar_set_value(bar_humeur, reptile->humeur, LV_ANIM_ON);
-  set_bar_color(bar_faim, reptile->faim, 100);
-  set_bar_color(bar_eau, reptile->eau, 100);
-  set_bar_color(bar_humeur, reptile->humeur, 100);
+  set_generic_bar_color(bar_faim, reptile->faim, 100);
+  set_generic_bar_color(bar_eau, reptile->eau, 100);
+  set_generic_bar_color(bar_humeur, reptile->humeur, 100);
+
+  uint32_t temp_bar_max = thresholds.temperature_max_c + 10U;
+  if (temp_bar_max < thresholds.temperature_max_c) {
+    temp_bar_max = thresholds.temperature_max_c;
+  }
+  lv_bar_set_range(bar_temp, 0, temp_bar_max);
   lv_bar_set_value(bar_temp, reptile->temperature, LV_ANIM_ON);
+  set_range_bar_color(bar_temp, reptile->temperature,
+                      thresholds.temperature_min_c,
+                      thresholds.temperature_max_c);
+
   lv_bar_set_value(bar_humidite, reptile->humidite, LV_ANIM_ON);
-  set_bar_color(bar_temp, reptile->temperature, 50);
-  set_bar_color(bar_humidite, reptile->humidite, 100);
+  set_range_bar_color(bar_humidite, reptile->humidite,
+                      thresholds.humidity_min_pct,
+                      thresholds.humidity_max_pct);
+
+  uint32_t uv_bar_max = thresholds.uv_index_max + 4U;
+  if (uv_bar_max < thresholds.uv_index_max) {
+    uv_bar_max = thresholds.uv_index_max;
+  }
+  lv_bar_set_range(bar_uv, 0, uv_bar_max);
+  lv_bar_set_value(bar_uv, reptile->uv_index, LV_ANIM_ON);
+  set_range_bar_color(bar_uv, reptile->uv_index, thresholds.uv_index_min,
+                      thresholds.uv_index_max);
   lv_label_set_text_fmt(label_stat_faim, "Faim: %" PRIu32, reptile->faim);
   lv_label_set_text_fmt(label_stat_eau, "Eau: %" PRIu32, reptile->eau);
   lv_label_set_text_fmt(label_stat_temp, "Température: %" PRIu32,
@@ -736,6 +1104,10 @@ static void ui_update_stats(void) {
                         reptile->humidite);
   lv_label_set_text_fmt(label_stat_humeur, "Humeur: %" PRIu32,
                         reptile->humeur);
+  if (label_stat_uv) {
+    lv_label_set_text_fmt(label_stat_uv, "UV: %" PRIu32, reptile->uv_index);
+  }
+  update_species_labels();
   update_sprite();
 }
 
@@ -815,9 +1187,31 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_obj_add_style(label_terrarium_name, &style_font24, 0);
   lv_obj_align(label_terrarium_name, LV_ALIGN_TOP_MID, 0, 10);
 
+  btn_species_select = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_species_select, 200, 40);
+  lv_obj_align(btn_species_select, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_add_event_cb(btn_species_select, species_btn_event_cb, LV_EVENT_CLICKED,
+                      NULL);
+  lv_obj_t *lbl_species_btn = lv_label_create(btn_species_select);
+  lv_obj_add_style(lbl_species_btn, &style_font24, 0);
+  lv_label_set_text(lbl_species_btn, "Choisir espèce");
+  lv_obj_center(lbl_species_btn);
+
+  label_species_name = lv_label_create(screen_stats);
+  lv_obj_add_style(label_species_name, &style_font24, 0);
+  lv_obj_align(label_species_name, LV_ALIGN_TOP_LEFT, 10, 60);
+
+  label_species_legal = lv_label_create(screen_stats);
+  lv_obj_align_to(label_species_legal, label_species_name, LV_ALIGN_OUT_BOTTOM_LEFT,
+                  0, 10);
+
+  label_species_cert = lv_label_create(screen_stats);
+  lv_obj_align_to(label_species_cert, label_species_legal,
+                  LV_ALIGN_OUT_BOTTOM_LEFT, 0, 10);
+
   img_reptile = lv_img_create(screen_stats);
   lv_img_set_src(img_reptile, sprite_idle);
-  lv_obj_align(img_reptile, LV_ALIGN_TOP_LEFT, 10, 40);
+  lv_obj_align(img_reptile, LV_ALIGN_TOP_LEFT, 10, 150);
 
   bar_faim = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_faim, 0, 100);
@@ -859,10 +1253,20 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(label_humidite, "Humidité");
   lv_obj_align_to(label_humidite, bar_humidite, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
+  bar_uv = lv_bar_create(screen_stats);
+  lv_bar_set_range(bar_uv, 0, 12);
+  lv_obj_set_size(bar_uv, 220, 20);
+  lv_obj_align_to(bar_uv, bar_humidite, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
+  lv_bar_set_value(bar_uv, 5, LV_ANIM_OFF);
+  lv_obj_t *label_uv = lv_label_create(screen_stats);
+  lv_obj_add_style(label_uv, &style_font24, 0);
+  lv_label_set_text(label_uv, "UV");
+  lv_obj_align_to(label_uv, bar_uv, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
+
   bar_humeur = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_humeur, 0, 100);
   lv_obj_set_size(bar_humeur, 220, 20);
-  lv_obj_align_to(bar_humeur, bar_humidite, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
+  lv_obj_align_to(bar_humeur, bar_uv, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
   lv_bar_set_value(bar_humeur, 100, LV_ANIM_OFF);
   lv_obj_t *label_humeur = lv_label_create(screen_stats);
   lv_obj_add_style(label_humeur, &style_font24, 0);
@@ -888,9 +1292,14 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_obj_align_to(label_stat_humidite, label_stat_temp, LV_ALIGN_OUT_BOTTOM_RIGHT,
                   0, 10);
 
+  label_stat_uv = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_uv, &style_font24, 0);
+  lv_obj_align_to(label_stat_uv, label_stat_humidite, LV_ALIGN_OUT_BOTTOM_RIGHT,
+                  0, 10);
+
   label_stat_humeur = lv_label_create(screen_stats);
   lv_obj_add_style(label_stat_humeur, &style_font24, 0);
-  lv_obj_align_to(label_stat_humeur, label_stat_humidite,
+  lv_obj_align_to(label_stat_humeur, label_stat_uv,
                   LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 10);
 
   lv_obj_t *btn_feed = lv_btn_create(screen_stats);
@@ -971,6 +1380,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   }
 
   lv_scr_load(screen_main);
+  ensure_species_profile();
 }
 
   screen_main = lv_obj_create(NULL);

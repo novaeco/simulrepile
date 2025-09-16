@@ -40,6 +40,12 @@ static const char *get_save_path(void) {
 }
 
 static void reptile_set_defaults(reptile_t *r);
+static void reptile_reset_thresholds(reptile_t *r);
+static void reptile_apply_thresholds(reptile_t *r,
+                                     const reptile_environment_thresholds_t *t);
+static uint32_t clamp_u32(uint32_t value, uint32_t min_value,
+                          uint32_t max_value);
+static uint32_t midpoint_u32(uint32_t min_value, uint32_t max_value);
 
 esp_err_t reptile_init(reptile_t *r, bool simulation) {
   if (!r) {
@@ -155,14 +161,74 @@ esp_err_t reptile_select_save(const char *slot_name, bool simulation) {
   return write_slot_cfg(simulation);
 }
 
+static uint32_t clamp_u32(uint32_t value, uint32_t min_value,
+                          uint32_t max_value) {
+  if (value < min_value) {
+    return min_value;
+  }
+  if (value > max_value) {
+    return max_value;
+  }
+  return value;
+}
+
+static uint32_t midpoint_u32(uint32_t min_value, uint32_t max_value) {
+  if (max_value < min_value) {
+    return min_value;
+  }
+  return min_value + (max_value - min_value) / 2U;
+}
+
+static void reptile_apply_thresholds(reptile_t *r,
+                                     const reptile_environment_thresholds_t *t) {
+  if (!r || !t) {
+    return;
+  }
+  reptile_environment_thresholds_t th = *t;
+  if (th.temperature_max_c < th.temperature_min_c) {
+    th.temperature_max_c = th.temperature_min_c;
+  }
+  if (th.humidity_max_pct < th.humidity_min_pct) {
+    th.humidity_max_pct = th.humidity_min_pct;
+  }
+  if (th.uv_index_max < th.uv_index_min) {
+    th.uv_index_max = th.uv_index_min;
+  }
+  r->thresholds = th;
+}
+
+static void reptile_reset_thresholds(reptile_t *r) {
+  if (!r) {
+    return;
+  }
+  const reptile_environment_thresholds_t defaults = {
+      .temperature_min_c = REPTILE_DEFAULT_TEMP_MIN_C,
+      .temperature_max_c = REPTILE_DEFAULT_TEMP_MAX_C,
+      .humidity_min_pct = REPTILE_DEFAULT_HUM_MIN,
+      .humidity_max_pct = REPTILE_DEFAULT_HUM_MAX,
+      .uv_index_min = REPTILE_DEFAULT_UV_MIN,
+      .uv_index_max = REPTILE_DEFAULT_UV_MAX,
+  };
+  reptile_apply_thresholds(r, &defaults);
+}
+
 static void reptile_set_defaults(reptile_t *r) {
+  if (!r) {
+    return;
+  }
+  reptile_reset_thresholds(r);
   r->faim = 100;
   r->eau = 100;
-  r->temperature = 30;
-  r->humidite = 50;
+  r->temperature =
+      midpoint_u32(r->thresholds.temperature_min_c, r->thresholds.temperature_max_c);
+  r->humidite =
+      midpoint_u32(r->thresholds.humidity_min_pct, r->thresholds.humidity_max_pct);
+  r->uv_index =
+      midpoint_u32(r->thresholds.uv_index_min, r->thresholds.uv_index_max);
   r->humeur = 100;
   r->event = REPTILE_EVENT_NONE;
   r->last_update = time(NULL);
+  r->species_id[0] = '\0';
 }
 
 void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
@@ -177,12 +243,27 @@ void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
   r->humeur = (r->humeur > decay) ? (r->humeur - decay) : 0;
 
   if (s_simulation_mode) {
+    const reptile_environment_thresholds_t *th = &r->thresholds;
     uint32_t randv = esp_random();
-    float temp = 26.0f + (float)(randv % 80) / 10.0f; /* 26.0 - 33.9 */
+    uint32_t temp_range =
+        (uint32_t)(th->temperature_max_c - th->temperature_min_c + 5U);
+    uint32_t temp_base =
+        (th->temperature_min_c > 2U) ? (th->temperature_min_c - 2U) : 0U;
+    r->temperature = temp_base + (randv % (temp_range + 1U));
+
     randv = esp_random();
-    float hum = 40.0f + (float)(randv % 200) / 10.0f; /* 40.0 - 59.9 */
-    r->temperature = (uint32_t)temp;
-    r->humidite = (uint32_t)hum;
+    uint32_t hum_range =
+        (uint32_t)(th->humidity_max_pct - th->humidity_min_pct + 10U);
+    uint32_t hum_base =
+        (th->humidity_min_pct > 5U) ? (th->humidity_min_pct - 5U) : 0U;
+    r->humidite = hum_base + (randv % (hum_range + 1U));
+
+    randv = esp_random();
+    uint32_t uv_range =
+        (uint32_t)(th->uv_index_max - th->uv_index_min + 3U);
+    uint32_t uv_base =
+        (th->uv_index_min > 1U) ? (th->uv_index_min - 1U) : 0U;
+    r->uv_index = uv_base + (randv % (uv_range + 1U));
   } else if (s_sensors_ready) {
 
     float temp = sensors_read_temperature();
@@ -203,6 +284,10 @@ void reptile_update(reptile_t *r, uint32_t elapsed_ms) {
     ESP_LOGW(TAG, "Capteurs indisponibles");
     log_once = true;
   }
+
+  r->temperature = clamp_u32(r->temperature, 0, 60);
+  r->humidite = clamp_u32(r->humidite, 0, 100);
+  r->uv_index = clamp_u32(r->uv_index, 0, 15);
 
   r->last_update += (time_t)decay;
 }
@@ -269,7 +354,12 @@ void reptile_heat(reptile_t *r) {
   if (!r) {
     return;
   }
-  r->temperature = (r->temperature + 5 > 50) ? 50 : r->temperature + 5;
+  uint32_t target = r->temperature + 5U;
+  uint32_t max_temp = r->thresholds.temperature_max_c;
+  if (max_temp < r->thresholds.temperature_min_c) {
+    max_temp = r->thresholds.temperature_min_c;
+  }
+  r->temperature = clamp_u32(target, 0, max_temp);
   if (!s_simulation_mode) {
     /* Drive the heating resistor */
     reptile_heat_gpio();
@@ -293,14 +383,23 @@ reptile_event_t reptile_check_events(reptile_t *r) {
 
   reptile_event_t evt = REPTILE_EVENT_NONE;
 
+  const reptile_environment_thresholds_t *th = &r->thresholds;
+  bool temp_out_of_range =
+      (r->temperature < th->temperature_min_c) ||
+      (r->temperature > th->temperature_max_c);
+  bool hum_out_of_range =
+      (r->humidite < th->humidity_min_pct) ||
+      (r->humidite > th->humidity_max_pct);
+  bool uv_out_of_range =
+      (r->uv_index < th->uv_index_min) ||
+      (r->uv_index > th->uv_index_max);
+
   if (r->faim <= REPTILE_FAMINE_THRESHOLD || r->eau <= REPTILE_EAU_THRESHOLD ||
-      r->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
-      r->temperature >= REPTILE_TEMP_THRESHOLD_HIGH ||
+      temp_out_of_range || hum_out_of_range || uv_out_of_range ||
       r->humeur <= REPTILE_HUMEUR_THRESHOLD) {
     evt = REPTILE_EVENT_MALADIE;
   } else if (r->faim >= 90 && r->eau >= 90 && r->humeur >= 90 &&
-             r->temperature > REPTILE_TEMP_THRESHOLD_LOW &&
-             r->temperature < REPTILE_TEMP_THRESHOLD_HIGH) {
+             !temp_out_of_range && !hum_out_of_range && !uv_out_of_range) {
     evt = REPTILE_EVENT_CROISSANCE;
   }
 
@@ -313,4 +412,68 @@ reptile_event_t reptile_check_events(reptile_t *r) {
 
 bool reptile_sensors_available(void) {
   return !s_simulation_mode && s_sensors_ready;
+}
+
+void reptile_get_thresholds(const reptile_t *r,
+                           reptile_environment_thresholds_t *out) {
+  if (!r || !out) {
+    return;
+  }
+  *out = r->thresholds;
+}
+
+esp_err_t reptile_apply_species_profile(reptile_t *r,
+                                        const species_db_entry_t *species) {
+  if (!r || !species) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  reptile_environment_thresholds_t thresholds = {
+      .temperature_min_c = species->environment.temperature_min_c,
+      .temperature_max_c = species->environment.temperature_max_c,
+      .humidity_min_pct = species->environment.humidity_min_pct,
+      .humidity_max_pct = species->environment.humidity_max_pct,
+      .uv_index_min = species->environment.uv_index_min,
+      .uv_index_max = species->environment.uv_index_max,
+  };
+  reptile_apply_thresholds(r, &thresholds);
+
+  if (species->id) {
+    strncpy(r->species_id, species->id, sizeof(r->species_id) - 1U);
+    r->species_id[sizeof(r->species_id) - 1U] = '\0';
+  } else {
+    r->species_id[0] = '\0';
+  }
+
+  r->temperature =
+      clamp_u32(r->temperature, r->thresholds.temperature_min_c,
+                r->thresholds.temperature_max_c);
+  r->humidite = clamp_u32(r->humidite, r->thresholds.humidity_min_pct,
+                          r->thresholds.humidity_max_pct);
+  uint32_t uv_mid =
+      midpoint_u32(r->thresholds.uv_index_min, r->thresholds.uv_index_max);
+  r->uv_index = clamp_u32(uv_mid, r->thresholds.uv_index_min,
+                          r->thresholds.uv_index_max);
+  return ESP_OK;
+}
+
+esp_err_t reptile_clear_species_profile(reptile_t *r) {
+  if (!r) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  reptile_reset_thresholds(r);
+  r->species_id[0] = '\0';
+  r->temperature =
+      midpoint_u32(r->thresholds.temperature_min_c, r->thresholds.temperature_max_c);
+  r->humidite =
+      midpoint_u32(r->thresholds.humidity_min_pct, r->thresholds.humidity_max_pct);
+  r->uv_index =
+      midpoint_u32(r->thresholds.uv_index_min, r->thresholds.uv_index_max);
+  return ESP_OK;
+}
+
+const char *reptile_get_species_id(const reptile_t *r) {
+  if (!r) {
+    return NULL;
+  }
+  return r->species_id;
 }
