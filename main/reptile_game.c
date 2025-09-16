@@ -1,4 +1,5 @@
 #include "reptile_game.h"
+#include "compliance.h"
 #include "can.h"
 #include "image.h"
 #include "lvgl_port.h"
@@ -427,28 +428,53 @@ static void update_species_labels(void) {
   const species_db_entry_t *species =
       s_active_terrarium ? terrarium_manager_get_species(s_active_terrarium)
                          : NULL;
+  const char *size_ref =
+      compliance_topic_reference(COMPLIANCE_TOPIC_TERRARIUM_SIZE);
   if (!species) {
     lv_label_set_text(label_species_name, "Espèce : aucune");
-    lv_label_set_text(label_species_legal,
-                      "Réf.: non définie\nDimensions min : --");
-    lv_label_set_text(label_species_cert, "Certificat : non requis");
+    lv_label_set_text_fmt(
+        label_species_legal,
+        "Réf.: non définie\nDimensions min : --\nSource: %s",
+        size_ref ? size_ref : "Référence indisponible");
+    lv_label_set_text(label_species_cert,
+                      "Certificat : non requis\nProtection : n/a");
     return;
   }
   lv_label_set_text_fmt(label_species_name, "Espèce : %s (%s)",
                         species->common_name, species->scientific_name);
-  lv_label_set_text_fmt(label_species_legal,
-                        "Réf.: %s\nMin : %ucm x %ucm x %ucm",
-                        species->legal_reference, species->terrarium_min.length_cm,
-                        species->terrarium_min.width_cm,
-                        species->terrarium_min.height_cm);
+  char legal_buf[256];
+  snprintf(legal_buf, sizeof(legal_buf),
+           "Réf.: %s\nMin : %ucm x %ucm x %ucm\nSource: %s",
+           species->legal_reference, species->terrarium_min.length_cm,
+           species->terrarium_min.width_cm,
+           species->terrarium_min.height_cm,
+           size_ref ? size_ref : "Référence indisponible");
+  lv_label_set_text(label_species_legal, legal_buf);
   bool cert_ok = certificate_is_available(species);
+  char cert_buf[384];
+  size_t offset = 0;
   if (species->certificate_required) {
-    lv_label_set_text_fmt(label_species_cert, "Certificat %s : %s",
-                          species->certificate_code,
-                          cert_ok ? "✅ disponible" : "⚠️ absent");
+    const char *cert_ref =
+        compliance_topic_reference(COMPLIANCE_TOPIC_CERTIFICATE);
+    offset = (size_t)snprintf(cert_buf, sizeof(cert_buf),
+                              "Certificat %s : %s\nSource: %s",
+                              species->certificate_code,
+                              cert_ok ? "✅ disponible" : "⚠️ absent",
+                              cert_ref ? cert_ref : "Référence indisponible");
   } else {
-    lv_label_set_text(label_species_cert, "Certificat : non requis");
+    offset = (size_t)snprintf(cert_buf, sizeof(cert_buf),
+                              "Certificat : non requis");
   }
+  if (species->is_protected && offset < sizeof(cert_buf)) {
+    const char *prot_ref =
+        compliance_topic_reference(COMPLIANCE_TOPIC_PROTECTED_SPECIES);
+    snprintf(cert_buf + offset, sizeof(cert_buf) - offset,
+             "%sProtection : %s\nSource: %s",
+             (offset > 0 && cert_buf[offset - 1] != '\n') ? "\n" : "",
+             species->protected_reference,
+             prot_ref ? prot_ref : "Référence indisponible");
+  }
+  lv_label_set_text(label_species_cert, cert_buf);
 }
 
 static void populate_species_details(const species_db_entry_t *species) {
@@ -461,20 +487,41 @@ static void populate_species_details(const species_db_entry_t *species) {
     return;
   }
   bool cert_ok = certificate_is_available(species);
-  char buf[320];
-  snprintf(buf, sizeof(buf),
-           "%s (%s)\nTerrarium min : %ucm x %ucm x %ucm\nTemp : %u-%u °C\nHumidité : %u-%u %%\nUV : %u-%u\nRéférence : %s\nCertificat : %s",
-           species->common_name, species->scientific_name,
-           species->terrarium_min.length_cm, species->terrarium_min.width_cm,
-           species->terrarium_min.height_cm, species->environment.temperature_min_c,
-           species->environment.temperature_max_c,
-           species->environment.humidity_min_pct,
-           species->environment.humidity_max_pct, species->environment.uv_index_min,
-           species->environment.uv_index_max,
-           species->legal_reference,
-           species->certificate_required
-               ? (cert_ok ? "Disponible" : "Absent")
-               : "Non requis");
+  char buf[512];
+  const char *size_ref =
+      compliance_topic_reference(COMPLIANCE_TOPIC_TERRARIUM_SIZE);
+  const char *cert_ref =
+      compliance_topic_reference(COMPLIANCE_TOPIC_CERTIFICATE);
+  const char *prot_ref =
+      compliance_topic_reference(COMPLIANCE_TOPIC_PROTECTED_SPECIES);
+  size_t offset = (size_t)snprintf(
+      buf, sizeof(buf),
+      "%s (%s)\nTerrarium min : %ucm x %ucm x %ucm\nTemp : %u-%u °C\n"
+      "Humidité : %u-%u %%\nUV : %u-%u\nRéférence : %s\nSource dimensions : %s\n"
+      "Certificat : %s",
+      species->common_name, species->scientific_name,
+      species->terrarium_min.length_cm, species->terrarium_min.width_cm,
+      species->terrarium_min.height_cm, species->environment.temperature_min_c,
+      species->environment.temperature_max_c,
+      species->environment.humidity_min_pct,
+      species->environment.humidity_max_pct, species->environment.uv_index_min,
+      species->environment.uv_index_max, species->legal_reference,
+      size_ref ? size_ref : "Référence indisponible",
+      species->certificate_required
+          ? (cert_ok ? "Disponible" : "Absent")
+          : "Non requis");
+  if (species->certificate_required && offset < sizeof(buf) && cert_ref) {
+    offset += snprintf(buf + offset, sizeof(buf) - offset,
+                       "\nSource certificat : %s", cert_ref);
+  }
+  if (species->is_protected && offset < sizeof(buf)) {
+    offset += snprintf(buf + offset, sizeof(buf) - offset,
+                       "\nProtection : %s", species->protected_reference);
+    if (prot_ref && offset < sizeof(buf)) {
+      snprintf(buf + offset, sizeof(buf) - offset,
+               "\nSource protection : %s", prot_ref);
+    }
+  }
   lv_label_set_text(label_species_details, buf);
 }
 
@@ -524,9 +571,10 @@ static void show_species_selection_modal(bool forced) {
     }
     bool cert_ok = certificate_is_available(species);
     char item[160];
-    snprintf(item, sizeof(item), "%s (%s)%s", species->common_name,
-             species->scientific_name,
-             (!cert_ok && species->certificate_required) ? " ⚠️" : "");
+    const char *warn = (!cert_ok && species->certificate_required) ? " ⚠️" : "";
+    const char *shield = species->is_protected ? " 🛡" : "";
+    snprintf(item, sizeof(item), "%s (%s)%s%s", species->common_name,
+             species->scientific_name, warn, shield);
     lv_obj_t *btn = lv_list_add_btn(list_species, NULL, item);
     lv_obj_add_event_cb(btn, species_select_event_cb, LV_EVENT_CLICKED,
                         (void *)species);
@@ -563,9 +611,20 @@ static void show_species_selection_modal(bool forced) {
   lv_obj_center(lbl_cancel);
 
   if (!has_option) {
-    lv_label_set_text(label_species_details,
-                      "Aucune espèce conforme aux dimensions actuelles.");
+    const char *ref =
+        compliance_topic_reference(COMPLIANCE_TOPIC_TERRARIUM_SIZE);
+    if (ref) {
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+               "Aucune espèce conforme aux dimensions actuelles.\nRéférence : %s",
+               ref);
+      lv_label_set_text(label_species_details, msg);
+    } else {
+      lv_label_set_text(label_species_details,
+                        "Aucune espèce conforme aux dimensions actuelles.");
+    }
     lv_obj_add_state(btn_species_confirm, LV_STATE_DISABLED);
+    compliance_show_quiz(COMPLIANCE_TOPIC_TERRARIUM_SIZE);
   }
 }
 
@@ -585,10 +644,16 @@ static void species_select_event_cb(lv_event_t *e) {
   if (!btn_species_confirm) {
     return;
   }
-  if (species && certificate_is_available(species)) {
+  bool cert_ok = species && certificate_is_available(species);
+  if (species && cert_ok) {
     lv_obj_clear_state(btn_species_confirm, LV_STATE_DISABLED);
   } else {
     lv_obj_add_state(btn_species_confirm, LV_STATE_DISABLED);
+  }
+  if (species && !cert_ok && species->certificate_required) {
+    compliance_show_quiz(species->is_protected
+                             ? COMPLIANCE_TOPIC_PROTECTED_SPECIES
+                             : COMPLIANCE_TOPIC_CERTIFICATE);
   }
 }
 
@@ -599,6 +664,9 @@ static void species_confirm_event_cb(lv_event_t *e) {
   }
   if (!certificate_is_available(species_candidate) &&
       species_candidate->certificate_required) {
+    compliance_show_quiz(species_candidate->is_protected
+                             ? COMPLIANCE_TOPIC_PROTECTED_SPECIES
+                             : COMPLIANCE_TOPIC_CERTIFICATE);
     return;
   }
   esp_err_t err = terrarium_manager_set_species(s_active_terrarium,
@@ -1045,9 +1113,19 @@ static void ui_update_main(void) {
                                 "\n⚠️ Dimensions insuffisantes");
           }
           if (species->certificate_required && !cert_ok &&
-              written > 0 && (size_t)written < sizeof(status)) {
-            snprintf(status + written, sizeof(status) - (size_t)written,
-                     "\n⚠️ Certificat manquant");
+              (size_t)written < sizeof(status)) {
+            int added = snprintf(status + written,
+                                 sizeof(status) - (size_t)written,
+                                 "\n⚠️ Certificat manquant");
+            if (added > 0) {
+              written += added;
+            }
+          }
+          if (species->is_protected && (size_t)written < sizeof(status)) {
+            written += snprintf(status + written,
+                                sizeof(status) - (size_t)written,
+                                "\nProtection : %s",
+                                species->protected_reference);
           }
         }
         lv_label_set_text(tile->status_label, status);

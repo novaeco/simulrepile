@@ -36,6 +36,7 @@
 #include "sd.h"
 #include "sleep.h" // Sleep control interface
 #include "settings.h"     // Application settings
+#include "regulation.h"
 #include "game_mode.h"
 
 static const char *TAG = "main"; // Tag for logging
@@ -145,6 +146,11 @@ static void menu_btn_settings_cb(lv_event_t *e) {
   reptile_game_stop();
   save_last_mode(APP_MODE_SETTINGS);
   settings_screen_show();
+}
+
+static void menu_btn_regulation_cb(lv_event_t *e) {
+  (void)e;
+  regulation_screen_show();
 }
 
 void sleep_set_enabled(bool enabled) {
@@ -365,41 +371,55 @@ void app_main() {
     // Create main menu screen
     menu_screen = lv_obj_create(NULL);
 
-    lv_obj_t *btn_game = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_game, 200, 50);
-    lv_obj_align(btn_game, LV_ALIGN_CENTER, 0, -140);
+    lv_obj_t *btn_container = lv_obj_create(menu_screen);
+    lv_obj_remove_flag(btn_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(btn_container, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn_container, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn_container, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_gap(btn_container, 16, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btn_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(btn_container, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_center(btn_container);
+
+    lv_obj_t *btn_game = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_game, 220, 50);
     lv_obj_add_event_cb(btn_game, menu_btn_game_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *label = lv_label_create(btn_game);
     lv_label_set_text(label, "Mode Jeu");
     lv_obj_center(label);
 
-    lv_obj_t *btn_new = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_new, 200, 50);
-    lv_obj_align(btn_new, LV_ALIGN_CENTER, 0, -70);
+    lv_obj_t *btn_new = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_new, 220, 50);
     lv_obj_add_event_cb(btn_new, menu_btn_new_game_cb, LV_EVENT_CLICKED, NULL);
     label = lv_label_create(btn_new);
     lv_label_set_text(label, "Nouvelle partie");
     lv_obj_center(label);
 
-    lv_obj_t *btn_resume = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_resume, 200, 50);
-    lv_obj_align(btn_resume, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_t *btn_resume = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_resume, 220, 50);
     lv_obj_add_event_cb(btn_resume, menu_btn_resume_cb, LV_EVENT_CLICKED, NULL);
     label = lv_label_create(btn_resume);
     lv_label_set_text(label, "Reprendre");
     lv_obj_center(label);
 
-    lv_obj_t *btn_real = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_real, 200, 50);
-    lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 70);
+    lv_obj_t *btn_real = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_real, 220, 50);
     lv_obj_add_event_cb(btn_real, menu_btn_real_cb, LV_EVENT_CLICKED, NULL);
     label = lv_label_create(btn_real);
     lv_label_set_text(label, "Mode R\u00e9el");
     lv_obj_center(label);
 
-    lv_obj_t *btn_settings = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_settings, 200, 50);
-    lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 140);
+    lv_obj_t *btn_regulation = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_regulation, 220, 50);
+    lv_obj_add_event_cb(btn_regulation, menu_btn_regulation_cb, LV_EVENT_CLICKED,
+                        NULL);
+    label = lv_label_create(btn_regulation);
+    lv_label_set_text(label, "R\u00e8glementation");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_settings = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_settings, 220, 50);
     lv_obj_add_event_cb(btn_settings, menu_btn_settings_cb, LV_EVENT_CLICKED,
                         NULL);
     label = lv_label_create(btn_settings);

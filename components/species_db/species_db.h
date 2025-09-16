@@ -38,6 +38,8 @@ typedef struct {
   bool certificate_required;
   const char *certificate_code;
   const char *legal_reference;
+  bool is_protected;
+  const char *protected_reference;
 } species_db_entry_t;
 
 size_t species_db_count(void);

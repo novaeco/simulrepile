@@ -17,6 +17,8 @@ static const species_db_entry_t s_species_db[] = {
         .certificate_code = "",
         .legal_reference =
             "Arrêté du 8 octobre 2018 - annexe 2 (Espèces domestiques)",
+        .is_protected = false,
+        .protected_reference = "",
     },
     {
         .id = "python_regius",
@@ -33,6 +35,9 @@ static const species_db_entry_t s_species_db[] = {
         .certificate_code = "CDC_APA_2022_123",
         .legal_reference =
             "Arrêté du 8 octobre 2018 - annexe 2 (Espèces soumises à CDC)",
+        .is_protected = true,
+        .protected_reference =
+            "Règlement (CE) n° 338/97 annexe B - certificat intra-UE CITES",
     },
     {
         .id = "eublepharis_macularius",
@@ -49,6 +54,8 @@ static const species_db_entry_t s_species_db[] = {
         .certificate_code = "",
         .legal_reference =
             "Arrêté du 10 août 2004 modifié (animaux domestiques)",
+        .is_protected = false,
+        .protected_reference = "",
     },
 };
 
