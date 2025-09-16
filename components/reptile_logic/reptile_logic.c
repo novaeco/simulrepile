@@ -1269,8 +1269,8 @@ esp_err_t reptile_facility_export_regulation_report(
     }
 
     fprintf(f,
-            "T%02u;%s;%s;%.0fx%.0fx%.0f;%s;%s;%s;%s;%s\n",
-            i + 1U, terrarium->species.name, status,
+            "T%02lu;%s;%s;%.0fx%.0fx%.0f;%s;%s;%s;%s;%s\n",
+            (unsigned long)(i + 1U), terrarium->species.name, status,
             terrarium->config.length_cm, terrarium->config.width_cm,
             terrarium->config.height_cm,
             (rule && rule->certificate_required) ? (report.certificate_ok ?
