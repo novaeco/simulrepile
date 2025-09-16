@@ -2,6 +2,7 @@
 #include "can.h"
 #include "image.h"
 #include "lvgl_port.h"
+#include "terrarium_manager.h"
 #include "sleep.h"
 #include "logging.h"
 #include "esp_log.h"
@@ -19,8 +20,10 @@
 LV_FONT_DECLARE(lv_font_montserrat_24);
 
 static lv_style_t style_font24;
+static lv_style_t style_tile_selected;
 static lv_obj_t *screen_main;
 static lv_obj_t *screen_stats;
+static lv_obj_t *terrarium_container;
 static lv_obj_t *bar_faim;
 static lv_obj_t *bar_eau;
 static lv_obj_t *bar_temp;
@@ -35,17 +38,24 @@ static lv_obj_t *label_stat_temp;
 static lv_obj_t *label_stat_humeur;
 static lv_obj_t *label_stat_humidite;
 static lv_obj_t *lbl_sleep;
+static lv_obj_t *label_terrarium_name;
+static terrarium_t *s_active_terrarium;
+
+typedef struct {
+  lv_obj_t *button;
+  lv_obj_t *substrate_icon;
+  lv_obj_t *decor_icon;
+  lv_obj_t *name_label;
+  lv_obj_t *status_label;
+} terrarium_tile_ui_t;
+
+static terrarium_tile_ui_t s_tiles[TERRARIUM_MANAGER_MAX_TERRARIUMS];
 extern lv_obj_t *menu_screen;
 
 #define REPTILE_UPDATE_PERIOD_MS 1000
 
-static reptile_t reptile;
-static uint32_t last_tick;
 static lv_timer_t *life_timer;
 static lv_timer_t *action_timer;
-static uint32_t soothe_time_ms;
-static uint32_t update_ms_accum;
-static uint32_t soothe_ms_accum;
 
 static const char *TAG = "reptile_game";
 
@@ -80,11 +90,11 @@ static const lv_image_dsc_t *sprite_sad = &gImage_reptile_sad;
 
 static void warning_anim_cb(void *obj, int32_t v);
 static void start_warning_anim(lv_obj_t *obj);
-static void stats_btn_event_cb(lv_event_t *e);
 static void back_btn_event_cb(lv_event_t *e);
 static void action_btn_event_cb(lv_event_t *e);
 static void sleep_btn_event_cb(lv_event_t *e);
 static void menu_btn_event_cb(lv_event_t *e);
+static void terrarium_tile_event_cb(lv_event_t *e);
 static void ui_update_main(void);
 static void ui_update_stats(void);
 static void show_event_popup(reptile_event_t event);
@@ -92,7 +102,9 @@ static void set_bar_color(lv_obj_t *bar, uint32_t value, uint32_t max);
 static void update_sprite(void);
 static void show_action_sprite(action_type_t action);
 static void revert_sprite_cb(lv_timer_t *t);
-static void reptile_set_defaults(reptile_t *state);
+static reptile_t *active_reptile_ptr(void);
+static void sync_active_runtime(void);
+static void refresh_tile_styles(void);
 static esp_err_t ensure_save_directory(bool simulation);
 static esp_err_t allocate_new_save_slot(char *slot, size_t len);
 
@@ -104,62 +116,107 @@ void reptile_game_init(void) {
   bool start_resume = (s_start_mode == REPTILE_START_RESUME);
 
   game_mode_set(GAME_MODE_SIMULATION);
-  reptile_init(&reptile, true);
+
+  reptile_t seed = {0};
+  reptile_init(&seed, true);
+
+  esp_err_t mgr_err = terrarium_manager_init(true);
+  if (mgr_err != ESP_OK) {
+    ESP_LOGE(TAG,
+             "Impossible d'initialiser le gestionnaire de terrariums (err=0x%x)",
+             mgr_err);
+  }
+
+  s_active_terrarium = terrarium_manager_get_active();
+  if (!s_active_terrarium) {
+    ESP_LOGE(TAG, "Aucun terrarium actif disponible");
+    s_start_mode = REPTILE_START_AUTO;
+    return;
+  }
+
+  reptile_select_save(s_active_terrarium->config.reptile_slot, true);
 
   if (s_slot_override_pending) {
-    esp_err_t slot_err = reptile_select_save(s_slot_override, true);
+    esp_err_t slot_err =
+        terrarium_manager_set_slot(s_active_terrarium, s_slot_override);
     if (slot_err != ESP_OK) {
       ESP_LOGW(TAG, "Sélection du slot %s impossible (err=0x%x)",
                s_slot_override, slot_err);
     } else {
       ESP_LOGI(TAG, "Slot de sauvegarde actif: %s", s_slot_override);
+      terrarium_manager_reset_state(s_active_terrarium);
+      reptile_select_save(s_active_terrarium->config.reptile_slot, true);
+      reptile_save(&s_active_terrarium->reptile);
     }
     s_slot_override_pending = false;
     s_slot_override[0] = '\0';
   }
 
-  last_tick = lv_tick_get();
-  update_ms_accum = 0;
-  soothe_ms_accum = 0;
-
-  if (start_new) {
-    reptile_set_defaults(&reptile);
-    esp_err_t save_res = reptile_save(&reptile);
-    if (save_res != ESP_OK) {
-      ESP_LOGW(TAG, "Impossible de sauvegarder le nouvel état (err=0x%x)",
-               save_res);
-    }
-  } else {
-    esp_err_t load_res = reptile_load(&reptile);
+  if (!s_active_terrarium->state_loaded || start_resume) {
+    esp_err_t load_res = reptile_load(&s_active_terrarium->reptile);
     if (load_res != ESP_OK) {
       if (start_resume) {
-        ESP_LOGW(TAG, "Sauvegarde introuvable, démarrage d'une nouvelle partie");
+        ESP_LOGW(TAG,
+                 "Sauvegarde introuvable, démarrage d'une nouvelle partie");
       }
-      reptile_set_defaults(&reptile);
-      esp_err_t save_res = reptile_save(&reptile);
+      terrarium_manager_reset_state(s_active_terrarium);
+      esp_err_t save_res = reptile_save(&s_active_terrarium->reptile);
       if (save_res != ESP_OK) {
         ESP_LOGW(TAG,
                  "Impossible de persister l'état initial (err=0x%x)", save_res);
       }
+    } else {
+      s_active_terrarium->state_loaded = true;
     }
   }
+
+  if (start_new) {
+    terrarium_manager_reset_state(s_active_terrarium);
+    esp_err_t save_res = reptile_save(&s_active_terrarium->reptile);
+    if (save_res != ESP_OK) {
+      ESP_LOGW(TAG, "Impossible de sauvegarder le nouvel état (err=0x%x)",
+               save_res);
+    }
+  }
+
+  sync_active_runtime();
+  sprite_is_happy = false;
 
   s_start_mode = REPTILE_START_AUTO;
 }
 
-const reptile_t *reptile_get_state(void) { return &reptile; }
+static reptile_t *active_reptile_ptr(void) {
+  return s_active_terrarium ? &s_active_terrarium->reptile : NULL;
+}
 
-static void reptile_set_defaults(reptile_t *state) {
-  if (!state) {
+static void sync_active_runtime(void) {
+  if (!s_active_terrarium) {
     return;
   }
-  state->faim = 100;
-  state->eau = 100;
-  state->temperature = 30;
-  state->humidite = 50;
-  state->humeur = 100;
-  state->event = REPTILE_EVENT_NONE;
-  state->last_update = time(NULL);
+  s_active_terrarium->last_tick_ms = lv_tick_get();
+  s_active_terrarium->update_ms_accum = 0;
+  s_active_terrarium->soothe_ms_accum = 0;
+  s_active_terrarium->soothe_time_ms = 0;
+}
+
+static void refresh_tile_styles(void) {
+  size_t active_idx = terrarium_manager_get_active_index();
+  for (size_t i = 0; i < TERRARIUM_MANAGER_MAX_TERRARIUMS; ++i) {
+    lv_obj_t *btn = s_tiles[i].button;
+    if (!btn) {
+      continue;
+    }
+    if (i == active_idx) {
+      lv_obj_add_style(btn, &style_tile_selected, LV_PART_MAIN);
+    } else {
+      lv_obj_remove_style(btn, &style_tile_selected, LV_PART_MAIN);
+    }
+  }
+}
+
+const reptile_t *reptile_get_state(void) {
+  terrarium_t *terrarium = terrarium_manager_get_active();
+  return terrarium ? &terrarium->reptile : NULL;
 }
 
 static esp_err_t ensure_save_directory(bool simulation) {
@@ -315,7 +372,11 @@ static void set_sprite_anim(bool happy) {
 static void update_sprite(void) {
   if (action_timer)
     return;
-  bool happy = reptile.humeur >= 50;
+  reptile_t *reptile = active_reptile_ptr();
+  if (!reptile) {
+    return;
+  }
+  bool happy = reptile->humeur >= 50;
   if (happy != sprite_is_happy) {
     sprite_is_happy = happy;
     lv_img_set_src(img_reptile, happy ? sprite_happy : sprite_sad);
@@ -357,38 +418,53 @@ static void show_action_sprite(action_type_t action) {
 
 void reptile_tick(lv_timer_t *timer) {
   (void)timer;
-  uint32_t now = lv_tick_get();
-  uint32_t elapsed = now - last_tick;
-  last_tick = now;
+  terrarium_t *terrarium = s_active_terrarium;
+  reptile_t *reptile = active_reptile_ptr();
+  if (!terrarium || !reptile) {
+    return;
+  }
 
-  update_ms_accum += elapsed;
-  uint32_t process_ms = update_ms_accum - (update_ms_accum % 1000U);
-  reptile_update(&reptile, process_ms);
-  update_ms_accum -= process_ms;
+  uint32_t now = lv_tick_get();
+  if (terrarium->last_tick_ms == 0) {
+    terrarium->last_tick_ms = now;
+    return;
+  }
+
+  uint32_t elapsed = now - terrarium->last_tick_ms;
+  terrarium->last_tick_ms = now;
+
+  terrarium->update_ms_accum += elapsed;
+  uint32_t process_ms =
+      terrarium->update_ms_accum - (terrarium->update_ms_accum % 1000U);
+  reptile_update(reptile, process_ms);
+  terrarium->update_ms_accum -= process_ms;
   bool dirty = process_ms > 0;
 
-  if (soothe_time_ms > 0) {
-    soothe_time_ms = (soothe_time_ms > elapsed) ? (soothe_time_ms - elapsed) : 0;
-    soothe_ms_accum += elapsed;
-    uint32_t mood_sec = soothe_ms_accum / 1000U;
+  if (terrarium->soothe_time_ms > 0) {
+    terrarium->soothe_time_ms =
+        (terrarium->soothe_time_ms > elapsed) ?
+            (terrarium->soothe_time_ms - elapsed) :
+            0;
+    terrarium->soothe_ms_accum += elapsed;
+    uint32_t mood_sec = terrarium->soothe_ms_accum / 1000U;
     if (mood_sec > 0) {
       uint32_t inc = mood_sec * 2U;
-      reptile.humeur =
-          (reptile.humeur + inc > 100) ? 100 : reptile.humeur + inc;
-      soothe_ms_accum -= mood_sec * 1000U;
+      reptile->humeur =
+          (reptile->humeur + inc > 100) ? 100 : reptile->humeur + inc;
+      terrarium->soothe_ms_accum -= mood_sec * 1000U;
       dirty = true;
     }
   } else {
-    soothe_ms_accum = 0;
+    terrarium->soothe_ms_accum = 0;
   }
 
-  reptile_event_t prev_evt = reptile.event;
-  reptile_event_t evt = reptile_check_events(&reptile);
+  reptile_event_t prev_evt = reptile->event;
+  reptile_event_t evt = reptile_check_events(reptile);
   if (evt != prev_evt && evt != REPTILE_EVENT_NONE) {
     show_event_popup(evt);
   }
   if (dirty) {
-    reptile_save(&reptile);
+    reptile_save(reptile);
   }
 
   ui_update_main();
@@ -400,14 +476,14 @@ void reptile_tick(lv_timer_t *timer) {
       .data_length_code = 8,
       .flags = TWAI_MSG_FLAG_NONE,
   };
-  msg.data[0] = (uint8_t)(reptile.faim & 0xFF);
-  msg.data[1] = (uint8_t)((reptile.faim >> 8) & 0xFF);
-  msg.data[2] = (uint8_t)(reptile.eau & 0xFF);
-  msg.data[3] = (uint8_t)((reptile.eau >> 8) & 0xFF);
-  msg.data[4] = (uint8_t)(reptile.temperature & 0xFF);
-  msg.data[5] = (uint8_t)((reptile.temperature >> 8) & 0xFF);
-  msg.data[6] = (uint8_t)(reptile.humeur & 0xFF);
-  msg.data[7] = (uint8_t)((reptile.humeur >> 8) & 0xFF);
+  msg.data[0] = (uint8_t)(reptile->faim & 0xFF);
+  msg.data[1] = (uint8_t)((reptile->faim >> 8) & 0xFF);
+  msg.data[2] = (uint8_t)(reptile->eau & 0xFF);
+  msg.data[3] = (uint8_t)((reptile->eau >> 8) & 0xFF);
+  msg.data[4] = (uint8_t)(reptile->temperature & 0xFF);
+  msg.data[5] = (uint8_t)((reptile->temperature >> 8) & 0xFF);
+  msg.data[6] = (uint8_t)(reptile->humeur & 0xFF);
+  msg.data[7] = (uint8_t)((reptile->humeur >> 8) & 0xFF);
   if (can_is_active()) {
     esp_err_t err = can_write_Byte(msg);
     if (err != ESP_OK) {
@@ -415,23 +491,15 @@ void reptile_tick(lv_timer_t *timer) {
     }
   }
 
-  if (reptile.faim <= REPTILE_FAMINE_THRESHOLD) {
+  if (reptile->faim <= REPTILE_FAMINE_THRESHOLD) {
     start_warning_anim(bar_faim);
   }
-  if (reptile.eau <= REPTILE_EAU_THRESHOLD) {
+  if (reptile->eau <= REPTILE_EAU_THRESHOLD) {
     start_warning_anim(bar_eau);
   }
-  if (reptile.temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
-      reptile.temperature >= REPTILE_TEMP_THRESHOLD_HIGH) {
+  if (reptile->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
+      reptile->temperature >= REPTILE_TEMP_THRESHOLD_HIGH) {
     start_warning_anim(bar_temp);
-  }
-}
-
-static void stats_btn_event_cb(lv_event_t *e) {
-  (void)e;
-  if (lvgl_port_lock(-1)) {
-    lv_scr_load(screen_stats);
-    lvgl_port_unlock();
   }
 }
 
@@ -439,6 +507,29 @@ static void back_btn_event_cb(lv_event_t *e) {
   (void)e;
   if (lvgl_port_lock(-1)) {
     lv_scr_load(screen_main);
+    refresh_tile_styles();
+    lvgl_port_unlock();
+  }
+}
+
+static void terrarium_tile_event_cb(lv_event_t *e) {
+  size_t index = (size_t)lv_event_get_user_data(e);
+  if (lvgl_port_lock(-1)) {
+    esp_err_t err = terrarium_manager_select(index);
+    if (err == ESP_OK) {
+      s_active_terrarium = terrarium_manager_get_active();
+      reptile_select_save(s_active_terrarium->config.reptile_slot, true);
+      sync_active_runtime();
+      sprite_is_happy = false;
+      update_sprite();
+      ui_update_main();
+      ui_update_stats();
+      refresh_tile_styles();
+      lv_scr_load(screen_stats);
+    } else {
+      ESP_LOGW(TAG, "Sélection du terrarium %u impossible (err=0x%x)",
+               (unsigned)(index + 1), err);
+    }
     lvgl_port_unlock();
   }
 }
@@ -446,19 +537,27 @@ static void back_btn_event_cb(lv_event_t *e) {
 static void action_btn_event_cb(lv_event_t *e) {
   action_type_t action = (action_type_t)(uintptr_t)lv_event_get_user_data(e);
   if (lvgl_port_lock(-1)) {
+    reptile_t *reptile = active_reptile_ptr();
+    if (!reptile) {
+      lvgl_port_unlock();
+      return;
+    }
     switch (action) {
     case ACTION_FEED:
-      reptile_feed(&reptile);
+      reptile_feed(reptile);
       break;
     case ACTION_WATER:
-      reptile_give_water(&reptile);
+      reptile_give_water(reptile);
       break;
     case ACTION_HEAT:
-      reptile_heat(&reptile);
+      reptile_heat(reptile);
       break;
     case ACTION_SOOTHE:
-      reptile_soothe(&reptile);
-      soothe_time_ms = 5000;
+      reptile_soothe(reptile);
+      if (s_active_terrarium) {
+        s_active_terrarium->soothe_time_ms = 5000;
+        s_active_terrarium->soothe_ms_accum = 0;
+      }
       break;
     }
     show_action_sprite(action);
@@ -477,30 +576,57 @@ static void sleep_btn_event_cb(lv_event_t *e) {
 
 void reptile_game_prepare_new_game(void) {
   s_start_mode = REPTILE_START_NEW;
-  s_slot_override[0] = '\0';
-  esp_err_t err = allocate_new_save_slot(s_slot_override, sizeof(s_slot_override));
+  char new_slot[REPTILE_SLOT_NAME_MAX] = {0};
+  esp_err_t err = allocate_new_save_slot(new_slot, sizeof(new_slot));
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Allocation d'un nouveau slot échouée (err=0x%x)", err);
     strncpy(s_slot_override, "reptile_state.bin", sizeof(s_slot_override) - 1);
     s_slot_override[sizeof(s_slot_override) - 1] = '\0';
+    s_slot_override_pending = true;
+    return;
   } else {
-    ESP_LOGI(TAG, "Création d'un nouveau slot de sauvegarde: %s",
-             s_slot_override);
+    ESP_LOGI(TAG, "Création d'un nouveau slot de sauvegarde: %s", new_slot);
   }
+  if (terrarium_manager_is_initialized()) {
+    terrarium_t *terrarium = terrarium_manager_get_active();
+    if (terrarium) {
+      if (terrarium_manager_set_slot(terrarium, new_slot) == ESP_OK) {
+        terrarium_manager_reset_state(terrarium);
+        reptile_select_save(terrarium->config.reptile_slot, true);
+        reptile_save(&terrarium->reptile);
+        s_slot_override_pending = false;
+        s_slot_override[0] = '\0';
+        return;
+      }
+    }
+  }
+  strncpy(s_slot_override, new_slot, sizeof(s_slot_override) - 1);
+  s_slot_override[sizeof(s_slot_override) - 1] = '\0';
   s_slot_override_pending = true;
 }
 
 void reptile_game_prepare_resume(void) {
   s_start_mode = REPTILE_START_RESUME;
-  s_slot_override_pending = false;
-  s_slot_override[0] = '\0';
+  if (terrarium_manager_is_initialized()) {
+    terrarium_t *terrarium = terrarium_manager_get_active();
+    if (terrarium) {
+      terrarium->state_loaded = false;
+    }
+  } else {
+    s_slot_override_pending = false;
+    s_slot_override[0] = '\0';
+  }
 }
 
 void reptile_game_stop(void) {
   s_game_active = false;
   logging_pause();
   sleep_set_enabled(false);
-  soothe_time_ms = 0;
+  if (s_active_terrarium) {
+    s_active_terrarium->soothe_time_ms = 0;
+    s_active_terrarium->soothe_ms_accum = 0;
+    s_active_terrarium->update_ms_accum = 0;
+  }
   if (life_timer) {
     lv_timer_del(life_timer);
     life_timer = NULL;
@@ -518,8 +644,7 @@ void reptile_game_stop(void) {
     screen_stats = NULL;
   }
   lv_style_reset(&style_font24);
-  update_ms_accum = 0;
-  soothe_ms_accum = 0;
+  lv_style_reset(&style_tile_selected);
 }
 
 static void menu_btn_event_cb(lv_event_t *e) {
@@ -532,27 +657,86 @@ static void menu_btn_event_cb(lv_event_t *e) {
 }
 
 static void ui_update_main(void) {
-  lv_bar_set_value(bar_faim, reptile.faim, LV_ANIM_ON);
-  lv_bar_set_value(bar_eau, reptile.eau, LV_ANIM_ON);
-  lv_bar_set_value(bar_humeur, reptile.humeur, LV_ANIM_ON);
-  set_bar_color(bar_faim, reptile.faim, 100);
-  set_bar_color(bar_eau, reptile.eau, 100);
-  set_bar_color(bar_humeur, reptile.humeur, 100);
-  lv_bar_set_value(bar_temp, reptile.temperature, LV_ANIM_ON);
-  lv_bar_set_value(bar_humidite, reptile.humidite, LV_ANIM_ON);
-  set_bar_color(bar_temp, reptile.temperature, 50);
-  set_bar_color(bar_humidite, reptile.humidite, 100);
-  update_sprite();
+  size_t count = terrarium_manager_count();
+  size_t active_idx = terrarium_manager_get_active_index();
+  for (size_t i = 0; i < count; ++i) {
+    terrarium_t *terrarium = terrarium_manager_get(i);
+    terrarium_tile_ui_t *tile = &s_tiles[i];
+    if (!terrarium || !tile->button) {
+      continue;
+    }
+    if (tile->name_label) {
+      lv_label_set_text(tile->name_label, terrarium->config.name);
+    }
+    if (tile->substrate_icon) {
+      lv_image_set_src(tile->substrate_icon,
+                       terrarium_manager_get_substrate_icon(
+                           terrarium->config.substrate));
+    }
+    if (tile->decor_icon) {
+      lv_image_set_src(tile->decor_icon,
+                       terrarium_manager_get_decor_icon(terrarium->config.decor));
+    }
+
+    const reptile_t *r = terrarium->state_loaded ? &terrarium->reptile : NULL;
+    if (tile->status_label) {
+      if (!r) {
+        lv_label_set_text(tile->status_label, "Non initialisé");
+      } else {
+        lv_label_set_text_fmt(tile->status_label,
+                              "F:%3" PRIu32 " Eau:%3" PRIu32 "\nTemp:%2" PRIu32 "°C Hum:%2" PRIu32 "%%",
+                              r->faim, r->eau, r->temperature, r->humidite);
+      }
+    }
+
+    bool warning = false;
+    if (r) {
+      warning = (r->faim <= REPTILE_FAMINE_THRESHOLD ||
+                 r->eau <= REPTILE_EAU_THRESHOLD ||
+                 r->temperature <= REPTILE_TEMP_THRESHOLD_LOW ||
+                 r->temperature >= REPTILE_TEMP_THRESHOLD_HIGH);
+    }
+    lv_color_t base_color = warning ? lv_palette_lighten(LV_PALETTE_RED, 2)
+                                    : lv_palette_lighten(LV_PALETTE_GREY, 3);
+    lv_obj_set_style_bg_color(tile->button, base_color, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tile->button, LV_OPA_COVER, LV_PART_MAIN);
+    if (i == active_idx) {
+      lv_obj_set_style_bg_color(tile->button,
+                                warning ? lv_palette_main(LV_PALETTE_DEEP_ORANGE)
+                                        : lv_palette_lighten(LV_PALETTE_BLUE, 3),
+                                LV_PART_MAIN);
+    }
+  }
+  refresh_tile_styles();
 }
 
 static void ui_update_stats(void) {
-  lv_label_set_text_fmt(label_stat_faim, "Faim: %" PRIu32, reptile.faim);
-  lv_label_set_text_fmt(label_stat_eau, "Eau: %" PRIu32, reptile.eau);
+  reptile_t *reptile = active_reptile_ptr();
+  if (!reptile) {
+    return;
+  }
+  if (label_terrarium_name && s_active_terrarium) {
+    lv_label_set_text(label_terrarium_name, s_active_terrarium->config.name);
+  }
+  lv_bar_set_value(bar_faim, reptile->faim, LV_ANIM_ON);
+  lv_bar_set_value(bar_eau, reptile->eau, LV_ANIM_ON);
+  lv_bar_set_value(bar_humeur, reptile->humeur, LV_ANIM_ON);
+  set_bar_color(bar_faim, reptile->faim, 100);
+  set_bar_color(bar_eau, reptile->eau, 100);
+  set_bar_color(bar_humeur, reptile->humeur, 100);
+  lv_bar_set_value(bar_temp, reptile->temperature, LV_ANIM_ON);
+  lv_bar_set_value(bar_humidite, reptile->humidite, LV_ANIM_ON);
+  set_bar_color(bar_temp, reptile->temperature, 50);
+  set_bar_color(bar_humidite, reptile->humidite, 100);
+  lv_label_set_text_fmt(label_stat_faim, "Faim: %" PRIu32, reptile->faim);
+  lv_label_set_text_fmt(label_stat_eau, "Eau: %" PRIu32, reptile->eau);
   lv_label_set_text_fmt(label_stat_temp, "Température: %" PRIu32,
-                        reptile.temperature);
+                        reptile->temperature);
   lv_label_set_text_fmt(label_stat_humidite, "Humidité: %" PRIu32,
-                        reptile.humidite);
-  lv_label_set_text_fmt(label_stat_humeur, "Humeur: %" PRIu32, reptile.humeur);
+                        reptile->humidite);
+  lv_label_set_text_fmt(label_stat_humeur, "Humeur: %" PRIu32,
+                        reptile->humeur);
+  update_sprite();
 }
 
 void reptile_game_start(esp_lcd_panel_handle_t panel,
@@ -563,72 +747,154 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_style_init(&style_font24);
   lv_style_set_text_font(&style_font24, &lv_font_montserrat_24);
 
+  lv_style_init(&style_tile_selected);
+  lv_style_set_border_width(&style_tile_selected, 4);
+  lv_style_set_border_color(&style_tile_selected,
+                            lv_palette_main(LV_PALETTE_BLUE));
+  lv_style_set_border_opa(&style_tile_selected, LV_OPA_COVER);
+  lv_style_set_outline_width(&style_tile_selected, 0);
+
+  memset(s_tiles, 0, sizeof(s_tiles));
+
   screen_main = lv_obj_create(NULL);
+  lv_obj_set_style_pad_all(screen_main, 12, 0);
+  lv_obj_set_style_pad_gap(screen_main, 12, 0);
+  lv_obj_set_flex_flow(screen_main, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *title = lv_label_create(screen_main);
+  lv_obj_add_style(title, &style_font24, 0);
+  lv_label_set_text(title, "Sélection des terrariums");
+  lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+
+  terrarium_container = lv_obj_create(screen_main);
+  lv_obj_set_size(terrarium_container, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_flex_flow(terrarium_container, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(terrarium_container, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(terrarium_container, 12, 0);
+  lv_obj_set_style_pad_all(terrarium_container, 6, 0);
+  lv_obj_set_style_bg_opa(terrarium_container, LV_OPA_TRANSP, LV_PART_MAIN);
+
+  size_t terrarium_count = terrarium_manager_count();
+  for (size_t i = 0; i < terrarium_count; ++i) {
+    lv_obj_t *btn = lv_btn_create(terrarium_container);
+    lv_obj_set_size(btn, 150, 150);
+    lv_obj_set_style_radius(btn, 12, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(btn, 8, LV_PART_MAIN);
+    lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_event_cb(btn, terrarium_tile_event_cb, LV_EVENT_CLICKED,
+                        (void *)(uintptr_t)i);
+
+    lv_obj_t *icon_row = lv_obj_create(btn);
+    lv_obj_remove_flag(icon_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(icon_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_bg_opa(icon_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(icon_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_gap(icon_row, 6, LV_PART_MAIN);
+
+    s_tiles[i].button = btn;
+    s_tiles[i].substrate_icon = lv_image_create(icon_row);
+    s_tiles[i].decor_icon = lv_image_create(icon_row);
+
+    s_tiles[i].name_label = lv_label_create(btn);
+    lv_obj_add_style(s_tiles[i].name_label, &style_font24, 0);
+    lv_obj_set_style_text_align(s_tiles[i].name_label, LV_TEXT_ALIGN_CENTER,
+                                LV_PART_MAIN);
+
+    s_tiles[i].status_label = lv_label_create(btn);
+    lv_obj_set_style_text_align(s_tiles[i].status_label, LV_TEXT_ALIGN_CENTER,
+                                LV_PART_MAIN);
+  }
+
   screen_stats = lv_obj_create(NULL);
+  lv_obj_set_style_pad_all(screen_stats, 12, 0);
 
-  /* Reptile sprite */
-  img_reptile = lv_img_create(screen_main);
+  label_terrarium_name = lv_label_create(screen_stats);
+  lv_obj_add_style(label_terrarium_name, &style_font24, 0);
+  lv_obj_align(label_terrarium_name, LV_ALIGN_TOP_MID, 0, 10);
+
+  img_reptile = lv_img_create(screen_stats);
   lv_img_set_src(img_reptile, sprite_idle);
-  lv_obj_align(img_reptile, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_align(img_reptile, LV_ALIGN_TOP_LEFT, 10, 40);
 
-  /* Hunger bar */
-  bar_faim = lv_bar_create(screen_main);
+  bar_faim = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_faim, 0, 100);
-  lv_obj_set_size(bar_faim, 200, 20);
-  lv_obj_align(bar_faim, LV_ALIGN_LEFT_MID, 10, -40);
+  lv_obj_set_size(bar_faim, 220, 20);
+  lv_obj_align(bar_faim, LV_ALIGN_TOP_LEFT, 180, 60);
   lv_bar_set_value(bar_faim, 100, LV_ANIM_OFF);
-  lv_obj_t *label_faim = lv_label_create(screen_main);
+  lv_obj_t *label_faim = lv_label_create(screen_stats);
   lv_obj_add_style(label_faim, &style_font24, 0);
   lv_label_set_text(label_faim, "Faim");
   lv_obj_align_to(label_faim, bar_faim, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
-  /* Water bar */
-  bar_eau = lv_bar_create(screen_main);
+  bar_eau = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_eau, 0, 100);
-  lv_obj_set_size(bar_eau, 200, 20);
-  lv_obj_align(bar_eau, LV_ALIGN_LEFT_MID, 10, 0);
+  lv_obj_set_size(bar_eau, 220, 20);
+  lv_obj_align_to(bar_eau, bar_faim, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
   lv_bar_set_value(bar_eau, 100, LV_ANIM_OFF);
-  lv_obj_t *label_eau = lv_label_create(screen_main);
+  lv_obj_t *label_eau = lv_label_create(screen_stats);
   lv_obj_add_style(label_eau, &style_font24, 0);
   lv_label_set_text(label_eau, "Eau");
   lv_obj_align_to(label_eau, bar_eau, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
-  /* Temperature bar */
-  bar_temp = lv_bar_create(screen_main);
+  bar_temp = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_temp, 0, 50);
-  lv_obj_set_size(bar_temp, 200, 20);
-  lv_obj_align(bar_temp, LV_ALIGN_LEFT_MID, 10, 40);
+  lv_obj_set_size(bar_temp, 220, 20);
+  lv_obj_align_to(bar_temp, bar_eau, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
   lv_bar_set_value(bar_temp, 30, LV_ANIM_OFF);
-  lv_obj_t *label_temp = lv_label_create(screen_main);
+  lv_obj_t *label_temp = lv_label_create(screen_stats);
   lv_obj_add_style(label_temp, &style_font24, 0);
   lv_label_set_text(label_temp, "Température");
   lv_obj_align_to(label_temp, bar_temp, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
-  /* Humidity bar */
-  bar_humidite = lv_bar_create(screen_main);
+  bar_humidite = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_humidite, 0, 100);
-  lv_obj_set_size(bar_humidite, 200, 20);
-  lv_obj_align(bar_humidite, LV_ALIGN_LEFT_MID, 10, 80);
+  lv_obj_set_size(bar_humidite, 220, 20);
+  lv_obj_align_to(bar_humidite, bar_temp, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
   lv_bar_set_value(bar_humidite, 50, LV_ANIM_OFF);
-  lv_obj_t *label_humidite = lv_label_create(screen_main);
+  lv_obj_t *label_humidite = lv_label_create(screen_stats);
   lv_obj_add_style(label_humidite, &style_font24, 0);
   lv_label_set_text(label_humidite, "Humidité");
   lv_obj_align_to(label_humidite, bar_humidite, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
-  /* Mood bar */
-  bar_humeur = lv_bar_create(screen_main);
+  bar_humeur = lv_bar_create(screen_stats);
   lv_bar_set_range(bar_humeur, 0, 100);
-  lv_obj_set_size(bar_humeur, 200, 20);
-  lv_obj_align(bar_humeur, LV_ALIGN_LEFT_MID, 10, 120);
+  lv_obj_set_size(bar_humeur, 220, 20);
+  lv_obj_align_to(bar_humeur, bar_humidite, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 30);
   lv_bar_set_value(bar_humeur, 100, LV_ANIM_OFF);
-  lv_obj_t *label_humeur = lv_label_create(screen_main);
+  lv_obj_t *label_humeur = lv_label_create(screen_stats);
   lv_obj_add_style(label_humeur, &style_font24, 0);
   lv_label_set_text(label_humeur, "Humeur");
   lv_obj_align_to(label_humeur, bar_humeur, LV_ALIGN_OUT_TOP_LEFT, 0, -5);
 
-  /* Action buttons */
-  lv_obj_t *btn_feed = lv_btn_create(screen_main);
-  lv_obj_set_size(btn_feed, 120, 40);
+  label_stat_faim = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_faim, &style_font24, 0);
+  lv_obj_align(label_stat_faim, LV_ALIGN_TOP_RIGHT, -10, 120);
+
+  label_stat_eau = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_eau, &style_font24, 0);
+  lv_obj_align_to(label_stat_eau, label_stat_faim, LV_ALIGN_OUT_BOTTOM_RIGHT, 0,
+                  10);
+
+  label_stat_temp = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_temp, &style_font24, 0);
+  lv_obj_align_to(label_stat_temp, label_stat_eau, LV_ALIGN_OUT_BOTTOM_RIGHT, 0,
+                  10);
+
+  label_stat_humidite = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_humidite, &style_font24, 0);
+  lv_obj_align_to(label_stat_humidite, label_stat_temp, LV_ALIGN_OUT_BOTTOM_RIGHT,
+                  0, 10);
+
+  label_stat_humeur = lv_label_create(screen_stats);
+  lv_obj_add_style(label_stat_humeur, &style_font24, 0);
+  lv_obj_align_to(label_stat_humeur, label_stat_humidite,
+                  LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 10);
+
+  lv_obj_t *btn_feed = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_feed, 140, 40);
   lv_obj_align(btn_feed, LV_ALIGN_BOTTOM_LEFT, 10, -10);
   lv_obj_add_event_cb(btn_feed, action_btn_event_cb, LV_EVENT_CLICKED,
                       (void *)(uintptr_t)ACTION_FEED);
@@ -637,8 +903,8 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(lbl_feed, "Nourrir");
   lv_obj_center(lbl_feed);
 
-  lv_obj_t *btn_water = lv_btn_create(screen_main);
-  lv_obj_set_size(btn_water, 120, 40);
+  lv_obj_t *btn_water = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_water, 140, 40);
   lv_obj_align(btn_water, LV_ALIGN_BOTTOM_MID, 0, -10);
   lv_obj_add_event_cb(btn_water, action_btn_event_cb, LV_EVENT_CLICKED,
                       (void *)(uintptr_t)ACTION_WATER);
@@ -647,8 +913,8 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(lbl_water, "Hydrater");
   lv_obj_center(lbl_water);
 
-  lv_obj_t *btn_heat = lv_btn_create(screen_main);
-  lv_obj_set_size(btn_heat, 120, 40);
+  lv_obj_t *btn_heat = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_heat, 140, 40);
   lv_obj_align(btn_heat, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
   lv_obj_add_event_cb(btn_heat, action_btn_event_cb, LV_EVENT_CLICKED,
                       (void *)(uintptr_t)ACTION_HEAT);
@@ -657,8 +923,8 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(lbl_heat, "Chauffer");
   lv_obj_center(lbl_heat);
 
-  lv_obj_t *btn_soothe = lv_btn_create(screen_main);
-  lv_obj_set_size(btn_soothe, 120, 40);
+  lv_obj_t *btn_soothe = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_soothe, 140, 40);
   lv_obj_align(btn_soothe, LV_ALIGN_BOTTOM_RIGHT, -10, -60);
   lv_obj_add_event_cb(btn_soothe, action_btn_event_cb, LV_EVENT_CLICKED,
                       (void *)(uintptr_t)ACTION_SOOTHE);
@@ -667,8 +933,16 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(lbl_soothe, "Caresser");
   lv_obj_center(lbl_soothe);
 
-  /* Sleep toggle button */
-  lv_obj_t *btn_sleep = lv_btn_create(screen_main);
+  lv_obj_t *btn_back = lv_btn_create(screen_stats);
+  lv_obj_set_size(btn_back, 140, 40);
+  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_LEFT, 10, -60);
+  lv_obj_add_event_cb(btn_back, back_btn_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl_back = lv_label_create(btn_back);
+  lv_obj_add_style(lbl_back, &style_font24, 0);
+  lv_label_set_text(lbl_back, "Retour");
+  lv_obj_center(lbl_back);
+
+  lv_obj_t *btn_sleep = lv_btn_create(screen_stats);
   lv_obj_set_size(btn_sleep, 160, 40);
   lv_obj_align(btn_sleep, LV_ALIGN_TOP_RIGHT, -10, 60);
   lv_obj_add_event_cb(btn_sleep, sleep_btn_event_cb, LV_EVENT_CLICKED, NULL);
@@ -677,58 +951,28 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   lv_label_set_text(lbl_sleep, sleep_is_enabled() ? "Veille ON" : "Veille OFF");
   lv_obj_center(lbl_sleep);
 
-  /* Stats button */
-  lv_obj_t *btn_stats = lv_btn_create(screen_main);
-  lv_obj_set_size(btn_stats, 160, 40);
-  lv_obj_align(btn_stats, LV_ALIGN_TOP_RIGHT, -10, 10);
-  lv_obj_add_event_cb(btn_stats, stats_btn_event_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_stats = lv_label_create(btn_stats);
-  lv_obj_add_style(lbl_stats, &style_font24, 0);
-  lv_label_set_text(lbl_stats, "Statistiques");
-  lv_obj_center(lbl_stats);
-
-  /* Menu button */
-  lv_obj_t *btn_menu = lv_btn_create(screen_main);
+  lv_obj_t *btn_menu = lv_btn_create(screen_stats);
   lv_obj_set_size(btn_menu, 160, 40);
-  lv_obj_align(btn_menu, LV_ALIGN_TOP_RIGHT, -10, 110);
+  lv_obj_align(btn_menu, LV_ALIGN_TOP_RIGHT, -10, 10);
   lv_obj_add_event_cb(btn_menu, menu_btn_event_cb, LV_EVENT_CLICKED, NULL);
   lv_obj_t *lbl_menu = lv_label_create(btn_menu);
   lv_obj_add_style(lbl_menu, &style_font24, 0);
   lv_label_set_text(lbl_menu, "Menu");
   lv_obj_center(lbl_menu);
 
-  /* Stats screen content */
-  label_stat_faim = lv_label_create(screen_stats);
-  lv_obj_add_style(label_stat_faim, &style_font24, 0);
-  lv_obj_align(label_stat_faim, LV_ALIGN_TOP_LEFT, 10, 10);
-
-  label_stat_eau = lv_label_create(screen_stats);
-  lv_obj_add_style(label_stat_eau, &style_font24, 0);
-  lv_obj_align(label_stat_eau, LV_ALIGN_TOP_LEFT, 10, 50);
-
-  label_stat_temp = lv_label_create(screen_stats);
-  lv_obj_add_style(label_stat_temp, &style_font24, 0);
-  lv_obj_align(label_stat_temp, LV_ALIGN_TOP_LEFT, 10, 90);
-  label_stat_humidite = lv_label_create(screen_stats);
-  lv_obj_add_style(label_stat_humidite, &style_font24, 0);
-  lv_obj_align(label_stat_humidite, LV_ALIGN_TOP_LEFT, 10, 130);
-
-  label_stat_humeur = lv_label_create(screen_stats);
-  lv_obj_add_style(label_stat_humeur, &style_font24, 0);
-  lv_obj_align(label_stat_humeur, LV_ALIGN_TOP_LEFT, 10, 170);
-
-  lv_obj_t *btn_back = lv_btn_create(screen_stats);
-  lv_obj_set_size(btn_back, 160, 40);
-  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_MID, 0, -10);
-  lv_obj_add_event_cb(btn_back, back_btn_event_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
-  lv_obj_add_style(lbl_back, &style_font24, 0);
-  lv_label_set_text(lbl_back, "Retour");
-  lv_obj_center(lbl_back);
-
   ui_update_main();
   ui_update_stats();
-  life_timer = lv_timer_create(reptile_tick, REPTILE_UPDATE_PERIOD_MS, NULL);
+  refresh_tile_styles();
+
+  sync_active_runtime();
+
+  if (!life_timer) {
+    life_timer = lv_timer_create(reptile_tick, REPTILE_UPDATE_PERIOD_MS, NULL);
+  }
 
   lv_scr_load(screen_main);
 }
+
+  screen_main = lv_obj_create(NULL);
+  screen_stats = lv_obj_create(NULL);
+
