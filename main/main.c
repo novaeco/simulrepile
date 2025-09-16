@@ -78,7 +78,11 @@ static void start_game_mode(void) {
   reptile_game_stop();
   reptile_game_init();
   reptile_game_start(panel_handle, tp_handle);
-  logging_init(reptile_get_state);
+  const logging_provider_t logging_cfg = {
+      .get_reptile_state = reptile_get_state,
+      .period_ms = 60000,
+  };
+  logging_init(&logging_cfg);
   if (!sleep_timer)
     sleep_timer = lv_timer_create(sleep_timer_cb, 120000, NULL);
   settings_apply();

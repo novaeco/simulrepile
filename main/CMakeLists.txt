@@ -15,6 +15,7 @@ idf_component_register(
         config
         sd
         logging
+        schedule
         can
         gpio
     PRIV_REQUIRES

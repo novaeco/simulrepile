@@ -2,6 +2,8 @@
 #include "env_control.h"
 #include "gpio.h"
 #include "sensors.h"
+#include "schedule.h"
+#include "logging.h"
 #include "lvgl.h"
 #include "lvgl_port.h"
 #include "freertos/FreeRTOS.h"
@@ -33,6 +35,7 @@ static void fan_btn_cb(lv_event_t *e);
 static void uv_btn_cb(lv_event_t *e);
 static void light_btn_cb(lv_event_t *e);
 static void menu_btn_cb(lv_event_t *e);
+static void schedule_btn_cb(lv_event_t *e);
 static void update_status_labels(void);
 static void update_sensor_widgets(float temp, float hum, float lux, sensor_uv_data_t uv);
 static lv_obj_t *create_action_row(lv_obj_t *parent,
@@ -40,6 +43,13 @@ static lv_obj_t *create_action_row(lv_obj_t *parent,
                                    const char *initial_text,
                                    const char *btn_text,
                                    lv_event_cb_t cb);
+static void schedule_screen_show(void);
+static void schedule_screen_populate(const schedule_config_t *cfg);
+static void schedule_screen_collect(schedule_config_t *cfg);
+static void schedule_save_cb(lv_event_t *e);
+static void schedule_cancel_cb(lv_event_t *e);
+static bool enforce_schedule_now(void);
+static bool logging_real_sample(logging_real_sample_t *sample);
 
 static lv_obj_t *screen;
 static lv_obj_t *label_temp;
@@ -52,6 +62,7 @@ static lv_obj_t *label_feed;
 static lv_obj_t *label_fan;
 static lv_obj_t *label_uv_lamp;
 static lv_obj_t *label_light;
+static lv_obj_t *schedule_screen;
 static lv_obj_t *chart;
 static lv_chart_series_t *chart_series_temp;
 static lv_chart_series_t *chart_series_hum;
@@ -70,6 +81,21 @@ static reptile_env_state_t s_env_state;
 static volatile bool fan_on;
 static volatile bool uv_lamp_on;
 static volatile bool light_on;
+static bool heating_allowed = true;
+static float s_last_temp = NAN;
+static float s_last_hum = NAN;
+static float s_last_lux = NAN;
+static sensor_uv_data_t s_last_uv = {
+    .uva = NAN,
+    .uvb = NAN,
+    .uv_index = NAN,
+};
+
+static lv_obj_t *slot_switch[SCHEDULE_ACTUATOR_COUNT][SCHEDULE_SLOTS_PER_ACTUATOR];
+static lv_obj_t *slot_start_hour[SCHEDULE_ACTUATOR_COUNT][SCHEDULE_SLOTS_PER_ACTUATOR];
+static lv_obj_t *slot_start_min[SCHEDULE_ACTUATOR_COUNT][SCHEDULE_SLOTS_PER_ACTUATOR];
+static lv_obj_t *slot_end_hour[SCHEDULE_ACTUATOR_COUNT][SCHEDULE_SLOTS_PER_ACTUATOR];
+static lv_obj_t *slot_end_min[SCHEDULE_ACTUATOR_COUNT][SCHEDULE_SLOTS_PER_ACTUATOR];
 
 extern lv_obj_t *menu_screen;
 
@@ -96,6 +122,289 @@ static lv_obj_t *create_action_row(lv_obj_t *parent,
     lv_obj_center(lbl);
     lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
     return row;
+}
+
+static lv_obj_t *create_hour_spinbox(lv_obj_t *parent)
+{
+    lv_obj_t *sb = lv_spinbox_create(parent);
+    lv_spinbox_set_range(sb, 0, 23);
+    lv_spinbox_set_digit_format(sb, 2, 0);
+    lv_spinbox_set_step(sb, 1);
+    lv_spinbox_set_rollover(sb, true);
+    lv_obj_set_width(sb, 60);
+    return sb;
+}
+
+static lv_obj_t *create_minute_spinbox(lv_obj_t *parent)
+{
+    lv_obj_t *sb = lv_spinbox_create(parent);
+    lv_spinbox_set_range(sb, 0, 59);
+    lv_spinbox_set_digit_format(sb, 2, 0);
+    lv_spinbox_set_step(sb, 1);
+    lv_spinbox_set_rollover(sb, true);
+    lv_obj_set_width(sb, 60);
+    return sb;
+}
+
+static const char *schedule_actuator_name(schedule_actuator_t act)
+{
+    switch (act) {
+    case SCHEDULE_ACTUATOR_HEATING:
+        return "Chauffage";
+    case SCHEDULE_ACTUATOR_UV:
+        return "UV";
+    case SCHEDULE_ACTUATOR_LIGHTING:
+        return "Éclairage";
+    case SCHEDULE_ACTUATOR_VENTILATION:
+        return "Ventilation";
+    default:
+        return "";
+    }
+}
+
+static const schedule_slot_t *schedule_config_get_slot(const schedule_config_t *cfg,
+                                                       schedule_actuator_t act,
+                                                       uint32_t index)
+{
+    switch (act) {
+    case SCHEDULE_ACTUATOR_HEATING:
+        return &cfg->heating[index];
+    case SCHEDULE_ACTUATOR_UV:
+        return &cfg->uv[index];
+    case SCHEDULE_ACTUATOR_LIGHTING:
+        return &cfg->lighting[index];
+    case SCHEDULE_ACTUATOR_VENTILATION:
+        return &cfg->ventilation[index];
+    default:
+        return NULL;
+    }
+}
+
+static schedule_slot_t *schedule_config_get_slot_mut(schedule_config_t *cfg,
+                                                     schedule_actuator_t act,
+                                                     uint32_t index)
+{
+    switch (act) {
+    case SCHEDULE_ACTUATOR_HEATING:
+        return &cfg->heating[index];
+    case SCHEDULE_ACTUATOR_UV:
+        return &cfg->uv[index];
+    case SCHEDULE_ACTUATOR_LIGHTING:
+        return &cfg->lighting[index];
+    case SCHEDULE_ACTUATOR_VENTILATION:
+        return &cfg->ventilation[index];
+    default:
+        return NULL;
+    }
+}
+
+static void schedule_screen_populate(const schedule_config_t *cfg)
+{
+    for (uint32_t act = 0; act < SCHEDULE_ACTUATOR_COUNT; ++act) {
+        for (uint32_t slot = 0; slot < SCHEDULE_SLOTS_PER_ACTUATOR; ++slot) {
+            const schedule_slot_t *s = schedule_config_get_slot(cfg, (schedule_actuator_t)act, slot);
+            if (!s)
+                continue;
+            if (s->enabled) {
+                lv_obj_add_state(slot_switch[act][slot], LV_STATE_CHECKED);
+            } else {
+                lv_obj_clear_state(slot_switch[act][slot], LV_STATE_CHECKED);
+            }
+            uint16_t start = s->start_minute % 1440;
+            uint16_t end = s->end_minute % 1440;
+            lv_spinbox_set_value(slot_start_hour[act][slot], start / 60);
+            lv_spinbox_set_value(slot_start_min[act][slot], start % 60);
+            lv_spinbox_set_value(slot_end_hour[act][slot], end / 60);
+            lv_spinbox_set_value(slot_end_min[act][slot], end % 60);
+        }
+    }
+}
+
+static void schedule_screen_collect(schedule_config_t *cfg)
+{
+    for (uint32_t act = 0; act < SCHEDULE_ACTUATOR_COUNT; ++act) {
+        for (uint32_t slot = 0; slot < SCHEDULE_SLOTS_PER_ACTUATOR; ++slot) {
+            schedule_slot_t *s = schedule_config_get_slot_mut(cfg, (schedule_actuator_t)act, slot);
+            if (!s)
+                continue;
+            s->enabled = lv_obj_has_state(slot_switch[act][slot], LV_STATE_CHECKED);
+            uint16_t start_hour = (uint16_t)lv_spinbox_get_value(slot_start_hour[act][slot]);
+            uint16_t start_min = (uint16_t)lv_spinbox_get_value(slot_start_min[act][slot]);
+            uint16_t end_hour = (uint16_t)lv_spinbox_get_value(slot_end_hour[act][slot]);
+            uint16_t end_min = (uint16_t)lv_spinbox_get_value(slot_end_min[act][slot]);
+            s->start_minute = (start_hour % 24) * 60 + (start_min % 60);
+            s->end_minute = (end_hour % 24) * 60 + (end_min % 60);
+        }
+    }
+}
+
+static void schedule_screen_show(void)
+{
+    if (!schedule_screen) {
+        schedule_screen = lv_obj_create(NULL);
+        lv_obj_set_style_pad_all(schedule_screen, 16, 0);
+        lv_obj_set_style_pad_gap(schedule_screen, 12, 0);
+        lv_obj_set_flex_flow(schedule_screen, LV_FLEX_FLOW_COLUMN);
+
+        for (uint32_t act = 0; act < SCHEDULE_ACTUATOR_COUNT; ++act) {
+            lv_obj_t *act_cont = lv_obj_create(schedule_screen);
+            lv_obj_remove_style_all(act_cont);
+            lv_obj_set_style_pad_all(act_cont, 0, 0);
+            lv_obj_set_style_pad_gap(act_cont, 8, 0);
+            lv_obj_set_size(act_cont, LV_PCT(100), LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(act_cont, LV_FLEX_FLOW_COLUMN);
+
+            lv_obj_t *title = lv_label_create(act_cont);
+            lv_label_set_text(title, schedule_actuator_name((schedule_actuator_t)act));
+
+            for (uint32_t slot = 0; slot < SCHEDULE_SLOTS_PER_ACTUATOR; ++slot) {
+                lv_obj_t *row = lv_obj_create(act_cont);
+                lv_obj_remove_style_all(row);
+                lv_obj_set_style_pad_all(row, 0, 0);
+                lv_obj_set_style_pad_gap(row, 6, 0);
+                lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+                lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+                lv_obj_set_flex_align(row,
+                                      LV_FLEX_ALIGN_START,
+                                      LV_FLEX_ALIGN_CENTER,
+                                      LV_FLEX_ALIGN_CENTER);
+
+                slot_switch[act][slot] = lv_switch_create(row);
+
+                lv_obj_t *slot_label = lv_label_create(row);
+                lv_label_set_text_fmt(slot_label, "Plage %u", (unsigned)(slot + 1));
+                lv_obj_set_flex_grow(slot_label, 1);
+                lv_obj_set_style_pad_left(slot_label, 6, 0);
+
+                slot_start_hour[act][slot] = create_hour_spinbox(row);
+                lv_obj_t *colon1 = lv_label_create(row);
+                lv_label_set_text(colon1, ":");
+                slot_start_min[act][slot] = create_minute_spinbox(row);
+
+                lv_obj_t *arrow = lv_label_create(row);
+                lv_label_set_text(arrow, LV_SYMBOL_RIGHT);
+
+                slot_end_hour[act][slot] = create_hour_spinbox(row);
+                lv_obj_t *colon2 = lv_label_create(row);
+                lv_label_set_text(colon2, ":");
+                slot_end_min[act][slot] = create_minute_spinbox(row);
+            }
+        }
+
+        lv_obj_t *btn_row = lv_obj_create(schedule_screen);
+        lv_obj_remove_style_all(btn_row);
+        lv_obj_set_style_pad_all(btn_row, 0, 0);
+        lv_obj_set_style_pad_gap(btn_row, 12, 0);
+        lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+
+        lv_obj_t *btn_cancel = lv_btn_create(btn_row);
+        lv_obj_set_flex_grow(btn_cancel, 1);
+        lv_obj_add_event_cb(btn_cancel, schedule_cancel_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl_cancel = lv_label_create(btn_cancel);
+        lv_label_set_text(lbl_cancel, "Annuler");
+        lv_obj_center(lbl_cancel);
+
+        lv_obj_t *btn_save = lv_btn_create(btn_row);
+        lv_obj_set_flex_grow(btn_save, 1);
+        lv_obj_add_event_cb(btn_save, schedule_save_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl_save = lv_label_create(btn_save);
+        lv_label_set_text(lbl_save, "Enregistrer");
+        lv_obj_center(lbl_save);
+    }
+
+    schedule_config_t cfg;
+    schedule_get_config(&cfg);
+    schedule_screen_populate(&cfg);
+    lv_scr_load(schedule_screen);
+}
+
+static void schedule_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    if (schedule_screen) {
+        lv_scr_load(screen);
+        lv_obj_del(schedule_screen);
+        schedule_screen = NULL;
+        update_status_labels();
+    }
+}
+
+static void schedule_save_cb(lv_event_t *e)
+{
+    (void)e;
+    schedule_config_t cfg;
+    schedule_get_config(&cfg);
+    schedule_screen_collect(&cfg);
+    esp_err_t err = schedule_set_config(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Échec sauvegarde planning: %s", esp_err_to_name(err));
+    }
+    enforce_schedule_now();
+    if (schedule_screen) {
+        lv_scr_load(screen);
+        lv_obj_del(schedule_screen);
+        schedule_screen = NULL;
+    }
+    update_status_labels();
+}
+
+static void schedule_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    schedule_screen_show();
+}
+
+static bool enforce_schedule_now(void)
+{
+    schedule_state_t st;
+    if (!schedule_get_current_state(&st)) {
+        return false;
+    }
+    bool changed = false;
+    if (st.heating != heating_allowed) {
+        heating_allowed = st.heating;
+        reptile_env_set_heating_allowed(heating_allowed);
+        changed = true;
+    }
+    if (st.ventilation != fan_on) {
+        reptile_fan_set(st.ventilation);
+        fan_on = reptile_fan_get();
+        changed = true;
+    }
+    if (st.uv != uv_lamp_on) {
+        reptile_uv_lamp_set(st.uv);
+        uv_lamp_on = reptile_uv_lamp_get();
+        changed = true;
+    }
+    if (st.lighting != light_on) {
+        reptile_light_set(st.lighting);
+        light_on = reptile_light_get();
+        changed = true;
+    }
+    return changed;
+}
+
+static bool logging_real_sample(logging_real_sample_t *sample)
+{
+    if (!sample) {
+        return false;
+    }
+    sample->temperature_c = s_last_temp;
+    sample->humidity_pct = s_last_hum;
+    sample->lux = s_last_lux;
+    sample->uva_mw_cm2 = s_last_uv.uva;
+    sample->uvb_mw_cm2 = s_last_uv.uvb;
+    sample->uv_index = s_last_uv.uv_index;
+    reptile_env_state_t env;
+    reptile_env_get_state(&env);
+    sample->heating = env.heating;
+    sample->pumping = env.pumping;
+    sample->fan = fan_on;
+    sample->uv_lamp = uv_lamp_on;
+    sample->light = light_on;
+    sample->feeding = feed_running;
+    return true;
 }
 
 static void update_status_labels(void)
@@ -286,6 +595,13 @@ static void sensor_poll_task(void *arg)
         float lux = sensors_read_lux();
         sensor_uv_data_t uv = sensors_read_uv();
 
+        s_last_temp = temp;
+        s_last_hum = hum;
+        s_last_lux = lux;
+        s_last_uv = uv;
+
+        bool schedule_changed = enforce_schedule_now();
+
         if (!sensor_task_running) {
             break;
         }
@@ -293,6 +609,9 @@ static void sensor_poll_task(void *arg)
         if (lvgl_port_lock(-1)) {
             if (sensor_ui_ready) {
                 update_sensor_widgets(temp, hum, lux, uv);
+            }
+            if (schedule_changed) {
+                update_status_labels();
             }
             lvgl_port_unlock();
         }
@@ -316,6 +635,11 @@ static void sensor_poll_task(void *arg)
 static void menu_btn_cb(lv_event_t *e)
 {
     (void)e;
+
+    if (schedule_screen) {
+        lv_obj_del(schedule_screen);
+        schedule_screen = NULL;
+    }
 
     sensor_ui_ready = false;
     if (sensor_task_handle) {
@@ -359,9 +683,21 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
     (void)panel;
     (void)tp;
 
+    esp_err_t sched_err = schedule_init();
+    if (sched_err != ESP_OK) {
+        ESP_LOGE(TAG, "Échec init planning: %s", esp_err_to_name(sched_err));
+    }
+
     if (!lvgl_port_lock(-1)) {
         return;
     }
+
+    s_last_temp = NAN;
+    s_last_hum = NAN;
+    s_last_lux = NAN;
+    s_last_uv.uva = NAN;
+    s_last_uv.uvb = NAN;
+    s_last_uv.uv_index = NAN;
 
     screen = lv_obj_create(NULL);
     lv_obj_set_style_pad_all(screen, 12, 0);
@@ -450,13 +786,21 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
     lv_obj_set_size(footer, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_all(footer, 0, 0);
+    lv_obj_set_style_pad_gap(footer, 12, 0);
+
+    lv_obj_t *btn_schedule = lv_btn_create(footer);
+    lv_obj_set_flex_grow(btn_schedule, 1);
+    lv_obj_add_event_cb(btn_schedule, schedule_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lbl_schedule = lv_label_create(btn_schedule);
+    lv_label_set_text(lbl_schedule, "Planning");
+    lv_obj_center(lbl_schedule);
 
     lv_obj_t *btn_menu = lv_btn_create(footer);
-    lv_obj_set_width(btn_menu, LV_PCT(100));
+    lv_obj_set_flex_grow(btn_menu, 1);
+    lv_obj_add_event_cb(btn_menu, menu_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lbl_menu = lv_label_create(btn_menu);
     lv_label_set_text(lbl_menu, "Menu");
     lv_obj_center(lbl_menu);
-    lv_obj_add_event_cb(btn_menu, menu_btn_cb, LV_EVENT_CLICKED, NULL);
 
     s_env_state.temperature = NAN;
     s_env_state.humidity = NAN;
@@ -476,14 +820,31 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
     };
     update_sensor_widgets(NAN, NAN, NAN, uv_init);
 
+    const logging_provider_t log_provider = {
+        .get_real_sample = logging_real_sample,
+        .period_ms = 60000,
+    };
+    logging_init(&log_provider);
+
     lv_disp_load_scr(screen);
     lvgl_port_unlock();
+
+    enforce_schedule_now();
+    if (lvgl_port_lock(-1)) {
+        update_status_labels();
+        lvgl_port_unlock();
+    }
 
     reptile_env_thresholds_t thr = {
         .temp_setpoint = g_settings.temp_threshold,
         .humidity_setpoint = g_settings.humidity_threshold,
     };
     reptile_env_start(&thr, env_state_cb, NULL);
+
+    if (enforce_schedule_now() && lvgl_port_lock(-1)) {
+        update_status_labels();
+        lvgl_port_unlock();
+    }
 
     sensor_task_waiter = NULL;
     sensor_ui_ready = true;
