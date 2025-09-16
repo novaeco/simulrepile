@@ -80,6 +80,57 @@ void reptile_heat_gpio(void)
     }
 }
 
+void reptile_fan_set(bool on)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->set_fan) {
+        s_driver->set_fan(on);
+    }
+}
+
+bool reptile_fan_get(void)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->get_fan) {
+        return s_driver->get_fan();
+    }
+    return false;
+}
+
+void reptile_uv_lamp_set(bool on)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->set_uv_lamp) {
+        s_driver->set_uv_lamp(on);
+    }
+}
+
+bool reptile_uv_lamp_get(void)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->get_uv_lamp) {
+        return s_driver->get_uv_lamp();
+    }
+    return false;
+}
+
+void reptile_light_set(bool on)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->set_light) {
+        s_driver->set_light(on);
+    }
+}
+
+bool reptile_light_get(void)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->get_light) {
+        return s_driver->get_light();
+    }
+    return false;
+}
+
 void reptile_actuators_deinit(void)
 {
     if (s_driver && s_driver->deinit) {

@@ -16,12 +16,16 @@
 
 #include "driver/gpio.h"  // ESP-IDF GPIO driver library
 #include "esp_err.h"
+#include <stdbool.h>
 
 /* Pin Definitions */
-#define LED_GPIO_PIN     GPIO_NUM_6  /* GPIO pin connected to the LED */
-#define SERVO_FEED_PIN   GPIO_NUM_17 /* Servo control pin for feeding */
-#define WATER_PUMP_PIN   GPIO_NUM_18 /* Pump control pin for watering */
-#define HEAT_RES_PIN     GPIO_NUM_19 /* Heating resistor control pin */
+#define LED_GPIO_PIN     GPIO_NUM_6   /* GPIO pin connected to the LED */
+#define SERVO_FEED_PIN   GPIO_NUM_17  /* Servo control pin for feeding */
+#define WATER_PUMP_PIN   GPIO_NUM_18  /* Pump control pin for watering */
+#define HEAT_RES_PIN     GPIO_NUM_19  /* Heating resistor control pin */
+#define FAN_PIN          GPIO_NUM_33  /* Ventilation fan */
+#define UV_LAMP_PIN      GPIO_NUM_34  /* UV lighting */
+#define LIGHT_PIN        GPIO_NUM_35  /* Visible lighting */
 
 /* Function Prototypes */
 
@@ -34,6 +38,12 @@ typedef struct {
     void (*feed)(void);
     void (*water)(void);
     void (*heat)(void);
+    void (*set_fan)(bool on);
+    bool (*get_fan)(void);
+    void (*set_uv_lamp)(bool on);
+    bool (*get_uv_lamp)(void);
+    void (*set_light)(bool on);
+    bool (*get_light)(void);
     void (*deinit)(void);
 } actuator_driver_t;
 
@@ -44,6 +54,12 @@ uint8_t DEV_Digital_Read(uint16_t Pin);
 void reptile_feed_gpio(void);
 void reptile_water_gpio(void);
 void reptile_heat_gpio(void);
+void reptile_fan_set(bool on);
+bool reptile_fan_get(void);
+void reptile_uv_lamp_set(bool on);
+bool reptile_uv_lamp_get(void);
+void reptile_light_set(bool on);
+bool reptile_light_get(void);
 esp_err_t reptile_actuators_init(void);
 void reptile_actuators_deinit(void);
 
