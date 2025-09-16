@@ -1,0 +1,3 @@
+config REPTILE_DEBUG
+    bool "Activer le mode debug (désactive la veille)"
+    default n
