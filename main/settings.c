@@ -333,7 +333,9 @@ void settings_screen_show(void)
     lv_obj_set_style_pad_all(screen, 10, 0);
     lv_obj_set_style_pad_gap(screen, 12, 0);
 
-    lv_obj_t *tv = lv_tabview_create(screen, LV_DIR_TOP, 40);
+    lv_obj_t *tv = lv_tabview_create(screen);
+    lv_tabview_set_tab_bar_position(tv, LV_DIR_TOP);
+    lv_tabview_set_tab_bar_size(tv, 40);
     lv_obj_set_size(tv, LV_PCT(100), LV_PCT(100));
 
     lv_obj_t *tab_general = lv_tabview_add_tab(tv, "Général");
