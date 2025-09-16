@@ -13,6 +13,7 @@
 #include <string.h>
 
 #define CHART_POINT_COUNT 120
+#define TEMP_NEEDLE_LENGTH 58
 
 static void feed_task(void *arg);
 static void env_state_cb(size_t index, const reptile_env_terrarium_state_t *state, void *ctx);
@@ -35,8 +36,8 @@ typedef struct {
     lv_obj_t *status_label;
     lv_obj_t *energy_label;
     lv_obj_t *alarm_label;
-    lv_obj_t *temp_meter;
-    lv_meter_indicator_t *temp_indicator;
+    lv_obj_t *temp_scale;
+    lv_obj_t *temp_needle;
     lv_obj_t *hum_bar;
     lv_obj_t *btn_heat;
     lv_obj_t *btn_heat_label;
@@ -96,13 +97,27 @@ static lv_obj_t *create_button(lv_obj_t *parent, const char *text, lv_event_cb_t
     return btn;
 }
 
-static void configure_meter(lv_obj_t *meter, terrarium_ui_t *ui)
+static void create_temp_scale(terrarium_ui_t *ui, lv_obj_t *parent)
 {
-    lv_meter_scale_t *scale = lv_meter_add_scale(meter);
-    lv_meter_set_scale_range(meter, scale, 0, 45, 270, 135);
-    lv_meter_set_scale_ticks(meter, scale, 10, 2, 10, lv_palette_main(LV_PALETTE_GREY));
-    lv_meter_set_scale_major_ticks(meter, scale, 5, 3, 18, lv_color_black(), 10);
-    ui->temp_indicator = lv_meter_add_needle_line(meter, scale, 4, lv_palette_main(LV_PALETTE_RED), -18);
+    ui->temp_scale = lv_scale_create(parent);
+    lv_obj_set_size(ui->temp_scale, 130, 130);
+    lv_scale_set_mode(ui->temp_scale, LV_SCALE_MODE_ROUND_OUTER);
+    lv_scale_set_range(ui->temp_scale, 0, 45);
+    lv_scale_set_angle_range(ui->temp_scale, 270);
+    lv_scale_set_rotation(ui->temp_scale, 135);
+    lv_scale_set_total_tick_count(ui->temp_scale, 19);
+    lv_scale_set_major_tick_every(ui->temp_scale, 2);
+    lv_scale_set_label_show(ui->temp_scale, true);
+    lv_obj_set_style_line_width(ui->temp_scale, 2, LV_PART_MAIN);
+    lv_obj_set_style_line_color(ui->temp_scale, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
+
+    ui->temp_needle = lv_line_create(ui->temp_scale);
+    lv_obj_remove_style_all(ui->temp_needle);
+    lv_obj_remove_flag(ui->temp_needle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_line_width(ui->temp_needle, 4, LV_PART_MAIN);
+    lv_obj_set_style_line_color(ui->temp_needle, lv_palette_main(LV_PALETTE_RED), LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(ui->temp_needle, true, LV_PART_MAIN);
+    lv_scale_set_line_needle_value(ui->temp_scale, ui->temp_needle, TEMP_NEEDLE_LENGTH, 0);
 }
 
 static void init_terrarium_ui(size_t index,
@@ -129,9 +144,7 @@ static void init_terrarium_ui(size_t index,
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
 
-    ui->temp_meter = lv_meter_create(row);
-    lv_obj_set_size(ui->temp_meter, 130, 130);
-    configure_meter(ui->temp_meter, ui);
+    create_temp_scale(ui, row);
 
     ui->hum_bar = lv_bar_create(row);
     lv_bar_set_range(ui->hum_bar, 0, 100);
@@ -257,7 +270,12 @@ static void update_terrarium_ui(terrarium_ui_t *ui, const reptile_env_terrarium_
         if (temp > 45) {
             temp = 45;
         }
-        lv_meter_set_indicator_value(ui->temp_meter, ui->temp_indicator, (int32_t)lroundf(temp));
+        if (ui->temp_scale && ui->temp_needle) {
+            lv_scale_set_line_needle_value(ui->temp_scale,
+                                           ui->temp_needle,
+                                           TEMP_NEEDLE_LENGTH,
+                                           (int32_t)lroundf(temp));
+        }
     }
     if (state->humidity_valid) {
         float hum = state->humidity_pct;

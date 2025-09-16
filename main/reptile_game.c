@@ -146,6 +146,8 @@ static const char *growth_stage_to_string(reptile_growth_stage_t stage);
 static const char *pathology_to_string(reptile_pathology_t pathology);
 static const char *incident_to_string(reptile_incident_t incident);
 static int find_option_index(const char *options, const char *value);
+static void dropdown_select_index(lv_obj_t *dd, uint32_t idx);
+static void dropdown_select_none(lv_obj_t *dd);
 static void load_dropdown_value(lv_obj_t *dd, const char *options,
                                 const char *value);
 static void update_chart_series(int64_t income_cents, int64_t expense_cents);
@@ -199,8 +201,8 @@ static void build_overview_screen(void) {
   table_terrariums = lv_table_create(screen_overview);
   lv_obj_set_size(table_terrariums, 600, 360);
   lv_obj_align(table_terrariums, LV_ALIGN_TOP_LEFT, 10, 10);
-  lv_table_set_col_cnt(table_terrariums, TERRARIUM_GRID_SIZE);
-  lv_table_set_row_cnt(table_terrariums, TERRARIUM_GRID_SIZE);
+  lv_table_set_column_count(table_terrariums, TERRARIUM_GRID_SIZE);
+  lv_table_set_row_count(table_terrariums, TERRARIUM_GRID_SIZE);
   lv_obj_add_style(table_terrariums, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
   lv_obj_add_style(table_terrariums, &style_cell_selected,
@@ -300,8 +302,8 @@ static void build_detail_screen(void) {
   detail_env_table = lv_table_create(screen_detail);
   lv_obj_set_size(detail_env_table, 620, 260);
   lv_obj_align(detail_env_table, LV_ALIGN_TOP_LEFT, 10, 60);
-  lv_table_set_col_cnt(detail_env_table, 2);
-  lv_table_set_row_cnt(detail_env_table, 12);
+  lv_table_set_column_count(detail_env_table, 2);
+  lv_table_set_row_count(detail_env_table, 12);
   lv_obj_add_style(detail_env_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
@@ -382,8 +384,8 @@ static void build_detail_screen(void) {
   detail_cert_table = lv_table_create(screen_detail);
   lv_obj_set_size(detail_cert_table, 460, 120);
   lv_obj_align(detail_cert_table, LV_ALIGN_BOTTOM_LEFT, 10, -150);
-  lv_table_set_col_cnt(detail_cert_table, 2);
-  lv_table_set_row_cnt(detail_cert_table, 6);
+  lv_table_set_column_count(detail_cert_table, 2);
+  lv_table_set_row_count(detail_cert_table, 6);
   lv_obj_add_style(detail_cert_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
@@ -473,8 +475,8 @@ static void build_economy_screen(void) {
   economy_table = lv_table_create(screen_economy);
   lv_obj_set_size(economy_table, 640, 220);
   lv_obj_align(economy_table, LV_ALIGN_BOTTOM_LEFT, 10, -70);
-  lv_table_set_col_cnt(economy_table, 4);
-  lv_table_set_row_cnt(economy_table, 6);
+  lv_table_set_column_count(economy_table, 4);
+  lv_table_set_row_count(economy_table, 6);
   lv_obj_add_style(economy_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
@@ -560,16 +562,16 @@ static void build_regulation_screen(void) {
   regulations_table = lv_table_create(screen_regulations);
   lv_obj_set_size(regulations_table, 700, 220);
   lv_obj_align(regulations_table, LV_ALIGN_TOP_LEFT, 10, 60);
-  lv_table_set_col_cnt(regulations_table, 4);
-  lv_table_set_row_cnt(regulations_table, 1);
+  lv_table_set_column_count(regulations_table, 4);
+  lv_table_set_row_count(regulations_table, 1);
   lv_obj_add_style(regulations_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
   regulations_alert_table = lv_table_create(screen_regulations);
   lv_obj_set_size(regulations_alert_table, 700, 160);
   lv_obj_align(regulations_alert_table, LV_ALIGN_TOP_LEFT, 10, 300);
-  lv_table_set_col_cnt(regulations_alert_table, 3);
-  lv_table_set_row_cnt(regulations_alert_table, 1);
+  lv_table_set_column_count(regulations_alert_table, 3);
+  lv_table_set_row_count(regulations_alert_table, 1);
   lv_obj_add_style(regulations_alert_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
@@ -765,7 +767,7 @@ static void update_overview_screen(void) {
       lv_table_clear_cell_ctrl(table_terrariums, row, col,
                                LV_TABLE_CELL_CTRL_CUSTOM_1);
       if (index == selected_terrarium) {
-        lv_table_set_cell_ctrl(table_terrariums, row, col,
+        lv_table_add_cell_ctrl(table_terrariums, row, col,
                                LV_TABLE_CELL_CTRL_CUSTOM_1);
       }
     }
@@ -910,9 +912,9 @@ static void update_detail_screen(void) {
                                       terrarium->config.width_cm,
                                       terrarium->config.height_cm);
     if (size_index >= 0) {
-      lv_dropdown_set_selected(dropdown_size, (uint16_t)size_index);
+      dropdown_select_index(dropdown_size, (uint32_t)size_index);
     } else {
-      lv_dropdown_clear_selection(dropdown_size);
+      dropdown_select_none(dropdown_size);
     }
   }
 
@@ -958,7 +960,7 @@ static void update_certificate_table(void) {
   if (!terrarium || !terrarium->occupied) {
     return;
   }
-  lv_table_set_row_cnt(detail_cert_table,
+  lv_table_set_row_count(detail_cert_table,
                        MAX(2U, terrarium->certificate_count + 1U));
   lv_table_set_cell_value(detail_cert_table, 0, 0, "Identifiant");
   lv_table_set_cell_value(detail_cert_table, 0, 1, "Échéance");
@@ -983,7 +985,7 @@ static void update_regulation_screen(void) {
 
   const regulation_rule_t *rules = NULL;
   size_t rule_count = regulations_get_rules(&rules);
-  lv_table_set_row_cnt(regulations_table, rule_count + 1U);
+  lv_table_set_row_count(regulations_table, rule_count + 1U);
   lv_table_set_cell_value(regulations_table, 0, 0, "Espèce");
   lv_table_set_cell_value(regulations_table, 0, 1, "Statut");
   lv_table_set_cell_value(regulations_table, 0, 2, "Certificat");
@@ -1003,7 +1005,7 @@ static void update_regulation_screen(void) {
     lv_table_set_cell_value(regulations_table, i + 1U, 3, dim_buf);
   }
 
-  lv_table_set_row_cnt(regulations_alert_table, 1);
+  lv_table_set_row_count(regulations_alert_table, 1);
   lv_table_set_cell_value(regulations_alert_table, 0, 0, "Terrarium");
   lv_table_set_cell_value(regulations_alert_table, 0, 1, "Incident");
   lv_table_set_cell_value(regulations_alert_table, 0, 2, "Message");
@@ -1047,7 +1049,7 @@ static void update_regulation_screen(void) {
     if (!compliance_issue && terrarium->incident == REPTILE_INCIDENT_NONE) {
       continue;
     }
-    lv_table_set_row_cnt(regulations_alert_table, row + 1U);
+    lv_table_set_row_count(regulations_alert_table, row + 1U);
     char terrarium_id[8];
     snprintf(terrarium_id, sizeof(terrarium_id), "T%02" PRIu32,
              (uint32_t)(i + 1U));
@@ -1059,7 +1061,7 @@ static void update_regulation_screen(void) {
     row++;
   }
   if (row == 1U) {
-    lv_table_set_row_cnt(regulations_alert_table, 2);
+    lv_table_set_row_count(regulations_alert_table, 2);
     lv_table_set_cell_value(regulations_alert_table, 1, 0, "-");
     lv_table_set_cell_value(regulations_alert_table, 1, 1, "Aucun");
     lv_table_set_cell_value(regulations_alert_table, 1, 2,
@@ -1138,15 +1140,21 @@ static void update_chart_series(int64_t income_cents, int64_t expense_cents) {
 
 static void table_event_cb(lv_event_t *e) {
   lv_obj_t *table = lv_event_get_target(e);
-  uint16_t row;
-  uint16_t col;
-  if (lv_table_get_selected_cell(table, &row, &col)) {
-    uint32_t index = row * TERRARIUM_GRID_SIZE + col;
-    if (index < g_facility.terrarium_count) {
-      selected_terrarium = index;
-      update_overview_screen();
-      update_detail_screen();
-    }
+  uint32_t row = LV_TABLE_CELL_NONE;
+  uint32_t col = LV_TABLE_CELL_NONE;
+  lv_table_get_selected_cell(table, &row, &col);
+  if (row == LV_TABLE_CELL_NONE || col == LV_TABLE_CELL_NONE)
+    return;
+
+  uint32_t index = row * TERRARIUM_GRID_SIZE + col;
+  if (index >= g_facility.terrarium_count)
+    return;
+
+  if (!lv_table_has_cell_ctrl(table, row, col, LV_TABLE_CELL_CTRL_CUSTOM_1) ||
+      index != selected_terrarium) {
+    selected_terrarium = index;
+    update_overview_screen();
+    update_detail_screen();
   }
 }
 
@@ -1435,6 +1443,24 @@ static int find_option_index(const char *options, const char *value) {
   return -1;
 }
 
+static void dropdown_select_index(lv_obj_t *dd, uint32_t idx) {
+  if (!dd)
+    return;
+  lv_dropdown_set_selected_highlight(dd, true);
+  lv_dropdown_set_text(dd, NULL);
+  lv_dropdown_set_selected(dd, idx);
+}
+
+static void dropdown_select_none(lv_obj_t *dd) {
+  if (!dd)
+    return;
+  lv_dropdown_set_selected_highlight(dd, false);
+  lv_dropdown_set_text(dd, "");
+#if defined(LV_DROPDOWN_SELECTED_NONE)
+  lv_dropdown_set_selected(dd, LV_DROPDOWN_SELECTED_NONE);
+#endif
+}
+
 static int find_size_option(float length_cm, float width_cm, float height_cm) {
   static const struct {
     float l;
@@ -1462,8 +1488,8 @@ static void load_dropdown_value(lv_obj_t *dd, const char *options,
     return;
   int idx = find_option_index(options, value);
   if (idx >= 0) {
-    lv_dropdown_set_selected(dd, idx);
+    dropdown_select_index(dd, (uint32_t)idx);
   } else {
-    lv_dropdown_clear_selection(dd);
+    dropdown_select_none(dd);
   }
 }
