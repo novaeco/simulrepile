@@ -1,5 +1,6 @@
 #include "sensors.h"
 #include "game_mode.h"
+#include <math.h>
 
 extern const sensor_driver_t sensors_real_driver;
 extern const sensor_driver_t sensors_sim_driver;
@@ -39,6 +40,29 @@ float sensors_read_humidity(void)
         return s_driver->read_humidity();
     }
     return 0.0f;
+}
+
+float sensors_read_lux(void)
+{
+    sensors_select_driver();
+    if (s_driver && s_driver->read_lux) {
+        return s_driver->read_lux();
+    }
+    return NAN;
+}
+
+sensor_uv_data_t sensors_read_uv(void)
+{
+    sensors_select_driver();
+    if (s_driver && s_driver->read_uv) {
+        return s_driver->read_uv();
+    }
+    sensor_uv_data_t data = {
+        .uva = NAN,
+        .uvb = NAN,
+        .uv_index = NAN,
+    };
+    return data;
 }
 
 void sensors_deinit(void)

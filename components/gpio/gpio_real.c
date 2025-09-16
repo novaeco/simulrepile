@@ -2,6 +2,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+static bool s_fan_state = false;
+static bool s_uv_lamp_state = false;
+static bool s_light_state = false;
+
 static void gpio_real_mode(uint16_t Pin, uint16_t Mode)
 {
     gpio_config_t io_conf = {};
@@ -73,14 +77,56 @@ static void gpio_real_heat(void)
     gpio_set_level(HEAT_RES_PIN, 0);
 }
 
+static void gpio_real_set_fan(bool on)
+{
+    gpio_real_write(FAN_PIN, on ? 1 : 0);
+    s_fan_state = on;
+}
+
+static bool gpio_real_get_fan(void)
+{
+    return s_fan_state;
+}
+
+static void gpio_real_set_uv_lamp(bool on)
+{
+    gpio_real_write(UV_LAMP_PIN, on ? 1 : 0);
+    s_uv_lamp_state = on;
+}
+
+static bool gpio_real_get_uv_lamp(void)
+{
+    return s_uv_lamp_state;
+}
+
+static void gpio_real_set_light(bool on)
+{
+    gpio_real_write(LIGHT_PIN, on ? 1 : 0);
+    s_light_state = on;
+}
+
+static bool gpio_real_get_light(void)
+{
+    return s_light_state;
+}
+
 static esp_err_t gpio_real_init(void)
 {
     gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
     gpio_real_mode(WATER_PUMP_PIN, GPIO_MODE_OUTPUT);
     gpio_real_mode(HEAT_RES_PIN, GPIO_MODE_OUTPUT);
+    gpio_real_mode(FAN_PIN, GPIO_MODE_OUTPUT);
+    gpio_real_mode(UV_LAMP_PIN, GPIO_MODE_OUTPUT);
+    gpio_real_mode(LIGHT_PIN, GPIO_MODE_OUTPUT);
     gpio_real_write(SERVO_FEED_PIN, 0);
     gpio_real_write(WATER_PUMP_PIN, 0);
     gpio_real_write(HEAT_RES_PIN, 0);
+    gpio_real_write(FAN_PIN, 0);
+    gpio_real_write(UV_LAMP_PIN, 0);
+    gpio_real_write(LIGHT_PIN, 0);
+    s_fan_state = false;
+    s_uv_lamp_state = false;
+    s_light_state = false;
     return ESP_OK;
 }
 
@@ -89,10 +135,20 @@ static void gpio_real_deinit(void)
     gpio_real_write(WATER_PUMP_PIN, 0);
     gpio_real_write(HEAT_RES_PIN, 0);
     gpio_real_write(SERVO_FEED_PIN, 0);
+    gpio_real_write(FAN_PIN, 0);
+    gpio_real_write(UV_LAMP_PIN, 0);
+    gpio_real_write(LIGHT_PIN, 0);
+
+    s_fan_state = false;
+    s_uv_lamp_state = false;
+    s_light_state = false;
 
     gpio_real_mode(WATER_PUMP_PIN, GPIO_MODE_INPUT);
     gpio_real_mode(HEAT_RES_PIN, GPIO_MODE_INPUT);
     gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_INPUT);
+    gpio_real_mode(FAN_PIN, GPIO_MODE_INPUT);
+    gpio_real_mode(UV_LAMP_PIN, GPIO_MODE_INPUT);
+    gpio_real_mode(LIGHT_PIN, GPIO_MODE_INPUT);
 }
 
 const actuator_driver_t gpio_real_driver = {
@@ -104,6 +160,12 @@ const actuator_driver_t gpio_real_driver = {
     .feed = gpio_real_feed,
     .water = gpio_real_water,
     .heat = gpio_real_heat,
+    .set_fan = gpio_real_set_fan,
+    .get_fan = gpio_real_get_fan,
+    .set_uv_lamp = gpio_real_set_uv_lamp,
+    .get_uv_lamp = gpio_real_get_uv_lamp,
+    .set_light = gpio_real_set_light,
+    .get_light = gpio_real_get_light,
     .deinit = gpio_real_deinit,
 };
 
