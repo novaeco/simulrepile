@@ -729,14 +729,16 @@ static void publish_can_frame(void) {
 static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
   char buffer[96];
   if (index >= g_facility.terrarium_count) {
-    snprintf(buffer, sizeof(buffer), "T%02u\n--", index + 1U);
+    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n--",
+             (uint32_t)(index + 1U));
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility, index);
   if (!terrarium || !terrarium->occupied) {
-    snprintf(buffer, sizeof(buffer), "T%02u\nDisponible", index + 1U);
+    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\nDisponible",
+             (uint32_t)(index + 1U));
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
@@ -747,8 +749,8 @@ static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
        terrarium->incident != REPTILE_INCIDENT_NONE)
           ? LV_SYMBOL_WARNING
           : LV_SYMBOL_OK;
-  snprintf(buffer, sizeof(buffer), "T%02u\n%s\n%s", index + 1U,
-           terrarium->species.name, alert);
+  snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n%s\n%s",
+           (uint32_t)(index + 1U), terrarium->species.name, alert);
   lv_table_set_cell_value(table_terrariums, row, col, buffer);
 }
 
@@ -773,13 +775,15 @@ static void update_overview_screen(void) {
                         (double)g_facility.economy.cash_cents / 100.0);
   const reptile_day_cycle_t *cycle = &g_facility.cycle;
   uint32_t elapsed_ms = cycle->elapsed_in_phase_ms;
-  lv_label_set_text_fmt(label_cycle, "%s %02u:%02u | Jour %u",
+  lv_label_set_text_fmt(label_cycle,
+                        "%s %02u:%02u | Jour %" PRIu32,
                         cycle->is_daytime ? "Jour" : "Nuit",
                         (unsigned)(elapsed_ms / 60000U),
                         (unsigned)((elapsed_ms / 1000U) % 60U),
                         g_facility.economy.days_elapsed);
   lv_label_set_text_fmt(label_alerts,
-                        "Alertes: %u (pathologies %u / conformité %u)",
+                        "Alertes: %" PRIu32 " (pathologies %" PRIu32
+                        " / conformité %" PRIu32 ")",
                         g_facility.alerts_active, g_facility.pathology_active,
                         g_facility.compliance_alerts);
   if (overview_status_icon) {
@@ -787,14 +791,13 @@ static void update_overview_screen(void) {
                                             ? &gImage_terrarium_alert
                                             : &gImage_terrarium_ok);
   }
-  lv_label_set_text_fmt(label_inventory,
-                        "Stocks - Proies:%u | Eau:%u L | Substrat:%u | UV:%u | "
-                        "Décor:%u",
-                        g_facility.inventory.feeders,
-                        g_facility.inventory.water_reserve_l,
-                        g_facility.inventory.substrate_bags,
-                        g_facility.inventory.uv_bulbs,
-                        g_facility.inventory.decor_kits);
+  lv_label_set_text_fmt(
+      label_inventory,
+      "Stocks - Proies:%" PRIu32 " | Eau:%" PRIu32 " L | Substrat:%" PRIu32
+      " | UV:%" PRIu32 " | Décor:%" PRIu32,
+      g_facility.inventory.feeders, g_facility.inventory.water_reserve_l,
+      g_facility.inventory.substrate_bags, g_facility.inventory.uv_bulbs,
+      g_facility.inventory.decor_kits);
 
   if (sleep_switch) {
     if (sleep_is_enabled()) {
@@ -817,9 +820,9 @@ static void update_detail_screen(void) {
     return;
   }
   const species_profile_t *profile = &terrarium->species;
-  lv_label_set_text_fmt(detail_title, "T%02u - %s (%s)",
-                        selected_terrarium + 1U, terrarium->nickname,
-                        profile->name);
+  lv_label_set_text_fmt(detail_title, "T%02" PRIu32 " - %s (%s)",
+                        (uint32_t)(selected_terrarium + 1U),
+                        terrarium->nickname, profile->name);
 
   lv_table_set_cell_value(detail_env_table, 0, 0, "Température");
   lv_table_set_cell_value_fmt(detail_env_table, 0, 1, "%.1f °C (%.1f-%.1f)",
@@ -1046,7 +1049,8 @@ static void update_regulation_screen(void) {
     }
     lv_table_set_row_cnt(regulations_alert_table, row + 1U);
     char terrarium_id[8];
-    snprintf(terrarium_id, sizeof(terrarium_id), "T%02u", i + 1U);
+    snprintf(terrarium_id, sizeof(terrarium_id), "T%02" PRIu32,
+             (uint32_t)(i + 1U));
     lv_table_set_cell_value(regulations_alert_table, row, 0, terrarium_id);
     lv_table_set_cell_value(regulations_alert_table, row, 1,
                             incident_to_string(terrarium->incident));
@@ -1065,7 +1069,7 @@ static void update_regulation_screen(void) {
   if (regulations_summary_label) {
     lv_label_set_text_fmt(
         regulations_summary_label,
-        "Alertes conformité: %u | Incidents actifs: %u",
+        "Alertes conformité: %" PRIu32 " | Incidents actifs: %" PRIu32,
         g_facility.compliance_alerts, g_facility.alerts_active);
   }
 }
@@ -1085,7 +1089,8 @@ static void update_economy_screen(void) {
     if (!terrarium || !terrarium->occupied) {
       continue;
     }
-    lv_table_set_cell_value_fmt(economy_table, row, 0, "T%02u", i + 1U);
+    lv_table_set_cell_value_fmt(economy_table, row, 0, "T%02" PRIu32,
+                                (uint32_t)(i + 1U));
     lv_table_set_cell_value_fmt(economy_table, row, 1, "%.2f",
                                 terrarium->revenue_cents_per_day / 100.0f);
     lv_table_set_cell_value_fmt(economy_table, row, 2, "%.2f",
@@ -1108,7 +1113,8 @@ static void update_economy_screen(void) {
 
   lv_label_set_text_fmt(
       economy_summary_label,
-      "Jour %u | Recettes: %.2f € | Dépenses: %.2f € | Amendes cumulées: %.2f €",
+      "Jour %" PRIu32
+      " | Recettes: %.2f € | Dépenses: %.2f € | Amendes cumulées: %.2f €",
       g_facility.economy.days_elapsed,
       g_facility.economy.daily_income_cents / 100.0,
       g_facility.economy.daily_expenses_cents / 100.0,
@@ -1212,8 +1218,8 @@ static void add_certificate_event_cb(lv_event_t *e) {
     return;
   reptile_certificate_t cert = {0};
   time_t now = time(NULL);
-  snprintf(cert.id, sizeof(cert.id), "CERT-%02u-%ld",
-           selected_terrarium + 1U, (long)(now % 100000));
+  snprintf(cert.id, sizeof(cert.id), "CERT-%02" PRIu32 "-%ld",
+           (uint32_t)(selected_terrarium + 1U), (long)(now % 100000));
   snprintf(cert.authority, sizeof(cert.authority), "DDPP");
   cert.issue_date = now;
   cert.expiry_date = now + 365L * 24L * 3600L;
@@ -1272,8 +1278,8 @@ static void register_button_event_cb(lv_event_t *e) {
   } else {
     char ref[REPTILE_CERT_ID_LEN];
     time_t now = time(NULL);
-    snprintf(ref, sizeof(ref), "REG-%02u-%ld", selected_terrarium + 1U,
-             (long)(now % 100000));
+    snprintf(ref, sizeof(ref), "REG-%02" PRIu32 "-%ld",
+             (uint32_t)(selected_terrarium + 1U), (long)(now % 100000));
     reptile_terrarium_set_register(terrarium, true, ref);
   }
   reptile_facility_save(&g_facility);
