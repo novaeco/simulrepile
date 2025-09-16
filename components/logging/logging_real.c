@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -111,23 +112,24 @@ void logging_real_append(size_t terrarium_index, const reptile_env_terrarium_sta
     time_t now = time(NULL);
     float total = state->energy_heat_Wh + state->energy_pump_Wh + state->energy_uv_Wh;
     fprintf(f,
-            "%ld,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%" PRIu32 "\n",
+            "%ld,%.3f,%.3f,%.3f,%.3f,%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8
+            ",%.3f,%.3f,%.3f,%.3f,%" PRIu32 "\n",
             (long)now,
             state->temperature_c,
             state->humidity_pct,
             state->target_temperature_c,
             state->target_humidity_pct,
-            state->heating,
-            state->pumping,
-            state->uv_light,
-            state->manual_heat,
-            state->manual_pump,
-            state->manual_uv_override,
+            (uint8_t)state->heating,
+            (uint8_t)state->pumping,
+            (uint8_t)state->uv_light,
+            (uint8_t)state->manual_heat,
+            (uint8_t)state->manual_pump,
+            (uint8_t)state->manual_uv_override,
             state->energy_heat_Wh,
             state->energy_pump_Wh,
             state->energy_uv_Wh,
             total,
-            state->alarm_flags);
+            (uint32_t)state->alarm_flags);
     fflush(f);
     if (ferror(f)) {
         ESP_LOGE(REAL_LOG_TAG, "Write failure on terrarium %u log", (unsigned)(terrarium_index + 1));
