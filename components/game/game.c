@@ -625,7 +625,8 @@ static void btn_new_game_event(lv_event_t *e) {
   slot->terrarium.profile.night_humidity = info->needs.humidity + 20.0f;
   slot->terrarium.profile.day_uv = info->needs.uv_index;
   slot->terrarium.phase_offset = 0.0f;
-  snprintf(slot->terrarium.name, sizeof(slot->terrarium.name), "Terrarium %u", 1u);
+  snprintf(slot->terrarium.name, sizeof(slot->terrarium.name),
+           "Terrarium %u", (unsigned)(current_slot + 1));
   rebuild_environment_bindings();
   apply_terrarium_environment(slot, slot->terrarium.temperature,
                               slot->terrarium.humidity,
