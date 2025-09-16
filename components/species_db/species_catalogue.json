@@ -14,7 +14,9 @@
     },
     "certificate_required": false,
     "certificate_code": "",
-    "legal_reference": "Arrêté du 8 octobre 2018 - annexe 2 (Espèces domestiques)"
+    "legal_reference": "Arrêté du 8 octobre 2018 - annexe 2 (Espèces domestiques)",
+    "protected_status": false,
+    "protected_reference": ""
   },
   {
     "id": "python_regius",
@@ -31,7 +33,9 @@
     },
     "certificate_required": true,
     "certificate_code": "CDC_APA_2022_123",
-    "legal_reference": "Arrêté du 8 octobre 2018 - annexe 2 (Espèces soumises à CDC)"
+    "legal_reference": "Arrêté du 8 octobre 2018 - annexe 2 (Espèces soumises à CDC)",
+    "protected_status": true,
+    "protected_reference": "Règlement (CE) n° 338/97 annexe B - certificat intra-UE CITES"
   },
   {
     "id": "eublepharis_macularius",
@@ -48,6 +52,8 @@
     },
     "certificate_required": false,
     "certificate_code": "",
-    "legal_reference": "Arrêté du 10 août 2004 modifié (animaux domestiques)"
+    "legal_reference": "Arrêté du 10 août 2004 modifié (animaux domestiques)",
+    "protected_status": false,
+    "protected_reference": ""
   }
 ]
