@@ -1,4 +1,5 @@
 #include "reptile_logic.h"
+#include "regulations.h"
 #include "sd.h"
 
 #ifdef ESP_PLATFORM
@@ -22,13 +23,14 @@
 #endif
 
 #include <errno.h>
+#include <stdarg.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #define FACILITY_MAGIC 0x52544643u /* 'RTFC' */
-#define FACILITY_VERSION 1u
+#define FACILITY_VERSION 2u
 
 #define COST_FEEDING_CENTS 180
 #define COST_WATER_CENTS 40
@@ -38,6 +40,9 @@
 #define VET_INTERVENTION_CENTS 12500
 #define INCIDENT_FINE_CERT_CENTS 45000
 #define INCIDENT_FINE_ENV_CENTS 20000
+#define INCIDENT_FINE_REGISTER_CENTS 15000
+#define INCIDENT_FINE_DIMENSION_CENTS 30000
+#define INCIDENT_FINE_AUDIT_CENTS 60000
 
 #define HOURS_PER_DAY 24.0f
 
@@ -71,6 +76,12 @@ static bool certificates_valid(const terrarium_t *terrarium, time_t now,
 static void update_growth(terrarium_t *terrarium,
                           const species_profile_t *profile, float hours,
                           bool environment_ok, bool needs_ok);
+static void terrarium_set_compliance_message(terrarium_t *terrarium,
+                                             const char *fmt, ...);
+static void terrarium_init_dimensions_for_rule(terrarium_t *terrarium,
+                                               const regulation_rule_t *rule);
+static int64_t incident_fine(reptile_incident_t incident);
+static int incident_priority(reptile_incident_t incident);
 
 static const species_profile_t s_species_db[REPTILE_SPECIES_COUNT] = {
     {
@@ -249,6 +260,8 @@ static void terrarium_reset(terrarium_t *terrarium) {
               "Branches + cachettes");
   copy_string(terrarium->config.uv_setup, sizeof(terrarium->config.uv_setup),
               "UVB T5 5%");
+  terrarium_set_compliance_message(terrarium,
+                                   "Aucune espèce attribuée");
 }
 
 static void facility_reset(reptile_facility_t *facility) {
@@ -495,6 +508,69 @@ static bool certificates_valid(const terrarium_t *terrarium, time_t now,
   return valid;
 }
 
+static void terrarium_set_compliance_message(terrarium_t *terrarium,
+                                             const char *fmt, ...) {
+  if (!terrarium || !fmt) {
+    return;
+  }
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(terrarium->compliance_message,
+            sizeof(terrarium->compliance_message), fmt, args);
+  va_end(args);
+}
+
+static void terrarium_init_dimensions_for_rule(terrarium_t *terrarium,
+                                               const regulation_rule_t *rule) {
+  if (!terrarium || !rule) {
+    return;
+  }
+  terrarium->config.length_cm =
+      MAX(terrarium->config.length_cm, rule->min_length_cm);
+  terrarium->config.width_cm =
+      MAX(terrarium->config.width_cm, rule->min_width_cm);
+  terrarium->config.height_cm =
+      MAX(terrarium->config.height_cm, rule->min_height_cm);
+}
+
+static int64_t incident_fine(reptile_incident_t incident) {
+  switch (incident) {
+  case REPTILE_INCIDENT_CERTIFICATE_MISSING:
+  case REPTILE_INCIDENT_CERTIFICATE_EXPIRED:
+    return INCIDENT_FINE_CERT_CENTS;
+  case REPTILE_INCIDENT_REGISTER_MISSING:
+    return INCIDENT_FINE_REGISTER_CENTS;
+  case REPTILE_INCIDENT_DIMENSION_NON_CONFORM:
+    return INCIDENT_FINE_DIMENSION_CENTS;
+  case REPTILE_INCIDENT_AUDIT_LOCK:
+    return INCIDENT_FINE_AUDIT_CENTS;
+  default:
+    return 0;
+  }
+}
+
+static int incident_priority(reptile_incident_t incident) {
+  switch (incident) {
+  case REPTILE_INCIDENT_AUDIT_LOCK:
+    return 6;
+  case REPTILE_INCIDENT_DIMENSION_NON_CONFORM:
+    return 5;
+  case REPTILE_INCIDENT_CERTIFICATE_EXPIRED:
+    return 4;
+  case REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE:
+    return 4;
+  case REPTILE_INCIDENT_CERTIFICATE_MISSING:
+    return 3;
+  case REPTILE_INCIDENT_REGISTER_MISSING:
+    return 2;
+  case REPTILE_INCIDENT_EDUCATION_MISSING:
+    return 1;
+  case REPTILE_INCIDENT_NONE:
+  default:
+    return 0;
+  }
+}
+
 static void update_growth(terrarium_t *terrarium,
                           const species_profile_t *profile, float hours,
                           bool environment_ok, bool needs_ok) {
@@ -568,6 +644,9 @@ void reptile_facility_tick(reptile_facility_t *facility, uint32_t elapsed_ms) {
     if (profile->name[0] == '\0') {
       continue;
     }
+
+    const regulation_rule_t *rule = regulations_get_rule((int)profile->id);
+    bool compliance_alert = false;
 
     float target_temp_min =
         cycle->is_daytime ? profile->day_temp_min : profile->night_temp_min;
@@ -691,39 +770,121 @@ void reptile_facility_tick(reptile_facility_t *facility, uint32_t elapsed_ms) {
       }
     }
 
+    reptile_incident_t previous_incident = terrarium->incident;
     bool expired_cert = false;
     bool cert_ok = certificates_valid(terrarium, now, &expired_cert);
-    if (!cert_ok) {
+
+    regulations_compliance_report_t reg_report = {0};
+    reptile_incident_t compliance_incident = REPTILE_INCIDENT_NONE;
+    bool compliance_issue = false;
+    bool education_issue = false;
+
+    if (rule) {
+      regulations_compliance_input_t input = {
+          .length_cm = terrarium->config.length_cm,
+          .width_cm = terrarium->config.width_cm,
+          .height_cm = terrarium->config.height_cm,
+          .temperature_c = terrarium->temperature_c,
+          .humidity_pct = terrarium->humidity_pct,
+          .uv_index = terrarium->uv_index,
+          .is_daytime = cycle->is_daytime,
+          .certificate_count = terrarium->certificate_count,
+          .certificate_valid = cert_ok,
+          .certificate_expired = expired_cert,
+          .register_present = terrarium->config.register_completed,
+          .education_present = terrarium->config.educational_panel_present,
+      };
+      if (regulations_evaluate(rule, &input, &reg_report) == ESP_OK) {
+        terrarium->audit_locked = reg_report.blocking;
+        if (!reg_report.allowed) {
+          compliance_incident = REPTILE_INCIDENT_AUDIT_LOCK;
+          compliance_issue = true;
+          terrarium_set_compliance_message(terrarium,
+                                           "Espèce interdite (%s)",
+                                           rule->legal_reference);
+        } else if (!reg_report.dimensions_ok) {
+          compliance_incident = REPTILE_INCIDENT_DIMENSION_NON_CONFORM;
+          compliance_issue = true;
+          terrarium_set_compliance_message(
+              terrarium,
+              "Dimensions mini %.0fx%.0fx%.0f cm (%s)",
+              rule->min_length_cm, rule->min_width_cm, rule->min_height_cm,
+              rule->legal_reference);
+        } else if (!reg_report.certificate_ok) {
+          compliance_incident = expired_cert
+                                    ? REPTILE_INCIDENT_CERTIFICATE_EXPIRED
+                                    : REPTILE_INCIDENT_CERTIFICATE_MISSING;
+          compliance_issue = true;
+          terrarium_set_compliance_message(terrarium, "%s",
+                                           rule->certificate_text);
+        } else if (!reg_report.register_ok) {
+          compliance_incident = REPTILE_INCIDENT_REGISTER_MISSING;
+          compliance_issue = true;
+          terrarium_set_compliance_message(terrarium,
+                                           "Registre obligatoire absent (%s)",
+                                           rule->legal_reference);
+        } else if (!reg_report.education_ok) {
+          compliance_incident = REPTILE_INCIDENT_EDUCATION_MISSING;
+          education_issue = true;
+          terrarium_set_compliance_message(terrarium,
+                                           "Pédagogie à compléter : %s",
+                                           rule->education_text);
+        } else {
+          terrarium->audit_locked = false;
+          terrarium_set_compliance_message(terrarium, "Conforme (%s)",
+                                           rule->legal_reference);
+        }
+      }
+    } else {
+      terrarium->audit_locked = !cert_ok;
+      if (!cert_ok) {
+        compliance_incident = expired_cert ? REPTILE_INCIDENT_CERTIFICATE_EXPIRED
+                                           : REPTILE_INCIDENT_CERTIFICATE_MISSING;
+        compliance_issue = true;
+        terrarium_set_compliance_message(terrarium,
+                                         "Certificat requis pour %s",
+                                         profile->name);
+      } else if (terrarium->compliance_message[0] == '\0') {
+        terrarium_set_compliance_message(terrarium,
+                                         "Contrôle documentaire à jour");
+      }
+    }
+
+    if (!compliance_issue && !education_issue) {
+      terrarium->compliance_timer_h = 0.0f;
+    } else if (compliance_incident != REPTILE_INCIDENT_EDUCATION_MISSING) {
       terrarium->compliance_timer_h += hours;
-      if (terrarium->compliance_timer_h > 6.0f) {
-        reptile_incident_t new_incident =
-            expired_cert ? REPTILE_INCIDENT_CERTIFICATE_EXPIRED
-                         : REPTILE_INCIDENT_CERTIFICATE_MISSING;
-        if (terrarium->incident != new_incident) {
-          terrarium->incident = new_incident;
-          facility->economy.fines_cents += INCIDENT_FINE_CERT_CENTS;
-          facility->economy.cash_cents -= INCIDENT_FINE_CERT_CENTS;
+      if (terrarium->compliance_timer_h > 6.0f &&
+          previous_incident != compliance_incident) {
+        int64_t fine = incident_fine(compliance_incident);
+        if (fine > 0) {
+          facility->economy.fines_cents += fine;
+          facility->economy.cash_cents -= fine;
         }
       }
     } else {
       terrarium->compliance_timer_h = 0.0f;
-      if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING ||
-          terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
-        terrarium->incident = REPTILE_INCIDENT_NONE;
-      }
     }
 
-    if (!environment_ok && terrarium->pathology_timer_h > 8.0f) {
-      if (terrarium->incident != REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
-        terrarium->incident = REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE;
-        facility->economy.fines_cents += INCIDENT_FINE_ENV_CENTS;
-        facility->economy.cash_cents -= INCIDENT_FINE_ENV_CENTS;
+    terrarium->incident = compliance_incident;
+    compliance_alert = compliance_issue || education_issue;
+
+    bool environment_violation =
+        (!environment_ok && terrarium->pathology_timer_h > 8.0f);
+    reptile_incident_t final_incident = terrarium->incident;
+    if (environment_violation) {
+      if (incident_priority(REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) >
+          incident_priority(final_incident)) {
+        if (previous_incident != REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
+          facility->economy.fines_cents += INCIDENT_FINE_ENV_CENTS;
+          facility->economy.cash_cents -= INCIDENT_FINE_ENV_CENTS;
+        }
+        final_incident = REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE;
       }
-    } else if (environment_ok &&
-               terrarium->incident ==
-                   REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
-      terrarium->incident = REPTILE_INCIDENT_NONE;
+    } else if (final_incident == REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE) {
+      final_incident = REPTILE_INCIDENT_NONE;
     }
+    terrarium->incident = final_incident;
 
     update_growth(terrarium, profile, hours, environment_ok, needs_ok);
 
@@ -736,10 +897,9 @@ void reptile_facility_tick(reptile_facility_t *facility, uint32_t elapsed_ms) {
     }
     if (terrarium->incident != REPTILE_INCIDENT_NONE) {
       incident_count++;
-      if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING ||
-          terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
-        compliance_count++;
-      }
+    }
+    if (compliance_alert) {
+      compliance_count++;
     }
 
     int64_t op_cost = terrarium->operating_cost_cents_per_day;
@@ -841,6 +1001,13 @@ esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
   if (!terrarium || !profile) {
     return ESP_ERR_INVALID_ARG;
   }
+  char reason[REPTILE_COMPLIANCE_MSG_LEN];
+  esp_err_t reg =
+      regulations_validate_species((int)profile->id, reason, sizeof(reason));
+  if (reg != ESP_OK) {
+    terrarium_set_compliance_message(terrarium, "%s", reason);
+    return reg;
+  }
   terrarium_reset(terrarium);
   terrarium->occupied = true;
   terrarium->species = *profile;
@@ -857,6 +1024,20 @@ esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
   terrarium->uv_index = (profile->uv_min + profile->uv_max) * 0.5f;
   terrarium->operating_cost_cents_per_day = profile->upkeep_cents_per_day;
   terrarium->revenue_cents_per_day = profile->ticket_price_cents;
+  const regulation_rule_t *rule = regulations_get_rule((int)profile->id);
+  if (rule) {
+    terrarium_init_dimensions_for_rule(terrarium, rule);
+    terrarium->audit_locked = rule->certificate_required || rule->register_required;
+    terrarium_set_compliance_message(
+        terrarium, "%s | %s",
+        regulations_status_to_string(rule->status),
+        rule->certificate_text ? rule->certificate_text : "Pas de certificat");
+  } else {
+    terrarium->audit_locked = false;
+    terrarium_set_compliance_message(terrarium,
+                                     "Aucune règle trouvée pour %s",
+                                     profile->name);
+  }
   terrarium->last_update = time(NULL);
   return ESP_OK;
 }
@@ -944,6 +1125,168 @@ esp_err_t reptile_terrarium_add_certificate(
     return ESP_ERR_NO_MEM;
   }
   terrarium->certificates[terrarium->certificate_count++] = *certificate;
+  return ESP_OK;
+}
+
+esp_err_t reptile_terrarium_set_dimensions(terrarium_t *terrarium,
+                                           float length_cm, float width_cm,
+                                           float height_cm) {
+  if (!terrarium || length_cm <= 0.f || width_cm <= 0.f || height_cm <= 0.f) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  const regulation_rule_t *rule =
+      regulations_get_rule((int)terrarium->species.id);
+  if (rule) {
+    if (length_cm < rule->min_length_cm || width_cm < rule->min_width_cm ||
+        height_cm < rule->min_height_cm) {
+      return ESP_ERR_INVALID_ARG;
+    }
+  }
+  terrarium->config.length_cm = length_cm;
+  terrarium->config.width_cm = width_cm;
+  terrarium->config.height_cm = height_cm;
+  return ESP_OK;
+}
+
+void reptile_terrarium_set_education(terrarium_t *terrarium, bool present) {
+  if (!terrarium) {
+    return;
+  }
+  terrarium->config.educational_panel_present = present;
+}
+
+esp_err_t reptile_terrarium_set_register(terrarium_t *terrarium,
+                                         bool recorded,
+                                         const char *reference) {
+  if (!terrarium) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  terrarium->config.register_completed = recorded;
+  if (recorded) {
+    if (!reference || reference[0] == '\0') {
+      return ESP_ERR_INVALID_ARG;
+    }
+    copy_string(terrarium->config.register_reference,
+                sizeof(terrarium->config.register_reference), reference);
+  } else {
+    terrarium->config.register_reference[0] = '\0';
+  }
+  return ESP_OK;
+}
+
+esp_err_t reptile_facility_export_regulation_report(
+    const reptile_facility_t *facility, const char *relative_path) {
+  if (!facility) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  char reports_dir[128];
+  snprintf(reports_dir, sizeof(reports_dir), "%s/reports", MOUNT_POINT);
+  if (mkdir(reports_dir, 0777) != 0 && errno != EEXIST) {
+    return ESP_FAIL;
+  }
+
+  char path[256];
+  if (relative_path && relative_path[0] != '\0') {
+    if (relative_path[0] == '/') {
+      snprintf(path, sizeof(path), "%s", relative_path);
+    } else {
+      snprintf(path, sizeof(path), "%s/%s", reports_dir, relative_path);
+    }
+  } else {
+    time_t now = time(NULL);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    char stamp[32];
+    strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm_info);
+    snprintf(path, sizeof(path), "%s/compliance_%s.csv", reports_dir, stamp);
+  }
+
+  FILE *f = fopen(path, "w");
+  if (!f) {
+    return ESP_FAIL;
+  }
+
+  fprintf(f,
+          "terrarium;espece;statut;dimensions_cm;certificat;registre;education;incident;message\n");
+
+  for (uint32_t i = 0; i < facility->terrarium_count; ++i) {
+    const terrarium_t *terrarium = &facility->terrariums[i];
+    if (!terrarium->occupied) {
+      continue;
+    }
+    const regulation_rule_t *rule =
+        regulations_get_rule((int)terrarium->species.id);
+    bool expired = false;
+    bool cert_ok = certificates_valid(terrarium, time(NULL), &expired);
+    regulations_compliance_input_t input = {
+        .length_cm = terrarium->config.length_cm,
+        .width_cm = terrarium->config.width_cm,
+        .height_cm = terrarium->config.height_cm,
+        .temperature_c = terrarium->temperature_c,
+        .humidity_pct = terrarium->humidity_pct,
+        .uv_index = terrarium->uv_index,
+        .is_daytime = facility->cycle.is_daytime,
+        .certificate_count = terrarium->certificate_count,
+        .certificate_valid = cert_ok,
+        .certificate_expired = expired,
+        .register_present = terrarium->config.register_completed,
+        .education_present = terrarium->config.educational_panel_present,
+    };
+    regulations_compliance_report_t report = {0};
+    if (rule) {
+      regulations_evaluate(rule, &input, &report);
+    }
+
+    const char *status =
+        rule ? regulations_status_to_string(rule->status) : "Non défini";
+    const char *incident_str = "Aucun";
+    switch (terrarium->incident) {
+    case REPTILE_INCIDENT_CERTIFICATE_MISSING:
+      incident_str = "Certificat manquant";
+      break;
+    case REPTILE_INCIDENT_CERTIFICATE_EXPIRED:
+      incident_str = "Certificat expiré";
+      break;
+    case REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE:
+      incident_str = "Environnement non conforme";
+      break;
+    case REPTILE_INCIDENT_REGISTER_MISSING:
+      incident_str = "Registre absent";
+      break;
+    case REPTILE_INCIDENT_DIMENSION_NON_CONFORM:
+      incident_str = "Dimensions insuffisantes";
+      break;
+    case REPTILE_INCIDENT_EDUCATION_MISSING:
+      incident_str = "Pédagogie manquante";
+      break;
+    case REPTILE_INCIDENT_AUDIT_LOCK:
+      incident_str = "Blocage administratif";
+      break;
+    case REPTILE_INCIDENT_NONE:
+    default:
+      break;
+    }
+
+    fprintf(f,
+            "T%02u;%s;%s;%.0fx%.0fx%.0f;%s;%s;%s;%s;%s\n",
+            i + 1U, terrarium->species.name, status,
+            terrarium->config.length_cm, terrarium->config.width_cm,
+            terrarium->config.height_cm,
+            (rule && rule->certificate_required) ? (report.certificate_ok ?
+                                                   "OK"
+                                                   : "À vérifier")
+                                                 : "Non requis",
+            terrarium->config.register_completed ? "OK" : "À compléter",
+            terrarium->config.educational_panel_present ? "OK"
+                                                        : "À afficher",
+            incident_str,
+            terrarium->compliance_message[0] != '\0'
+                ? terrarium->compliance_message
+                : "");
+  }
+
+  fclose(f);
   return ESP_OK;
 }
 
