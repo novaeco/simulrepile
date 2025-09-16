@@ -288,7 +288,7 @@ static esp_err_t allocate_new_save_slot(char *slot, size_t len) {
   uint32_t index = 0;
   FILE *f = fopen(index_path, "r");
   if (f) {
-    if (fscanf(f, "%u", &index) != 1) {
+    if (fscanf(f, "%" SCNu32, &index) != 1) {
       index = 0;
     }
     fclose(f);
@@ -300,7 +300,7 @@ static esp_err_t allocate_new_save_slot(char *slot, size_t len) {
     ESP_LOGW(TAG, "Impossible d'ouvrir %s pour écriture", index_path);
     return ESP_FAIL;
   }
-  if (fprintf(f, "%u\n", index) < 0) {
+  if (fprintf(f, "%" PRIu32 "\n", index) < 0) {
     ESP_LOGW(TAG, "Impossible d'écrire l'index de sauvegarde dans %s",
              index_path);
     fclose(f);
@@ -308,7 +308,8 @@ static esp_err_t allocate_new_save_slot(char *slot, size_t len) {
   }
   fclose(f);
 
-  int needed = snprintf(slot, len, REPTILE_SAVE_PREFIX "%04u" REPTILE_SAVE_EXT,
+  int needed = snprintf(slot, len,
+                        REPTILE_SAVE_PREFIX "%04" PRIu32 REPTILE_SAVE_EXT,
                         index);
   if (needed < 0 || (size_t)needed >= len) {
     if (len > 0) {
