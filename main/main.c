@@ -23,7 +23,10 @@ static void gui_task(void *arg)
 {
     (void)arg;
     while (1) {
-        lv_timer_handler();
+        if (lvgl_port_lock(LVGL_PORT_LOCK_INFINITE)) {
+            lv_timer_handler();
+            lvgl_port_unlock();
+        }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
