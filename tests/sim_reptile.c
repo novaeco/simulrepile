@@ -1,7 +1,9 @@
 #include "reptile_logic.h"
+#include "regulations.h"
 #include "game_mode.h"
 #include <stdio.h>
 #include <time.h>
+#include <sys/stat.h>
 
 static const char *stage_to_str(reptile_growth_stage_t stage) {
   switch (stage) {
@@ -23,10 +25,25 @@ int main(void) {
   game_mode_set(GAME_MODE_SIMULATION);
   reptile_facility_init(&facility, true, "test_slot", GAME_MODE_SIMULATION);
 
+  const regulation_rule_t *rules = NULL;
+  size_t rule_count = regulations_get_rules(&rules);
+  printf("Catalogue réglementaire (%zu espèces)\n", rule_count);
+  for (size_t i = 0; i < rule_count; ++i) {
+    printf(" - %s : %s | Certificat: %s\n", rules[i].common_name,
+           regulations_status_to_string(rules[i].status),
+           rules[i].certificate_text);
+  }
+
   reptile_facility_metrics_t metrics;
   reptile_facility_compute_metrics(&facility, &metrics);
   printf("Initial occupied=%u free=%u cash=%.2f€\n", metrics.occupied,
          metrics.free_slots, facility.economy.cash_cents / 100.0);
+
+  esp_err_t custom_err = reptile_terrarium_set_species(
+      reptile_facility_get_terrarium(&facility, 4),
+      reptile_species_get(REPTILE_SPECIES_CUSTOM), "Custom");
+  printf("Tentative profil personnalisé -> %s\n",
+         (custom_err == ESP_OK) ? "ACCEPTEE" : "REFUSEE");
 
   for (int i = 0; i < 6 * 60; ++i) {
     reptile_facility_tick(&facility, 1000);
@@ -47,6 +64,15 @@ int main(void) {
   reptile_terrarium_add_certificate(reptile_facility_get_terrarium(&facility, 0),
                                     &cert);
 
+  terrarium_t *t0_mutable = reptile_facility_get_terrarium(&facility, 0);
+  esp_err_t bad_dim =
+      reptile_terrarium_set_dimensions(t0_mutable, 60.f, 30.f, 30.f);
+  printf("Dimensions 60x30x30 -> %s\n",
+         (bad_dim == ESP_OK) ? "ACCEPTEES" : "REFUSEES");
+  reptile_terrarium_set_dimensions(t0_mutable, 120.f, 60.f, 60.f);
+  reptile_terrarium_set_education(t0_mutable, true);
+  reptile_terrarium_set_register(t0_mutable, true, "CERFA-TEST-001");
+
   for (int i = 0; i < 4 * 60; ++i) {
     reptile_facility_tick(&facility, 1000);
   }
@@ -65,6 +91,14 @@ int main(void) {
   printf("Stocks feed=%u water=%uL cash=%.2f€\n",
          facility.inventory.feeders, facility.inventory.water_reserve_l,
          facility.economy.cash_cents / 100.0);
+
+  const char *report_name = "rapport_test.csv";
+  esp_err_t export_res =
+      reptile_facility_export_regulation_report(&facility, report_name);
+  struct stat st = {0};
+  int stat_res = stat("./sdcard/reports/rapport_test.csv", &st);
+  printf("Export rapport -> err=%d stat=%d size=%ld\n", export_res, stat_res,
+         (long)st.st_size);
 
   reptile_facility_save(&facility);
 

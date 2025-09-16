@@ -23,6 +23,9 @@ contrôleur tactile capacitif GT911 gère l'interaction utilisateur.
   réglementaires.
 - Modèle économique détaillé (revenus, charges, amendes, inventaire) et API pour
   configurer substrat, chauffage, décor, UV et certificats.
+- Référentiel réglementaire structuré (autorisations, certificats, registres,
+  dimensions minimales) avec validation automatique des actions et écran LVGL
+  pédagogique.
 - Refonte totale de l'UI LVGL (vue pièce, fiche terrarium, synthèse économique,
   gestion des sauvegardes) et nouveaux assets LVGL.
 
@@ -49,6 +52,28 @@ Le moteur met à jour chaque seconde :
   pathologies éventuelles ;
 - la conformité documentaire (certificats CITES) et les amendes liées aux
   incidents.
+
+### Référentiel réglementaire et obligations
+
+Le module `components/regulations/` expose un référentiel statique des espèces
+gérées (autorisée/interdite/soumise à autorisation), des exigences
+documentaires (certificat de cession, registre Cerfa, programme pédagogique),
+des dimensions minimales et des plages environnementales. L'API `regulations.h`
+permet de valider un profil (`regulations_validate_species`), d'évaluer la
+conformité d'un terrarium (`regulations_evaluate`) et d'obtenir les libellés
+juridiques associés. Ces règles sont appliquées par `reptile_logic` lors de
+chaque changement d'espèce, de configuration ou de document : les demandes non
+conformes sont bloquées, des incidents sont levés (`REPTILE_INCIDENT_*`) et les
+amendes calculées.
+
+Un écran LVGL dédié (« Obligations ») liste le référentiel, les terrariums en
+infraction et propose l'export d'un rapport CSV sur microSD
+(`/sdcard/reports/…`). Les utilisateurs disposent ainsi d'un rappel pédagogique
+des exigences légales françaises : arrêté du **8 octobre 2018** (conditions de
+détention d'animaux non domestiques), **Règlement (CE) n° 338/97** relatif à la
+mise en œuvre de CITES et articles **L413-2 / R413-23 du Code de
+l'environnement** pour les obligations d'autorisation et d'information du
+public.
 
 L'état complet est persisté sur microSD via `reptile_facility_save` et
 `reptile_facility_load` avec versionnement et slots multiples.
@@ -149,11 +174,13 @@ Pour valider la simulation sur un PC hôte, un binaire autonome peut être
 compilé grâce aux stubs présents dans `tests/include/` :
 
 ```sh
-gcc -DGAME_MODE_SIMULATION \
+gcc \
     tests/sim_reptile.c \
     components/reptile_logic/reptile_logic.c \
+    components/regulations/regulations.c \
+    components/config/game_mode.c \
     -Itests/include -Icomponents/reptile_logic -Icomponents/config \
-    -lm -o sim_reptile && ./sim_reptile
+    -Icomponents/regulations -lm -o sim_reptile && ./sim_reptile
 ```
 
 Le programme imprime l'évolution de la croissance, des incidents de conformité

@@ -17,6 +17,7 @@ extern "C" {
 #define REPTILE_CONFIG_STR_LEN 32U
 #define REPTILE_CERT_AUTH_LEN 32U
 #define REPTILE_CERT_ID_LEN 24U
+#define REPTILE_COMPLIANCE_MSG_LEN 96U
 
 typedef enum {
   REPTILE_GROWTH_HATCHLING = 0,
@@ -38,6 +39,9 @@ typedef enum {
   REPTILE_INCIDENT_CERTIFICATE_MISSING,
   REPTILE_INCIDENT_CERTIFICATE_EXPIRED,
   REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE,
+  REPTILE_INCIDENT_REGISTER_MISSING,
+  REPTILE_INCIDENT_DIMENSION_NON_CONFORM,
+  REPTILE_INCIDENT_EDUCATION_MISSING,
   REPTILE_INCIDENT_AUDIT_LOCK,
 } reptile_incident_t;
 
@@ -83,6 +87,12 @@ typedef struct {
   char heating[REPTILE_CONFIG_STR_LEN];
   char decor[REPTILE_CONFIG_STR_LEN];
   char uv_setup[REPTILE_CONFIG_STR_LEN];
+  float length_cm;
+  float width_cm;
+  float height_cm;
+  bool educational_panel_present;
+  bool register_completed;
+  char register_reference[REPTILE_CERT_ID_LEN];
 } reptile_terrarium_config_t;
 
 typedef struct {
@@ -144,6 +154,7 @@ typedef struct {
   int64_t revenue_cents_per_day;
 
   time_t last_update;
+  char compliance_message[REPTILE_COMPLIANCE_MSG_LEN];
 } terrarium_t;
 
 typedef struct {
@@ -205,6 +216,15 @@ esp_err_t reptile_terrarium_set_decor(terrarium_t *terrarium,
 esp_err_t reptile_terrarium_set_uv(terrarium_t *terrarium, const char *uv);
 esp_err_t reptile_terrarium_add_certificate(
     terrarium_t *terrarium, const reptile_certificate_t *certificate);
+esp_err_t reptile_terrarium_set_dimensions(terrarium_t *terrarium,
+                                           float length_cm, float width_cm,
+                                           float height_cm);
+void reptile_terrarium_set_education(terrarium_t *terrarium, bool present);
+esp_err_t reptile_terrarium_set_register(terrarium_t *terrarium,
+                                         bool recorded,
+                                         const char *reference);
+esp_err_t reptile_facility_export_regulation_report(
+    const reptile_facility_t *facility, const char *relative_path);
 
 void reptile_inventory_add_feed(reptile_facility_t *facility,
                                 uint32_t quantity);

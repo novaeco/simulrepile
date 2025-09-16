@@ -6,6 +6,8 @@
 #include "logging.h"
 #include "game_mode.h"
 #include "esp_log.h"
+#include "regulations.h"
+#include "sd.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -26,6 +28,7 @@ typedef enum {
   CONFIG_HEATING,
   CONFIG_DECOR,
   CONFIG_UV,
+  CONFIG_SIZE,
 } config_field_t;
 
 typedef enum {
@@ -47,6 +50,7 @@ static lv_obj_t *screen_overview;
 static lv_obj_t *screen_detail;
 static lv_obj_t *screen_economy;
 static lv_obj_t *screen_save;
+static lv_obj_t *screen_regulations;
 static lv_obj_t *table_terrariums;
 static lv_obj_t *label_cash;
 static lv_obj_t *label_cycle;
@@ -62,7 +66,12 @@ static lv_obj_t *dropdown_substrate;
 static lv_obj_t *dropdown_heating;
 static lv_obj_t *dropdown_decor;
 static lv_obj_t *dropdown_uv;
+static lv_obj_t *dropdown_size;
 static lv_obj_t *detail_cert_table;
+static lv_obj_t *education_switch_detail;
+static lv_obj_t *detail_register_label;
+static lv_obj_t *detail_compliance_label;
+static lv_obj_t *register_button;
 static lv_obj_t *economy_chart;
 static lv_chart_series_t *series_income;
 static lv_chart_series_t *series_expenses;
@@ -70,6 +79,10 @@ static lv_obj_t *economy_table;
 static lv_obj_t *economy_summary_label;
 static lv_obj_t *save_slot_dropdown;
 static lv_obj_t *save_status_label;
+static lv_obj_t *regulations_table;
+static lv_obj_t *regulations_alert_table;
+static lv_obj_t *regulations_summary_label;
+static lv_obj_t *regulations_export_label;
 
 static lv_style_t style_title;
 static lv_style_t style_table_header;
@@ -100,6 +113,8 @@ static const char *decor_options =
 static const char *uv_options =
     "UVB T5 5%\nUVB T5 10%\nArcadia ProT5 12%\n"
     "LED UVB hybride";
+static const char *size_options =
+    "90x45x45 cm\n120x60x60 cm\n180x90x60 cm\n200x100x60 cm";
 
 static const lv_image_dsc_t *icon_currency = &gImage_currency_card;
 
@@ -107,10 +122,12 @@ static void build_overview_screen(void);
 static void build_detail_screen(void);
 static void build_economy_screen(void);
 static void build_save_screen(void);
+static void build_regulation_screen(void);
 static void update_overview_screen(void);
 static void update_detail_screen(void);
 static void update_economy_screen(void);
 static void update_certificate_table(void);
+static void update_regulation_screen(void);
 static void facility_timer_cb(lv_timer_t *timer);
 static void publish_can_frame(void);
 static void table_event_cb(lv_event_t *e);
@@ -122,6 +139,9 @@ static void save_slot_event_cb(lv_event_t *e);
 static void save_action_event_cb(lv_event_t *e);
 static void menu_button_event_cb(lv_event_t *e);
 static void sleep_switch_event_cb(lv_event_t *e);
+static void education_switch_event_cb(lv_event_t *e);
+static void register_button_event_cb(lv_event_t *e);
+static void export_report_event_cb(lv_event_t *e);
 static const char *growth_stage_to_string(reptile_growth_stage_t stage);
 static const char *pathology_to_string(reptile_pathology_t pathology);
 static const char *incident_to_string(reptile_incident_t incident);
@@ -129,6 +149,7 @@ static int find_option_index(const char *options, const char *value);
 static void load_dropdown_value(lv_obj_t *dd, const char *options,
                                 const char *value);
 static void update_chart_series(int64_t income_cents, int64_t expense_cents);
+static int find_size_option(float length_cm, float width_cm, float height_cm);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -239,6 +260,15 @@ static void build_overview_screen(void) {
   lv_label_set_text(lbl_save, "Sauvegardes");
   lv_obj_center(lbl_save);
 
+  lv_obj_t *btn_reg = lv_btn_create(screen_overview);
+  lv_obj_set_size(btn_reg, 180, 48);
+  lv_obj_align(btn_reg, LV_ALIGN_BOTTOM_RIGHT, -410, -10);
+  lv_obj_add_event_cb(btn_reg, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_regulations);
+  lv_obj_t *lbl_reg = lv_label_create(btn_reg);
+  lv_label_set_text(lbl_reg, "Obligations");
+  lv_obj_center(lbl_reg);
+
   lv_obj_t *btn_menu = lv_btn_create(screen_overview);
   lv_obj_set_size(btn_menu, 180, 48);
   lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
@@ -271,7 +301,7 @@ static void build_detail_screen(void) {
   lv_obj_set_size(detail_env_table, 620, 260);
   lv_obj_align(detail_env_table, LV_ALIGN_TOP_LEFT, 10, 60);
   lv_table_set_col_cnt(detail_env_table, 2);
-  lv_table_set_row_cnt(detail_env_table, 10);
+  lv_table_set_row_cnt(detail_env_table, 12);
   lv_obj_add_style(detail_env_table, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
 
@@ -308,18 +338,50 @@ static void build_detail_screen(void) {
   lv_obj_add_event_cb(dropdown_uv, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_UV);
 
+  dropdown_size = lv_dropdown_create(screen_detail);
+  lv_dropdown_set_options(dropdown_size, size_options);
+  lv_obj_align(dropdown_size, LV_ALIGN_TOP_RIGHT, -10, 300);
+  lv_obj_add_event_cb(dropdown_size, config_dropdown_event_cb,
+                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_SIZE);
+
   lv_obj_t *btn_add_cert = lv_btn_create(screen_detail);
   lv_obj_set_size(btn_add_cert, 220, 44);
-  lv_obj_align(btn_add_cert, LV_ALIGN_TOP_RIGHT, -10, 300);
+  lv_obj_align(btn_add_cert, LV_ALIGN_TOP_RIGHT, -10, 360);
   lv_obj_add_event_cb(btn_add_cert, add_certificate_event_cb, LV_EVENT_CLICKED,
                       NULL);
   lv_obj_t *lbl_cert = lv_label_create(btn_add_cert);
   lv_label_set_text(lbl_cert, "Ajouter certificat");
   lv_obj_center(lbl_cert);
 
+  education_switch_detail = lv_switch_create(screen_detail);
+  lv_obj_align(education_switch_detail, LV_ALIGN_TOP_RIGHT, -10, 420);
+  lv_obj_add_event_cb(education_switch_detail, education_switch_event_cb,
+                      LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_t *edu_label = lv_label_create(screen_detail);
+  lv_label_set_text(edu_label, "Affichage pédagogique");
+  lv_obj_align_to(edu_label, education_switch_detail, LV_ALIGN_OUT_LEFT_MID, -10,
+                  0);
+
+  detail_register_label = lv_label_create(screen_detail);
+  lv_obj_add_style(detail_register_label, &style_value, 0);
+  lv_obj_align(detail_register_label, LV_ALIGN_TOP_LEFT, 10, 360);
+
+  register_button = lv_btn_create(screen_detail);
+  lv_obj_set_size(register_button, 220, 44);
+  lv_obj_align(register_button, LV_ALIGN_TOP_LEFT, 10, 400);
+  lv_obj_add_event_cb(register_button, register_button_event_cb,
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_t *register_label = lv_label_create(register_button);
+  lv_label_set_text(register_label, "Consigner la cession");
+  lv_obj_center(register_label);
+
+  detail_compliance_label = lv_label_create(screen_detail);
+  lv_obj_add_style(detail_compliance_label, &style_value, 0);
+  lv_obj_align(detail_compliance_label, LV_ALIGN_TOP_LEFT, 10, 440);
+
   detail_cert_table = lv_table_create(screen_detail);
   lv_obj_set_size(detail_cert_table, 460, 120);
-  lv_obj_align(detail_cert_table, LV_ALIGN_BOTTOM_LEFT, 10, -70);
+  lv_obj_align(detail_cert_table, LV_ALIGN_BOTTOM_LEFT, 10, -150);
   lv_table_set_col_cnt(detail_cert_table, 2);
   lv_table_set_row_cnt(detail_cert_table, 6);
   lv_obj_add_style(detail_cert_table, &style_table_header,
@@ -486,6 +548,58 @@ static void build_save_screen(void) {
   lv_obj_center(lbl_back);
 }
 
+static void build_regulation_screen(void) {
+  screen_regulations = lv_obj_create(NULL);
+  lv_obj_clear_flag(screen_regulations, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(screen_regulations);
+  lv_obj_add_style(title, &style_title, 0);
+  lv_label_set_text(title, "Référentiel réglementaire");
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
+
+  regulations_table = lv_table_create(screen_regulations);
+  lv_obj_set_size(regulations_table, 700, 220);
+  lv_obj_align(regulations_table, LV_ALIGN_TOP_LEFT, 10, 60);
+  lv_table_set_col_cnt(regulations_table, 4);
+  lv_table_set_row_cnt(regulations_table, 1);
+  lv_obj_add_style(regulations_table, &style_table_header,
+                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+
+  regulations_alert_table = lv_table_create(screen_regulations);
+  lv_obj_set_size(regulations_alert_table, 700, 160);
+  lv_obj_align(regulations_alert_table, LV_ALIGN_TOP_LEFT, 10, 300);
+  lv_table_set_col_cnt(regulations_alert_table, 3);
+  lv_table_set_row_cnt(regulations_alert_table, 1);
+  lv_obj_add_style(regulations_alert_table, &style_table_header,
+                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+
+  regulations_summary_label = lv_label_create(screen_regulations);
+  lv_obj_add_style(regulations_summary_label, &style_value, 0);
+  lv_obj_align(regulations_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -80);
+
+  lv_obj_t *btn_export = lv_btn_create(screen_regulations);
+  lv_obj_set_size(btn_export, 240, 48);
+  lv_obj_align(btn_export, LV_ALIGN_BOTTOM_LEFT, 10, -30);
+  lv_obj_add_event_cb(btn_export, export_report_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl_export = lv_label_create(btn_export);
+  lv_label_set_text(lbl_export, "Exporter rapport microSD");
+  lv_obj_center(lbl_export);
+
+  regulations_export_label = lv_label_create(screen_regulations);
+  lv_obj_add_style(regulations_export_label, &style_value, 0);
+  lv_label_set_text(regulations_export_label, "Aucun export réalisé");
+  lv_obj_align(regulations_export_label, LV_ALIGN_BOTTOM_LEFT, 260, -30);
+
+  lv_obj_t *btn_back = lv_btn_create(screen_regulations);
+  lv_obj_set_size(btn_back, 160, 48);
+  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+  lv_obj_add_event_cb(btn_back, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_overview);
+  lv_obj_t *lbl_back = lv_label_create(btn_back);
+  lv_label_set_text(lbl_back, "Retour");
+  lv_obj_center(lbl_back);
+}
+
 void reptile_game_start(esp_lcd_panel_handle_t panel,
                         esp_lcd_touch_handle_t touch) {
   (void)panel;
@@ -496,6 +610,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   build_detail_screen();
   build_economy_screen();
   build_save_screen();
+  build_regulation_screen();
   build_overview_screen();
 
   load_dropdown_value(save_slot_dropdown, "slot_a\nslot_b\nslot_c\nslot_d",
@@ -503,6 +618,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   update_overview_screen();
   update_detail_screen();
   update_economy_screen();
+  update_regulation_screen();
 
   facility_timer = lv_timer_create(facility_timer_cb, FACILITY_UPDATE_PERIOD_MS,
                                    NULL);
@@ -536,6 +652,10 @@ void reptile_game_stop(void) {
     lv_obj_del(screen_save);
     screen_save = NULL;
   }
+  if (screen_regulations) {
+    lv_obj_del(screen_regulations);
+    screen_regulations = NULL;
+  }
   destroy_styles();
 }
 
@@ -562,6 +682,7 @@ static void facility_timer_cb(lv_timer_t *timer) {
   update_overview_screen();
   update_detail_screen();
   update_economy_screen();
+  update_regulation_screen();
   update_chart_series(g_facility.economy.daily_income_cents,
                       g_facility.economy.daily_expenses_cents);
   publish_can_frame();
@@ -733,6 +854,35 @@ static void update_detail_screen(void) {
   lv_table_set_cell_value(detail_env_table, 9, 0, "Incident");
   lv_table_set_cell_value(detail_env_table, 9, 1,
                           incident_to_string(terrarium->incident));
+  const regulation_rule_t *rule =
+      regulations_get_rule((int)terrarium->species.id);
+  lv_table_set_cell_value(detail_env_table, 10, 0, "Dimensions");
+  if (rule) {
+    lv_table_set_cell_value_fmt(detail_env_table, 10, 1,
+                                "%.0fx%.0fx%.0f cm / min %.0fx%.0fx%.0f cm",
+                                terrarium->config.length_cm,
+                                terrarium->config.width_cm,
+                                terrarium->config.height_cm, rule->min_length_cm,
+                                rule->min_width_cm, rule->min_height_cm);
+  } else {
+    lv_table_set_cell_value_fmt(detail_env_table, 10, 1,
+                                "%.0fx%.0fx%.0f cm", terrarium->config.length_cm,
+                                terrarium->config.width_cm,
+                                terrarium->config.height_cm);
+  }
+  lv_table_set_cell_value(detail_env_table, 11, 0, "Obligations");
+  const char *cert_status = "Certificat absent";
+  if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
+    cert_status = "Certificat expiré";
+  } else if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING) {
+    cert_status = "Certificat manquant";
+  } else if (terrarium->certificate_count > 0) {
+    cert_status = "Certificat enregistré";
+  }
+  const char *register_status =
+      terrarium->config.register_completed ? "Registre OK" : "Registre à consigner";
+  lv_table_set_cell_value_fmt(detail_env_table, 11, 1, "%s | %s", cert_status,
+                              register_status);
 
   lv_label_set_text_fmt(
       detail_status_label,
@@ -752,6 +902,47 @@ static void update_detail_screen(void) {
                       terrarium->config.heating);
   load_dropdown_value(dropdown_decor, decor_options, terrarium->config.decor);
   load_dropdown_value(dropdown_uv, uv_options, terrarium->config.uv_setup);
+  if (dropdown_size) {
+    int size_index = find_size_option(terrarium->config.length_cm,
+                                      terrarium->config.width_cm,
+                                      terrarium->config.height_cm);
+    if (size_index >= 0) {
+      lv_dropdown_set_selected(dropdown_size, (uint16_t)size_index);
+    } else {
+      lv_dropdown_clear_selection(dropdown_size);
+    }
+  }
+
+  if (education_switch_detail) {
+    if (terrarium->config.educational_panel_present) {
+      lv_obj_add_state(education_switch_detail, LV_STATE_CHECKED);
+    } else {
+      lv_obj_clear_state(education_switch_detail, LV_STATE_CHECKED);
+    }
+  }
+  if (detail_register_label) {
+    if (terrarium->config.register_completed &&
+        terrarium->config.register_reference[0] != '\0') {
+      lv_label_set_text_fmt(detail_register_label, "Registre: %s",
+                            terrarium->config.register_reference);
+    } else {
+      lv_label_set_text(detail_register_label, "Registre non renseigné");
+    }
+  }
+  if (register_button) {
+    lv_obj_t *label = lv_obj_get_child(register_button, 0);
+    if (label) {
+      lv_label_set_text(label, terrarium->config.register_completed
+                                   ? "Annuler la cession"
+                                   : "Consigner la cession");
+    }
+  }
+  if (detail_compliance_label) {
+    lv_label_set_text(detail_compliance_label,
+                      terrarium->compliance_message[0] != '\0'
+                          ? terrarium->compliance_message
+                          : "Aucune remarque");
+  }
 
   update_certificate_table();
 }
@@ -780,6 +971,102 @@ static void update_certificate_table(void) {
       strftime(buf, sizeof(buf), "%d/%m/%Y", &tm_buf);
       lv_table_set_cell_value(detail_cert_table, i + 1U, 1, buf);
     }
+  }
+}
+
+static void update_regulation_screen(void) {
+  if (!regulations_table || !regulations_alert_table)
+    return;
+
+  const regulation_rule_t *rules = NULL;
+  size_t rule_count = regulations_get_rules(&rules);
+  lv_table_set_row_cnt(regulations_table, rule_count + 1U);
+  lv_table_set_cell_value(regulations_table, 0, 0, "Espèce");
+  lv_table_set_cell_value(regulations_table, 0, 1, "Statut");
+  lv_table_set_cell_value(regulations_table, 0, 2, "Certificat");
+  lv_table_set_cell_value(regulations_table, 0, 3, "Dimensions min");
+  for (size_t i = 0; i < rule_count; ++i) {
+    const regulation_rule_t *rule = &rules[i];
+    lv_table_set_cell_value(regulations_table, i + 1U, 0,
+                            rule->common_name ? rule->common_name : "N/D");
+    lv_table_set_cell_value(regulations_table, i + 1U, 1,
+                            regulations_status_to_string(rule->status));
+    lv_table_set_cell_value(regulations_table, i + 1U, 2,
+                            rule->certificate_text ? rule->certificate_text
+                                                   : "N/A");
+    char dim_buf[48];
+    snprintf(dim_buf, sizeof(dim_buf), "%.0fx%.0fx%.0f cm", rule->min_length_cm,
+             rule->min_width_cm, rule->min_height_cm);
+    lv_table_set_cell_value(regulations_table, i + 1U, 3, dim_buf);
+  }
+
+  lv_table_set_row_cnt(regulations_alert_table, 1);
+  lv_table_set_cell_value(regulations_alert_table, 0, 0, "Terrarium");
+  lv_table_set_cell_value(regulations_alert_table, 0, 1, "Incident");
+  lv_table_set_cell_value(regulations_alert_table, 0, 2, "Message");
+
+  uint32_t row = 1;
+  for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
+    const terrarium_t *terrarium =
+        reptile_facility_get_terrarium_const(&g_facility, i);
+    if (!terrarium || !terrarium->occupied) {
+      continue;
+    }
+    const regulation_rule_t *rule =
+        regulations_get_rule((int)terrarium->species.id);
+    bool expired = (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED);
+    bool cert_ok = terrarium->certificate_count > 0 && !expired &&
+                   terrarium->incident != REPTILE_INCIDENT_CERTIFICATE_MISSING;
+    regulations_compliance_input_t input = {
+        .length_cm = terrarium->config.length_cm,
+        .width_cm = terrarium->config.width_cm,
+        .height_cm = terrarium->config.height_cm,
+        .temperature_c = terrarium->temperature_c,
+        .humidity_pct = terrarium->humidity_pct,
+        .uv_index = terrarium->uv_index,
+        .is_daytime = g_facility.cycle.is_daytime,
+        .certificate_count = terrarium->certificate_count,
+        .certificate_valid = cert_ok,
+        .certificate_expired = expired,
+        .register_present = terrarium->config.register_completed,
+        .education_present = terrarium->config.educational_panel_present,
+    };
+    regulations_compliance_report_t report = {0};
+    bool compliance_issue = false;
+    if (rule) {
+      regulations_evaluate(rule, &input, &report);
+      compliance_issue = !report.allowed || !report.dimensions_ok ||
+                        !report.certificate_ok || !report.register_ok ||
+                        !report.education_ok;
+    } else {
+      compliance_issue = terrarium->incident != REPTILE_INCIDENT_NONE;
+    }
+    if (!compliance_issue && terrarium->incident == REPTILE_INCIDENT_NONE) {
+      continue;
+    }
+    lv_table_set_row_cnt(regulations_alert_table, row + 1U);
+    char terrarium_id[8];
+    snprintf(terrarium_id, sizeof(terrarium_id), "T%02u", i + 1U);
+    lv_table_set_cell_value(regulations_alert_table, row, 0, terrarium_id);
+    lv_table_set_cell_value(regulations_alert_table, row, 1,
+                            incident_to_string(terrarium->incident));
+    lv_table_set_cell_value(regulations_alert_table, row, 2,
+                            terrarium->compliance_message);
+    row++;
+  }
+  if (row == 1U) {
+    lv_table_set_row_cnt(regulations_alert_table, 2);
+    lv_table_set_cell_value(regulations_alert_table, 1, 0, "-");
+    lv_table_set_cell_value(regulations_alert_table, 1, 1, "Aucun");
+    lv_table_set_cell_value(regulations_alert_table, 1, 2,
+                            "Tous les terrariums sont conformes");
+  }
+
+  if (regulations_summary_label) {
+    lv_label_set_text_fmt(
+        regulations_summary_label,
+        "Alertes conformité: %u | Incidents actifs: %u",
+        g_facility.compliance_alerts, g_facility.alerts_active);
   }
 }
 
@@ -874,21 +1161,46 @@ static void config_dropdown_event_cb(lv_event_t *e) {
       reptile_facility_get_terrarium(&g_facility, selected_terrarium);
   if (!terrarium || !terrarium->occupied)
     return;
+  esp_err_t err = ESP_OK;
   switch (field) {
   case CONFIG_SUBSTRATE:
-    reptile_terrarium_set_substrate(terrarium, sel);
+    err = reptile_terrarium_set_substrate(terrarium, sel);
     break;
   case CONFIG_HEATING:
-    reptile_terrarium_set_heating(terrarium, sel);
+    err = reptile_terrarium_set_heating(terrarium, sel);
     break;
   case CONFIG_DECOR:
-    reptile_terrarium_set_decor(terrarium, sel);
+    err = reptile_terrarium_set_decor(terrarium, sel);
     break;
   case CONFIG_UV:
-    reptile_terrarium_set_uv(terrarium, sel);
+    err = reptile_terrarium_set_uv(terrarium, sel);
+    break;
+  case CONFIG_SIZE: {
+    static const struct {
+      float length_cm;
+      float width_cm;
+      float height_cm;
+    } kSizes[] = {
+        {90.f, 45.f, 45.f},
+        {120.f, 60.f, 60.f},
+        {180.f, 90.f, 60.f},
+        {200.f, 100.f, 60.f},
+    };
+    uint16_t index = lv_dropdown_get_selected(dd);
+    if (index < (sizeof(kSizes) / sizeof(kSizes[0]))) {
+      err = reptile_terrarium_set_dimensions(terrarium, kSizes[index].length_cm,
+                                             kSizes[index].width_cm,
+                                             kSizes[index].height_cm);
+    }
     break;
   }
-  reptile_facility_save(&g_facility);
+  }
+  if (err == ESP_OK) {
+    reptile_facility_save(&g_facility);
+  } else if (detail_compliance_label) {
+    lv_label_set_text(detail_compliance_label,
+                      "Configuration refusée (non conforme)");
+  }
   update_detail_screen();
 }
 
@@ -934,6 +1246,60 @@ static void inventory_button_event_cb(lv_event_t *e) {
   }
   reptile_facility_save(&g_facility);
   update_overview_screen();
+}
+
+static void education_switch_event_cb(lv_event_t *e) {
+  lv_obj_t *sw = lv_event_get_target(e);
+  terrarium_t *terrarium =
+      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+  if (!terrarium || !terrarium->occupied)
+    return;
+  bool enabled = lv_obj_has_state(sw, LV_STATE_CHECKED);
+  reptile_terrarium_set_education(terrarium, enabled);
+  reptile_facility_save(&g_facility);
+  update_detail_screen();
+  update_regulation_screen();
+}
+
+static void register_button_event_cb(lv_event_t *e) {
+  (void)e;
+  terrarium_t *terrarium =
+      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+  if (!terrarium || !terrarium->occupied)
+    return;
+  if (terrarium->config.register_completed) {
+    reptile_terrarium_set_register(terrarium, false, NULL);
+  } else {
+    char ref[REPTILE_CERT_ID_LEN];
+    time_t now = time(NULL);
+    snprintf(ref, sizeof(ref), "REG-%02u-%ld", selected_terrarium + 1U,
+             (long)(now % 100000));
+    reptile_terrarium_set_register(terrarium, true, ref);
+  }
+  reptile_facility_save(&g_facility);
+  update_detail_screen();
+  update_regulation_screen();
+}
+
+static void export_report_event_cb(lv_event_t *e) {
+  (void)e;
+  char filename[64];
+  time_t now = time(NULL);
+  struct tm tm_info;
+  localtime_r(&now, &tm_info);
+  strftime(filename, sizeof(filename), "rapport_%Y%m%d_%H%M%S.csv", &tm_info);
+  esp_err_t err =
+      reptile_facility_export_regulation_report(&g_facility, filename);
+  if (regulations_export_label) {
+    if (err == ESP_OK) {
+      char path[160];
+      snprintf(path, sizeof(path), "%s/reports/%s", MOUNT_POINT, filename);
+      lv_label_set_text_fmt(regulations_export_label, "Exporté: %s", path);
+    } else {
+      lv_label_set_text(regulations_export_label,
+                        "Échec export (microSD indisponible)");
+    }
+  }
 }
 
 static void save_slot_event_cb(lv_event_t *e) {
@@ -1031,6 +1397,12 @@ static const char *incident_to_string(reptile_incident_t incident) {
     return "Certificat expiré";
   case REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE:
     return "Non-conformité climatique";
+  case REPTILE_INCIDENT_REGISTER_MISSING:
+    return "Registre absent";
+  case REPTILE_INCIDENT_DIMENSION_NON_CONFORM:
+    return "Dimensions insuffisantes";
+  case REPTILE_INCIDENT_EDUCATION_MISSING:
+    return "Pédagogie manquante";
   case REPTILE_INCIDENT_AUDIT_LOCK:
     return "Blocage administratif";
   default:
@@ -1040,7 +1412,7 @@ static const char *incident_to_string(reptile_incident_t incident) {
 
 static int find_option_index(const char *options, const char *value) {
   if (!options || !value)
-    return 0;
+    return -1;
   int index = 0;
   const char *start = options;
   while (*start) {
@@ -1054,11 +1426,38 @@ static int find_option_index(const char *options, const char *value) {
       break;
     start = end + 1;
   }
-  return 0;
+  return -1;
+}
+
+static int find_size_option(float length_cm, float width_cm, float height_cm) {
+  static const struct {
+    float l;
+    float w;
+    float h;
+  } kSizes[] = {
+      {90.f, 45.f, 45.f},
+      {120.f, 60.f, 60.f},
+      {180.f, 90.f, 60.f},
+      {200.f, 100.f, 60.f},
+  };
+  for (int i = 0; i < (int)(sizeof(kSizes) / sizeof(kSizes[0])); ++i) {
+    if (fabsf(length_cm - kSizes[i].l) < 1.0f &&
+        fabsf(width_cm - kSizes[i].w) < 1.0f &&
+        fabsf(height_cm - kSizes[i].h) < 1.0f) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 static void load_dropdown_value(lv_obj_t *dd, const char *options,
                                 const char *value) {
+  if (!dd)
+    return;
   int idx = find_option_index(options, value);
-  lv_dropdown_set_selected(dd, idx);
+  if (idx >= 0) {
+    lv_dropdown_set_selected(dd, idx);
+  } else {
+    lv_dropdown_clear_selection(dd);
+  }
 }
