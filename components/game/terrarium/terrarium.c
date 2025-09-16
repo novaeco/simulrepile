@@ -8,6 +8,12 @@ static terrarium_t state;
 
 static const reptile_info_t *current_reptile;
 
+void terrarium_reset(void)
+{
+    memset(&state, 0, sizeof(state));
+    current_reptile = NULL;
+}
+
 bool terrarium_add_item(const char *item)
 {
     if (!item || state.item_count >= TERRARIUM_MAX_ITEMS) {
