@@ -60,9 +60,11 @@ static terrarium_tile_ui_t s_tiles[TERRARIUM_MANAGER_MAX_TERRARIUMS];
 extern lv_obj_t *menu_screen;
 
 #define REPTILE_UPDATE_PERIOD_MS 1000
+#define REPTILE_DAY_CYCLE_TIMER_MS 1000
 
 static lv_timer_t *life_timer;
 static lv_timer_t *action_timer;
+static lv_timer_t *day_cycle_timer;
 
 static const char *TAG = "reptile_game";
 
@@ -132,6 +134,7 @@ static void species_confirm_event_cb(lv_event_t *e);
 static void species_cancel_event_cb(lv_event_t *e);
 static bool terrarium_requires_species_selection(const terrarium_t *terrarium);
 static void ensure_species_profile(void);
+static void day_cycle_timer_cb(lv_timer_t *timer);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -205,6 +208,9 @@ void reptile_game_init(void) {
   }
 
   sync_active_runtime();
+  if (s_active_terrarium) {
+    (void)reptile_cycle_step(&s_active_terrarium->reptile, 0);
+  }
   sprite_is_happy = false;
 
   s_start_mode = REPTILE_START_AUTO;
@@ -218,7 +224,9 @@ static void sync_active_runtime(void) {
   if (!s_active_terrarium) {
     return;
   }
-  s_active_terrarium->last_tick_ms = lv_tick_get();
+  uint32_t now = lv_tick_get();
+  s_active_terrarium->last_tick_ms = now;
+  s_active_terrarium->day_cycle_last_tick_ms = now;
   s_active_terrarium->update_ms_accum = 0;
   s_active_terrarium->soothe_ms_accum = 0;
   s_active_terrarium->soothe_time_ms = 0;
@@ -684,6 +692,29 @@ static void revert_sprite_cb(lv_timer_t *t) {
   update_sprite();
 }
 
+static void day_cycle_timer_cb(lv_timer_t *timer) {
+  (void)timer;
+  if (!s_game_active) {
+    return;
+  }
+  terrarium_t *terrarium = s_active_terrarium;
+  reptile_t *reptile = active_reptile_ptr();
+  if (!terrarium || !reptile) {
+    return;
+  }
+  uint32_t now = lv_tick_get();
+  if (terrarium->day_cycle_last_tick_ms == 0) {
+    terrarium->day_cycle_last_tick_ms = now;
+    (void)reptile_cycle_step(reptile, 0);
+    return;
+  }
+  uint32_t elapsed = now - terrarium->day_cycle_last_tick_ms;
+  terrarium->day_cycle_last_tick_ms = now;
+  if (reptile_cycle_step(reptile, elapsed)) {
+    ui_update_stats();
+  }
+}
+
 static void show_action_sprite(action_type_t action) {
   const lv_image_dsc_t *src = sprite_idle;
   switch (action) {
@@ -821,6 +852,9 @@ static void terrarium_tile_event_cb(lv_event_t *e) {
       s_active_terrarium = terrarium_manager_get_active();
       reptile_select_save(s_active_terrarium->config.reptile_slot, true);
       sync_active_runtime();
+      if (s_active_terrarium) {
+        (void)reptile_cycle_step(&s_active_terrarium->reptile, 0);
+      }
       sprite_is_happy = false;
       update_sprite();
       ui_update_main();
@@ -929,6 +963,10 @@ void reptile_game_stop(void) {
     s_active_terrarium->soothe_time_ms = 0;
     s_active_terrarium->soothe_ms_accum = 0;
     s_active_terrarium->update_ms_accum = 0;
+  }
+  if (day_cycle_timer) {
+    lv_timer_del(day_cycle_timer);
+    day_cycle_timer = NULL;
   }
   if (life_timer) {
     lv_timer_del(life_timer);
@@ -1377,6 +1415,10 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
 
   if (!life_timer) {
     life_timer = lv_timer_create(reptile_tick, REPTILE_UPDATE_PERIOD_MS, NULL);
+  }
+  if (!day_cycle_timer) {
+    day_cycle_timer =
+        lv_timer_create(day_cycle_timer_cb, REPTILE_DAY_CYCLE_TIMER_MS, NULL);
   }
 
   lv_scr_load(screen_main);

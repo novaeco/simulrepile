@@ -49,6 +49,7 @@ static void terrarium_reset_runtime(terrarium_t *terrarium) {
   terrarium->update_ms_accum = 0;
   terrarium->soothe_ms_accum = 0;
   terrarium->soothe_time_ms = 0;
+  terrarium->day_cycle_last_tick_ms = 0;
 }
 
 static void terrarium_config_set_defaults(terrarium_config_t *cfg, uint8_t id) {
@@ -346,6 +347,7 @@ static esp_err_t load_state_if_needed(terrarium_t *terrarium) {
       reptile_clear_species_profile(&terrarium->reptile);
       reptile_save(&terrarium->reptile);
     }
+    (void)reptile_cycle_step(&terrarium->reptile, 0);
   }
   terrarium->state_loaded = true;
   return ESP_OK;
@@ -413,6 +415,13 @@ esp_err_t terrarium_manager_reset_state(terrarium_t *terrarium) {
   terrarium->reptile.humeur = 100;
   terrarium->reptile.event = REPTILE_EVENT_NONE;
   terrarium->reptile.last_update = time(NULL);
+  terrarium->reptile.economy.solde = 0;
+  terrarium->reptile.economy.revenus_hebdomadaires = 0;
+  terrarium->reptile.economy.depenses = 0;
+  terrarium->reptile.clock.days = 0;
+  terrarium->reptile.clock.minutes_of_day = 8U * 60U;
+  terrarium->reptile.clock.minute_ms = 0;
+  (void)reptile_cycle_step(&terrarium->reptile, 0);
   terrarium->state_loaded = true;
   if (terrarium->config.species_id[0] != '\0') {
     const species_db_entry_t *species =

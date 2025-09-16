@@ -53,6 +53,7 @@ typedef struct {
   uint32_t update_ms_accum;
   uint32_t soothe_ms_accum;
   uint32_t soothe_time_ms;
+  uint32_t day_cycle_last_tick_ms;
   const species_db_entry_t *species_profile;
 } terrarium_t;
 

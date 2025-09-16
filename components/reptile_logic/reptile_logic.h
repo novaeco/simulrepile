@@ -32,6 +32,21 @@ typedef struct {
   uint8_t uv_index_max;
 } reptile_environment_thresholds_t;
 
+#define REPTILE_MINUTES_PER_DAY (24U * 60U)
+#define REPTILE_MS_PER_MINUTE 60000U
+
+typedef struct {
+  int32_t solde;
+  int32_t revenus_hebdomadaires;
+  int32_t depenses;
+} reptile_economy_t;
+
+typedef struct {
+  uint32_t minutes_of_day;
+  uint32_t minute_ms;
+  uint32_t days;
+} reptile_clock_t;
+
 #define REPTILE_DEFAULT_TEMP_MIN_C 26U
 #define REPTILE_DEFAULT_TEMP_MAX_C 34U
 #define REPTILE_DEFAULT_HUM_MIN 40U
@@ -52,6 +67,8 @@ typedef struct {
   time_t last_update;
   reptile_environment_thresholds_t thresholds;
   char species_id[REPTILE_SPECIES_ID_MAX_LEN];
+  reptile_economy_t economy;
+  reptile_clock_t clock;
 } reptile_t;
 
 enum { REPTILE_SLOT_NAME_MAX = 64 };
@@ -69,6 +86,9 @@ reptile_event_t reptile_check_events(reptile_t *r);
 bool reptile_sensors_available(void);
 void reptile_get_thresholds(const reptile_t *r,
                            reptile_environment_thresholds_t *out);
+bool reptile_cycle_step(reptile_t *r, uint32_t elapsed_ms);
+uint32_t reptile_clock_minutes_of_day(const reptile_t *r);
+uint32_t reptile_clock_days(const reptile_t *r);
 esp_err_t reptile_apply_species_profile(reptile_t *r,
                                         const species_db_entry_t *species);
 esp_err_t reptile_clear_species_profile(reptile_t *r);
