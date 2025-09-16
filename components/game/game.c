@@ -115,8 +115,7 @@ bool game_select_terrarium(size_t index) {
     return false;
   current_slot = index;
   terrarium_slot_t *slot = &game_state.terrariums[index];
-  const terrarium_t *cur = terrarium_get_state();
-  memset((void *)cur, 0, sizeof(*cur));
+  terrarium_reset();
   const reptile_info_t *info = reptiles_find(slot->reptile.species);
   if (info)
     terrarium_set_reptile(info);

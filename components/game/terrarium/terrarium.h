@@ -22,6 +22,11 @@ typedef struct {
 } terrarium_t;
 
 /**
+ * @brief Reset the terrarium state to its default values.
+ */
+void terrarium_reset(void);
+
+/**
  * @brief Add an item to the terrarium inventory.
  *
  * Stores the item name in an internal list for later reference.
