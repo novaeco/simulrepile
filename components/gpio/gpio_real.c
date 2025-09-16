@@ -73,14 +73,21 @@ static void gpio_real_heat(void)
     gpio_set_level(HEAT_RES_PIN, 0);
 }
 
+static void gpio_real_uv(bool on)
+{
+    gpio_set_level(LED_GPIO_PIN, on ? 1 : 0);
+}
+
 static esp_err_t gpio_real_init(void)
 {
     gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
     gpio_real_mode(WATER_PUMP_PIN, GPIO_MODE_OUTPUT);
     gpio_real_mode(HEAT_RES_PIN, GPIO_MODE_OUTPUT);
+    gpio_real_mode(LED_GPIO_PIN, GPIO_MODE_OUTPUT);
     gpio_real_write(SERVO_FEED_PIN, 0);
     gpio_real_write(WATER_PUMP_PIN, 0);
     gpio_real_write(HEAT_RES_PIN, 0);
+    gpio_real_write(LED_GPIO_PIN, 0);
     return ESP_OK;
 }
 
@@ -89,10 +96,12 @@ static void gpio_real_deinit(void)
     gpio_real_write(WATER_PUMP_PIN, 0);
     gpio_real_write(HEAT_RES_PIN, 0);
     gpio_real_write(SERVO_FEED_PIN, 0);
+    gpio_real_write(LED_GPIO_PIN, 0);
 
     gpio_real_mode(WATER_PUMP_PIN, GPIO_MODE_INPUT);
     gpio_real_mode(HEAT_RES_PIN, GPIO_MODE_INPUT);
     gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_INPUT);
+    gpio_real_mode(LED_GPIO_PIN, GPIO_MODE_INPUT);
 }
 
 const actuator_driver_t gpio_real_driver = {
@@ -104,6 +113,7 @@ const actuator_driver_t gpio_real_driver = {
     .feed = gpio_real_feed,
     .water = gpio_real_water,
     .heat = gpio_real_heat,
+    .uv = gpio_real_uv,
     .deinit = gpio_real_deinit,
 };
 

@@ -34,6 +34,23 @@ static void sensors_sim_deinit(void)
     s_hum = NAN;
 }
 
+static size_t sensors_sim_channel_count(void)
+{
+    return 4; // simulate four channels by default
+}
+
+static float sensors_sim_read_temperature_channel(size_t channel)
+{
+    (void)channel;
+    return sensors_sim_read_temperature();
+}
+
+static float sensors_sim_read_humidity_channel(size_t channel)
+{
+    (void)channel;
+    return sensors_sim_read_humidity();
+}
+
 void sensors_sim_set_temperature(float temp)
 {
     s_temp = temp;
@@ -49,5 +66,8 @@ const sensor_driver_t sensors_sim_driver = {
     .read_temperature = sensors_sim_read_temperature,
     .read_humidity = sensors_sim_read_humidity,
     .deinit = sensors_sim_deinit,
+    .get_channel_count = sensors_sim_channel_count,
+    .read_temperature_channel = sensors_sim_read_temperature_channel,
+    .read_humidity_channel = sensors_sim_read_humidity_channel,
 };
 

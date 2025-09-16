@@ -4,16 +4,16 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_log.h"
+#include "env_control.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct {
-    int32_t temp_threshold;     // Temperature threshold in °C
-    int32_t humidity_threshold; // Humidity threshold in %
-    bool    sleep_default;      // Enable sleep by default
-    esp_log_level_t log_level;  // Logging verbosity
+    reptile_env_config_t env_config;
+    bool sleep_default;
+    esp_log_level_t log_level;
 } app_settings_t;
 
 extern app_settings_t g_settings;

@@ -80,6 +80,14 @@ void reptile_heat_gpio(void)
     }
 }
 
+void reptile_uv_gpio(bool on)
+{
+    gpio_select_driver();
+    if (s_driver && s_driver->uv) {
+        s_driver->uv(on);
+    }
+}
+
 void reptile_actuators_deinit(void)
 {
     if (s_driver && s_driver->deinit) {

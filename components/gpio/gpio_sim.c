@@ -7,6 +7,7 @@ static const char *TAG = "gpio_sim";
 static uint8_t s_levels[256];
 static bool s_heater_state;
 static bool s_pump_state;
+static bool s_uv_state;
 
 static void gpio_sim_mode(uint16_t Pin, uint16_t Mode)
 {
@@ -29,6 +30,9 @@ static void gpio_sim_write(uint16_t Pin, uint8_t Value)
     if (Pin == WATER_PUMP_PIN) {
         s_pump_state = Value;
     }
+    if (Pin == LED_GPIO_PIN) {
+        s_uv_state = Value;
+    }
 }
 
 static uint8_t gpio_sim_read(uint16_t Pin)
@@ -46,6 +50,11 @@ bool gpio_sim_get_pump_state(void)
     return s_pump_state;
 }
 
+bool gpio_sim_get_uv_state(void)
+{
+    return s_uv_state;
+}
+
 static void gpio_sim_feed(void)
 {
     ESP_LOGI(TAG, "Simulated feed");
@@ -61,11 +70,18 @@ static void gpio_sim_heat(void)
     ESP_LOGI(TAG, "Simulated heat");
 }
 
+static void gpio_sim_uv(bool on)
+{
+    ESP_LOGI(TAG, "Simulated UV %s", on ? "ON" : "OFF");
+    s_uv_state = on;
+}
+
 static void gpio_sim_deinit(void)
 {
     memset(s_levels, 0, sizeof(s_levels));
     s_heater_state = false;
     s_pump_state = false;
+    s_uv_state = false;
 }
 
 static esp_err_t gpio_sim_init(void)
@@ -73,6 +89,7 @@ static esp_err_t gpio_sim_init(void)
     memset(s_levels, 0, sizeof(s_levels));
     s_heater_state = false;
     s_pump_state = false;
+    s_uv_state = false;
     return ESP_OK;
 }
 
@@ -85,6 +102,7 @@ const actuator_driver_t gpio_sim_driver = {
     .feed = gpio_sim_feed,
     .water = gpio_sim_water,
     .heat = gpio_sim_heat,
+    .uv = gpio_sim_uv,
     .deinit = gpio_sim_deinit,
 };
 
