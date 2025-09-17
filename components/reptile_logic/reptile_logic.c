@@ -995,6 +995,13 @@ void reptile_facility_reset_statistics(reptile_facility_t *facility) {
   facility->economy.fines_cents = 0;
 }
 
+void reptile_facility_reset_state(reptile_facility_t *facility) {
+  if (!facility) {
+    return;
+  }
+  facility_reset(facility);
+}
+
 esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
                                         const species_profile_t *profile,
                                         const char *nickname) {
