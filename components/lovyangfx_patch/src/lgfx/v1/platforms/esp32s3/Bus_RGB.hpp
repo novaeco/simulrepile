@@ -28,9 +28,9 @@ Contributors:
 #include <esp_private/gdma.h>
 #include <hal/dma_types.h>
 
-#include "../../Bus.hpp"
-#include "../../panel/Panel_FrameBufferBase.hpp"
-#include "../common.hpp"
+#include "lgfx/v1/Bus.hpp"
+#include "lgfx/v1/panel/Panel_FrameBufferBase.hpp"
+#include "lgfx/v1/platforms/common.hpp"
 
 struct lcd_cam_dev_t;
 struct esp_rgb_panel_t;
