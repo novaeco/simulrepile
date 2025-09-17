@@ -209,7 +209,7 @@ static void wait_for_sd_card(void) {
       esp_task_wdt_reset();
     }
     err = sd_mmc_init();
-    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+    if (err == ESP_OK) {
       hide_error_screen();
       if (wdt_registered) {
         esp_err_t del_ret = esp_task_wdt_delete(NULL);
