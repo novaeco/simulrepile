@@ -21,7 +21,8 @@
 #include <sys/stat.h>        // For file system metadata
 #include "esp_vfs_fat.h"     // FAT filesystem and VFS integration
 #include "sdmmc_cmd.h"       // SD card commands
-#include "driver/sdmmc_host.h" // SDMMC host driver
+#include "driver/gpio.h"     // GPIO numbering for SPI pins
+#include "driver/sdspi_host.h" // SDSPI host driver
 
 #include "io_extension.h"          // IO EXTENSION I2C CAN control header (optional inclusion)
 
@@ -30,9 +31,12 @@
 // Define constants for SD card configuration
 #define MOUNT_POINT "/sdcard"                // Mount point for SD card
 #define EXAMPLE_FORMAT_IF_MOUNT_FAILED false // Format SD card if mounting fails
-#define EXAMPLE_PIN_CLK GPIO_NUM_12          // GPIO pin for SD card clock
-#define EXAMPLE_PIN_CMD GPIO_NUM_11          // GPIO pin for SD card command line
-#define EXAMPLE_PIN_D0  GPIO_NUM_13          // GPIO pin for SD card data line (D0)
+
+#define SD_SPI_HOST SDSPI_DEFAULT_HOST       // SPI host used for the TF slot
+#define SD_SPI_MOSI GPIO_NUM_11              // MOSI routed to the TF socket
+#define SD_SPI_MISO GPIO_NUM_13              // MISO routed to the TF socket
+#define SD_SPI_CLK  GPIO_NUM_12              // SPI clock routed to the TF socket
+#define SD_SPI_CS   GPIO_NUM_10              // Chip-select for the TF socket
 
 // Function declarations
 
