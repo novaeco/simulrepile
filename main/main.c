@@ -171,14 +171,30 @@ static void wait_for_sd_card(void) {
   esp_err_t err;
   int attempts = 0;
   const int max_attempts = 10;
+  bool wdt_registered = false;
 
-  ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+  esp_err_t wdt_ret = esp_task_wdt_add(NULL);
+  if (wdt_ret == ESP_OK) {
+    wdt_registered = true;
+  } else {
+    ESP_LOGW(TAG, "Impossible d'enregistrer le WDT tâche: %s",
+             esp_err_to_name(wdt_ret));
+  }
 
   while (true) {
-    esp_task_wdt_reset();
+    if (wdt_registered) {
+      esp_task_wdt_reset();
+    }
     err = sd_mmc_init();
     if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
       hide_error_screen();
+      if (wdt_registered) {
+        esp_err_t del_ret = esp_task_wdt_delete(NULL);
+        if (del_ret != ESP_OK) {
+          ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
+                   esp_err_to_name(del_ret));
+        }
+      }
       return;
     }
 
@@ -188,7 +204,16 @@ static void wait_for_sd_card(void) {
     if (++attempts >= max_attempts) {
       show_error_screen("Carte SD absente - redémarrage");
       vTaskDelay(pdMS_TO_TICKS(2000));
+      if (wdt_registered) {
+        esp_err_t del_ret = esp_task_wdt_delete(NULL);
+        if (del_ret != ESP_OK) {
+          ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
+                   esp_err_to_name(del_ret));
+        }
+        wdt_registered = false;
+      }
       esp_restart();
+      return;
     }
     // Attendre indéfiniment jusqu'à insertion d'une carte valide
   }
@@ -411,6 +436,4 @@ void app_main() {
 
     lvgl_port_unlock();
   }
-
-  esp_task_wdt_delete(NULL);
 }
