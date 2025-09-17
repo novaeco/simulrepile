@@ -47,6 +47,7 @@ typedef enum {
 } save_action_t;
 
 static reptile_facility_t g_facility;
+static char s_active_slot[sizeof(g_facility.slot)] = "slot_a";
 static lv_obj_t *screen_overview;
 static lv_obj_t *screen_detail;
 static lv_obj_t *screen_economy;
@@ -157,8 +158,12 @@ static int find_size_option(float length_cm, float width_cm, float height_cm);
 bool reptile_game_is_active(void) { return s_game_active; }
 
 void reptile_game_init(void) {
+  if (g_facility.slot[0] != '\0') {
+    snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
+  }
   game_mode_set(GAME_MODE_SIMULATION);
-  reptile_facility_init(&g_facility, true, "slot_a", game_mode_get());
+  reptile_facility_init(&g_facility, true, s_active_slot, game_mode_get());
+  snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
   selected_terrarium = 0;
   last_tick_ms = 0;
   autosave_ms = 0;
@@ -1333,7 +1338,9 @@ static void save_slot_event_cb(lv_event_t *e) {
   char slot[16];
   lv_dropdown_get_selected_str(lv_event_get_target(e), slot, sizeof(slot));
   if (reptile_facility_set_slot(&g_facility, slot) == ESP_OK) {
-    lv_label_set_text_fmt(save_status_label, "Slot actif: %s", slot);
+    snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
+    lv_label_set_text_fmt(save_status_label, "Slot actif: %s",
+                         g_facility.slot);
     update_overview_screen();
     update_detail_screen();
     update_economy_screen();
