@@ -17,6 +17,7 @@
 #include <time.h>
 
 LV_FONT_DECLARE(lv_font_montserrat_24);
+LV_FONT_DECLARE(lv_font_montserrat_20);
 
 #define TERRARIUM_GRID_SIZE 5U
 #define FACILITY_UPDATE_PERIOD_MS 1000U
