@@ -69,6 +69,7 @@ static lv_obj_t *detail_title;
 static lv_obj_t *detail_env_table;
 static lv_obj_t *detail_status_label;
 static lv_obj_t *detail_status_icon;
+static lv_obj_t *dropdown_species;
 static lv_obj_t *dropdown_substrate;
 static lv_obj_t *dropdown_heating;
 static lv_obj_t *dropdown_decor;
@@ -103,6 +104,11 @@ static int64_t prev_income_snapshot;
 static int64_t prev_expense_snapshot;
 static uint32_t selected_terrarium;
 static bool s_game_active;
+
+static char
+    species_options_buffer[REPTILE_SPECIES_COUNT * (REPTILE_NAME_MAX_LEN + 1U)];
+static reptile_species_id_t species_option_ids[REPTILE_SPECIES_COUNT];
+static uint32_t species_option_count;
 
 static const char *TAG = "reptile_game";
 
@@ -148,6 +154,7 @@ static void facility_timer_cb(lv_timer_t *timer);
 static void publish_can_frame(void);
 static void table_event_cb(lv_event_t *e);
 static void nav_button_event_cb(lv_event_t *e);
+static void species_dropdown_event_cb(lv_event_t *e);
 static void config_dropdown_event_cb(lv_event_t *e);
 static void add_certificate_event_cb(lv_event_t *e);
 static void inventory_button_event_cb(lv_event_t *e);
@@ -171,6 +178,8 @@ static void load_dropdown_value(lv_obj_t *dd, const char *options,
                                 const char *value);
 static void update_chart_series(int64_t income_cents, int64_t expense_cents);
 static int find_size_option(float length_cm, float width_cm, float height_cm);
+static void populate_species_options(void);
+static int find_species_option_index(reptile_species_id_t id);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -476,6 +485,18 @@ static void build_detail_screen(void) {
   lv_img_set_src(detail_status_icon, &gImage_terrarium_ok);
   lv_obj_align_to(detail_status_icon, detail_status_label,
                   LV_ALIGN_OUT_LEFT_MID, -10, 0);
+
+  populate_species_options();
+
+  dropdown_species = lv_dropdown_create(screen_detail);
+  lv_obj_set_width(dropdown_species, 260);
+  lv_obj_align(dropdown_species, LV_ALIGN_TOP_RIGHT, -10, 10);
+  if (species_options_buffer[0] != '\0') {
+    lv_dropdown_set_options(dropdown_species, species_options_buffer);
+  }
+  lv_dropdown_set_text(dropdown_species, "Choisir espèce");
+  lv_obj_add_event_cb(dropdown_species, species_dropdown_event_cb,
+                      LV_EVENT_VALUE_CHANGED, NULL);
 
   dropdown_substrate = lv_dropdown_create(screen_detail);
   lv_dropdown_set_options(dropdown_substrate, substrate_options);
@@ -1016,9 +1037,35 @@ static void update_overview_screen(void) {
 static void update_detail_screen(void) {
   if (!screen_detail)
     return;
+  if (species_option_count == 0U && species_options_buffer[0] == '\0') {
+    populate_species_options();
+    if (dropdown_species && species_options_buffer[0] != '\0') {
+      lv_dropdown_set_options(dropdown_species, species_options_buffer);
+    }
+  }
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility,
                                            (uint8_t)selected_terrarium);
+  if (dropdown_species) {
+    if (!terrarium) {
+      lv_obj_add_state(dropdown_species, LV_STATE_DISABLED);
+      dropdown_select_none(dropdown_species);
+      lv_dropdown_set_text(dropdown_species, "Terrarium indisponible");
+    } else {
+      lv_obj_clear_state(dropdown_species, LV_STATE_DISABLED);
+      if (!terrarium->occupied) {
+        dropdown_select_none(dropdown_species);
+        lv_dropdown_set_text(dropdown_species, "Choisir espèce");
+      } else {
+        int idx = find_species_option_index(terrarium->species.id);
+        if (idx >= 0) {
+          dropdown_select_index(dropdown_species, (uint32_t)idx);
+        } else {
+          lv_dropdown_set_text(dropdown_species, terrarium->species.name);
+        }
+      }
+    }
+  }
   if (!terrarium || !terrarium->occupied) {
     lv_label_set_text(detail_title, "Terrarium disponible");
     lv_label_set_text(detail_status_label,
@@ -1412,6 +1459,46 @@ static void nav_button_event_cb(lv_event_t *e) {
   lv_scr_load(target);
 }
 
+static void species_dropdown_event_cb(lv_event_t *e) {
+  lv_obj_t *dd = lv_event_get_target(e);
+  if (!dd)
+    return;
+  uint16_t selected = lv_dropdown_get_selected(dd);
+#if defined(LV_DROPDOWN_SELECTED_NONE)
+  if (selected == LV_DROPDOWN_SELECTED_NONE)
+    return;
+#endif
+  if (selected >= species_option_count)
+    return;
+  const species_profile_t *profile =
+      reptile_species_get(species_option_ids[selected]);
+  if (!profile)
+    return;
+  terrarium_t *terrarium =
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
+  if (!terrarium)
+    return;
+  char nickname[REPTILE_NAME_MAX_LEN];
+  const char *nickname_ptr = NULL;
+  if (terrarium->nickname[0] != '\0') {
+    snprintf(nickname, sizeof(nickname), "%s", terrarium->nickname);
+    nickname_ptr = nickname;
+  }
+  esp_err_t err = reptile_terrarium_set_species(terrarium, profile, nickname_ptr);
+  if (err == ESP_OK) {
+    reptile_facility_save(&g_facility);
+  } else if (detail_compliance_label) {
+    lv_label_set_text(detail_compliance_label,
+                      terrarium->compliance_message[0] != '\0'
+                          ? terrarium->compliance_message
+                          : "Profil refusé");
+  }
+  update_detail_screen();
+  update_overview_screen();
+  update_economy_screen();
+  update_regulation_screen();
+}
+
 static void config_dropdown_event_cb(lv_event_t *e) {
   lv_obj_t *dd = lv_event_get_target(e);
   config_field_t field =
@@ -1733,6 +1820,49 @@ static const char *incident_to_string(reptile_incident_t incident) {
   default:
     return "N/C";
   }
+}
+
+static void populate_species_options(void) {
+  size_t offset = 0U;
+  species_option_count = 0U;
+  species_options_buffer[0] = '\0';
+  for (int id = 0; id < REPTILE_SPECIES_COUNT; ++id) {
+    const species_profile_t *profile =
+        reptile_species_get((reptile_species_id_t)id);
+    if (!profile || profile->name[0] == '\0') {
+      continue;
+    }
+    if (species_option_count >= REPTILE_SPECIES_COUNT) {
+      break;
+    }
+    size_t name_len = strnlen(profile->name, sizeof(profile->name));
+    if (name_len == 0U) {
+      continue;
+    }
+    if (offset != 0U) {
+      if (offset >= sizeof(species_options_buffer) - 1U) {
+        break;
+      }
+      species_options_buffer[offset++] = '\n';
+    }
+    size_t remaining = sizeof(species_options_buffer) - offset - 1U;
+    if (name_len > remaining) {
+      name_len = remaining;
+    }
+    memcpy(&species_options_buffer[offset], profile->name, name_len);
+    offset += name_len;
+    species_options_buffer[offset] = '\0';
+    species_option_ids[species_option_count++] = (reptile_species_id_t)id;
+  }
+}
+
+static int find_species_option_index(reptile_species_id_t id) {
+  for (uint32_t i = 0; i < species_option_count; ++i) {
+    if (species_option_ids[i] == id) {
+      return (int)i;
+    }
+  }
+  return -1;
 }
 
 static int find_option_index(const char *options, const char *value) {
