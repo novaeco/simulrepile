@@ -30,7 +30,8 @@
 #include <sys/stat.h>
 
 #define FACILITY_MAGIC 0x52544643u /* 'RTFC' */
-#define FACILITY_VERSION 2u
+#define FACILITY_VERSION 3u
+#define WEEKLY_SUBSIDY_DEFAULT_CENTS 125000 /* 1 250 € (cahier des charges) */
 
 #define COST_FEEDING_CENTS 180
 #define COST_WATER_CENTS 40
@@ -56,8 +57,38 @@
 typedef struct {
   uint32_t magic;
   uint32_t version;
+} facility_blob_header_t;
+
+typedef struct {
+  facility_blob_header_t header;
   reptile_facility_t facility;
 } facility_blob_t;
+
+typedef struct {
+  int64_t cash_cents;
+  int64_t daily_income_cents;
+  int64_t daily_expenses_cents;
+  int64_t fines_cents;
+  uint32_t days_elapsed;
+} reptile_economy_v2_t;
+
+typedef struct {
+  terrarium_t terrariums[REPTILE_MAX_TERRARIUMS];
+  uint8_t terrarium_count;
+  reptile_inventory_t inventory;
+  reptile_economy_v2_t economy;
+  reptile_day_cycle_t cycle;
+  bool simulation_mode;
+  bool sensors_available;
+  char slot[16];
+  game_mode_t mode;
+  uint32_t alerts_active;
+  uint32_t pathology_active;
+  uint32_t compliance_alerts;
+  uint32_t mature_count;
+  float average_growth;
+  time_t last_persist_time;
+} reptile_facility_v2_t;
 
 static const char *TAG = "reptile_logic";
 
@@ -280,6 +311,7 @@ static void facility_reset(reptile_facility_t *facility) {
   facility->economy.daily_expenses_cents = 0;
   facility->economy.fines_cents = 0;
   facility->economy.days_elapsed = 0;
+  facility->economy.weekly_subsidy_cents = WEEKLY_SUBSIDY_DEFAULT_CENTS;
   facility->cycle.is_daytime = true;
   facility->cycle.day_ms = 8U * 60U * 1000U;
   facility->cycle.night_ms = 4U * 60U * 1000U;
@@ -337,8 +369,11 @@ esp_err_t reptile_facility_save(const reptile_facility_t *facility) {
   }
 
   facility_blob_t blob = {
-      .magic = FACILITY_MAGIC,
-      .version = FACILITY_VERSION,
+      .header =
+          {
+              .magic = FACILITY_MAGIC,
+              .version = FACILITY_VERSION,
+          },
       .facility = *facility,
   };
   blob.facility.last_persist_time = time(NULL);
@@ -369,14 +404,55 @@ esp_err_t reptile_facility_load(reptile_facility_t *facility) {
   if (!f) {
     return ESP_FAIL;
   }
-  facility_blob_t blob;
-  size_t read = fread(&blob, sizeof(blob), 1, f);
-  fclose(f);
-  if (read != 1 || blob.magic != FACILITY_MAGIC ||
-      blob.version != FACILITY_VERSION) {
-    ESP_LOGW(TAG, "Fichier de sauvegarde %s invalide", path);
+
+  facility_blob_header_t header = {0};
+  size_t read = fread(&header, sizeof(header), 1, f);
+  if (read != 1) {
+    ESP_LOGW(TAG, "Lecture du header de %s impossible", path);
+    fclose(f);
     return ESP_FAIL;
   }
+  if (header.magic != FACILITY_MAGIC) {
+    ESP_LOGW(TAG, "Fichier de sauvegarde %s invalide (magic)", path);
+    fclose(f);
+    return ESP_FAIL;
+  }
+  if (header.version > FACILITY_VERSION || header.version < 2u) {
+    ESP_LOGW(TAG, "Version de sauvegarde %u non supportée pour %s",
+             header.version, path);
+    fclose(f);
+    return ESP_FAIL;
+  }
+
+  reptile_facility_t loaded;
+  memset(&loaded, 0, sizeof(loaded));
+
+  if (header.version == FACILITY_VERSION) {
+    size_t fac_read = fread(&loaded, sizeof(loaded), 1, f);
+    if (fac_read != 1) {
+      ESP_LOGW(TAG, "Fichier de sauvegarde %s incomplet (v%u)", path,
+               header.version);
+      fclose(f);
+      return ESP_FAIL;
+    }
+  } else {
+    reptile_facility_v2_t legacy;
+    memset(&legacy, 0, sizeof(legacy));
+    size_t fac_read = fread(&legacy, sizeof(legacy), 1, f);
+    if (fac_read != 1) {
+      ESP_LOGW(TAG, "Fichier de sauvegarde %s incomplet (v%u)", path,
+               header.version);
+      fclose(f);
+      return ESP_FAIL;
+    }
+    memcpy(&loaded, &legacy, sizeof(legacy));
+    loaded.economy.weekly_subsidy_cents = WEEKLY_SUBSIDY_DEFAULT_CENTS;
+    ESP_LOGI(TAG,
+             "Migration sauvegarde v2 -> v3 : subvention hebdomadaire fixée à %.2f €",
+             (double)WEEKLY_SUBSIDY_DEFAULT_CENTS / 100.0);
+  }
+
+  fclose(f);
 
   bool simulation = facility->simulation_mode;
   bool sensors_available = facility->sensors_available;
@@ -384,7 +460,7 @@ esp_err_t reptile_facility_load(reptile_facility_t *facility) {
   char slot_copy[sizeof(facility->slot)];
   copy_string(slot_copy, sizeof(slot_copy), facility->slot);
 
-  *facility = blob.facility;
+  *facility = loaded;
   facility->simulation_mode = simulation;
   facility->sensors_available = sensors_available;
   facility->mode = mode;
@@ -597,6 +673,12 @@ void reptile_facility_tick(reptile_facility_t *facility, uint32_t elapsed_ms) {
       facility->economy.days_elapsed++;
       facility->economy.daily_income_cents = 0;
       facility->economy.daily_expenses_cents = 0;
+      if (facility->economy.weekly_subsidy_cents != 0 &&
+          facility->economy.days_elapsed != 0U &&
+          (facility->economy.days_elapsed % 7U) == 0U) {
+        facility->economy.cash_cents +=
+            facility->economy.weekly_subsidy_cents;
+      }
     }
   }
 
