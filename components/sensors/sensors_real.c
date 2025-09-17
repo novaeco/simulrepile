@@ -8,10 +8,12 @@
 
 #define SHT31_ADDR 0x44
 #define TMP117_ADDR 0x48
+#define BH1750_ADDR 0x23
 
 static const char *TAG = "sensors_real";
 static i2c_master_dev_handle_t sht31_dev = NULL;
 static i2c_master_dev_handle_t tmp117_dev = NULL;
+static i2c_master_dev_handle_t bh1750_dev = NULL;
 
 static esp_err_t sensors_real_init(void)
 {
@@ -39,6 +41,32 @@ static esp_err_t sensors_real_init(void)
         any_device = true;
     } else {
         tmp117_dev = NULL;
+    }
+
+    if (DEV_I2C_Probe(BH1750_ADDR) == ESP_OK) {
+        esp_err_t ret = DEV_I2C_Set_Slave_Addr(&bh1750_dev, BH1750_ADDR);
+        if (ret == ESP_OK) {
+            uint8_t cmd = 0x01; // power on
+            ret = DEV_I2C_Write_Nbyte(bh1750_dev, &cmd, 1);
+            if (ret == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                uint8_t mode = 0x10; // continuous high-res measurement
+                ret = DEV_I2C_Write_Nbyte(bh1750_dev, &mode, 1);
+                if (ret == ESP_OK) {
+                    vTaskDelay(pdMS_TO_TICKS(180));
+                    any_device = true;
+                }
+            }
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure BH1750: %s", esp_err_to_name(ret));
+            if (bh1750_dev) {
+                i2c_master_bus_rm_device(bh1750_dev);
+                bh1750_dev = NULL;
+            }
+        }
+    } else {
+        bh1750_dev = NULL;
     }
 
     if (!any_device) {
@@ -101,6 +129,23 @@ static float sensors_real_read_humidity(void)
     return 100.0f * ((float)raw_hum / 65535.0f);
 }
 
+static float sensors_real_read_lux(void)
+{
+    if (bh1750_dev == NULL) {
+        return NAN;
+    }
+    uint8_t data[2] = {0};
+    if (DEV_I2C_Read_Nbyte(bh1750_dev, 0x00, data, 2) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to read BH1750 result");
+        return NAN;
+    }
+    uint16_t raw = ((uint16_t)data[0] << 8) | data[1];
+    if (raw == 0xFFFFu) {
+        return NAN;
+    }
+    return (float)raw / 1.2f;
+}
+
 static void sensors_real_deinit(void)
 {
     if (sht31_dev) {
@@ -110,6 +155,12 @@ static void sensors_real_deinit(void)
     if (tmp117_dev) {
         i2c_master_bus_rm_device(tmp117_dev);
         tmp117_dev = NULL;
+    }
+    if (bh1750_dev) {
+        uint8_t cmd = 0x00; // power down command
+        DEV_I2C_Write_Nbyte(bh1750_dev, &cmd, 1);
+        i2c_master_bus_rm_device(bh1750_dev);
+        bh1750_dev = NULL;
     }
 }
 
@@ -134,13 +185,23 @@ static float sensors_real_read_humidity_channel(size_t channel)
     return sensors_real_read_humidity();
 }
 
+static float sensors_real_read_lux_channel(size_t channel)
+{
+    if (channel > 0) {
+        return NAN;
+    }
+    return sensors_real_read_lux();
+}
+
 const sensor_driver_t sensors_real_driver = {
     .init = sensors_real_init,
     .read_temperature = sensors_real_read_temperature,
     .read_humidity = sensors_real_read_humidity,
+    .read_lux = sensors_real_read_lux,
     .deinit = sensors_real_deinit,
     .get_channel_count = sensors_real_channel_count,
     .read_temperature_channel = sensors_real_read_temperature_channel,
     .read_humidity_channel = sensors_real_read_humidity_channel,
+    .read_lux_channel = sensors_real_read_lux_channel,
 };
 

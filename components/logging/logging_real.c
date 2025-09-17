@@ -69,7 +69,7 @@ static esp_err_t ensure_directory(const char *path)
 
 static void write_header(FILE *f)
 {
-    fputs("timestamp,temp_c,humidity_pct,target_temp_c,target_humidity_pct,heating,pumping,uv,manual_heat,manual_pump,manual_uv,energy_heat_wh,energy_pump_wh,energy_uv_wh,total_energy_wh,alarm_flags\n",
+    fputs("timestamp,temp_c,humidity_pct,light_lux,target_temp_c,target_humidity_pct,target_light_lux,heating,pumping,uv,manual_heat,manual_pump,manual_uv,energy_heat_wh,energy_pump_wh,energy_uv_wh,total_energy_wh,alarm_flags\n",
           f);
 }
 
@@ -126,13 +126,15 @@ void logging_real_append(size_t terrarium_index, const reptile_env_terrarium_sta
     time_t now = time(NULL);
     float total = state->energy_heat_Wh + state->energy_pump_Wh + state->energy_uv_Wh;
     fprintf(f,
-            "%ld,%.3f,%.3f,%.3f,%.3f,%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8
+            "%ld,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8 ",%" PRIu8
             ",%.3f,%.3f,%.3f,%.3f,%" PRIu32 "\n",
             (long)now,
             state->temperature_c,
             state->humidity_pct,
+            state->light_lux,
             state->target_temperature_c,
             state->target_humidity_pct,
+            state->target_light_lux,
             (uint8_t)state->heating,
             (uint8_t)state->pumping,
             (uint8_t)state->uv_light,

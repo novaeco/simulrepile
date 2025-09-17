@@ -214,6 +214,9 @@ static void describe_alarms(uint32_t flags, char *buffer, size_t len)
     if (flags & REPTILE_ENV_ALARM_HUM_HIGH) {
         strncat(buffer, "Hum haute ", len - strlen(buffer) - 1);
     }
+    if (flags & REPTILE_ENV_ALARM_LIGHT_LOW) {
+        strncat(buffer, "Lum basse ", len - strlen(buffer) - 1);
+    }
 }
 
 static void update_chart(terrarium_ui_t *ui, size_t index)
@@ -292,6 +295,8 @@ static void update_terrarium_ui(terrarium_ui_t *ui, const reptile_env_terrarium_
 
     char temp_str[16];
     char hum_str[16];
+    char lux_str[16];
+    char target_lux_str[16];
     if (state->temperature_valid && isfinite(state->temperature_c)) {
         snprintf(temp_str, sizeof(temp_str), "%.1f", state->temperature_c);
     } else {
@@ -302,13 +307,25 @@ static void update_terrarium_ui(terrarium_ui_t *ui, const reptile_env_terrarium_
     } else {
         snprintf(hum_str, sizeof(hum_str), "N/A");
     }
+    if (state->light_valid && isfinite(state->light_lux)) {
+        snprintf(lux_str, sizeof(lux_str), "%.1f", state->light_lux);
+    } else {
+        snprintf(lux_str, sizeof(lux_str), "N/A");
+    }
+    if (state->target_light_lux > 0.0f) {
+        snprintf(target_lux_str, sizeof(target_lux_str), "%.0f", state->target_light_lux);
+    } else {
+        snprintf(target_lux_str, sizeof(target_lux_str), "OFF");
+    }
 
     lv_label_set_text_fmt(ui->status_label,
-                          "Temp %s/%.1f°C  Hum %s/%.1f%%\nChauffage %s  Pompe %s",
+                          "Temp %s/%.1f°C  Hum %s/%.1f%%  Lum %s/%s lx\nChauffage %s  Pompe %s",
                           temp_str,
                           state->target_temperature_c,
                           hum_str,
                           state->target_humidity_pct,
+                          lux_str,
+                          target_lux_str,
                           state->heating ? "ON" : "OFF",
                           state->pumping ? "ON" : "OFF");
 
