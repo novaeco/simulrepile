@@ -95,7 +95,7 @@ static uint32_t last_tick_ms;
 static uint32_t autosave_ms;
 static int64_t prev_income_snapshot;
 static int64_t prev_expense_snapshot;
-static uint8_t selected_terrarium;
+static uint32_t selected_terrarium;
 static bool s_game_active;
 
 static const char *TAG = "reptile_game";
@@ -738,7 +738,7 @@ static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
     return;
   }
   const terrarium_t *terrarium =
-      reptile_facility_get_terrarium_const(&g_facility, index);
+      reptile_facility_get_terrarium_const(&g_facility, (uint8_t)index);
   if (!terrarium || !terrarium->occupied) {
     snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\nDisponible",
              (uint32_t)(index + 1U));
@@ -757,6 +757,21 @@ static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
   lv_table_set_cell_value(table_terrariums, row, col, buffer);
 }
 
+static void set_overview_cell_ctrl(uint32_t row, uint32_t col, bool selected) {
+#if LVGL_VERSION_MAJOR > 9 || LV_VERSION_CHECK(9, 4, 0)
+  lv_table_set_cell_ctrl(table_terrariums, row, col,
+                         LV_TABLE_CELL_CTRL_CUSTOM_1, selected);
+#else
+  if (selected) {
+    lv_table_set_cell_ctrl(table_terrariums, row, col,
+                           LV_TABLE_CELL_CTRL_CUSTOM_1);
+  } else {
+    lv_table_clear_cell_ctrl(table_terrariums, row, col,
+                             LV_TABLE_CELL_CTRL_CUSTOM_1);
+  }
+#endif
+}
+
 static void update_overview_screen(void) {
   if (!table_terrariums)
     return;
@@ -765,12 +780,7 @@ static void update_overview_screen(void) {
     for (uint32_t col = 0; col < TERRARIUM_GRID_SIZE; ++col) {
       uint32_t index = row * TERRARIUM_GRID_SIZE + col;
       update_table_cell(index, row, col);
-      lv_table_clear_cell_ctrl(table_terrariums, row, col,
-                               LV_TABLE_CELL_CTRL_CUSTOM_1);
-      if (index == selected_terrarium) {
-        lv_table_add_cell_ctrl(table_terrariums, row, col,
-                               LV_TABLE_CELL_CTRL_CUSTOM_1);
-      }
+      set_overview_cell_ctrl(row, col, index == selected_terrarium);
     }
   }
 
@@ -815,7 +825,8 @@ static void update_detail_screen(void) {
   if (!screen_detail)
     return;
   const terrarium_t *terrarium =
-      reptile_facility_get_terrarium_const(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium_const(&g_facility,
+                                           (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied) {
     lv_label_set_text(detail_title, "Terrarium libre");
     lv_label_set_text(detail_status_label,
@@ -957,7 +968,8 @@ static void update_certificate_table(void) {
   if (!detail_cert_table)
     return;
   const terrarium_t *terrarium =
-      reptile_facility_get_terrarium_const(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium_const(&g_facility,
+                                           (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied) {
     return;
   }
@@ -1014,7 +1026,7 @@ static void update_regulation_screen(void) {
   uint32_t row = 1;
   for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
     const terrarium_t *terrarium =
-        reptile_facility_get_terrarium_const(&g_facility, i);
+        reptile_facility_get_terrarium_const(&g_facility, (uint8_t)i);
     if (!terrarium || !terrarium->occupied) {
       continue;
     }
@@ -1088,7 +1100,7 @@ static void update_economy_screen(void) {
   uint32_t row = 1;
   for (uint32_t i = 0; i < g_facility.terrarium_count && row < 6U; ++i) {
     const terrarium_t *terrarium =
-        reptile_facility_get_terrarium_const(&g_facility, i);
+        reptile_facility_get_terrarium_const(&g_facility, (uint8_t)i);
     if (!terrarium || !terrarium->occupied) {
       continue;
     }
@@ -1151,8 +1163,7 @@ static void table_event_cb(lv_event_t *e) {
   if (index >= g_facility.terrarium_count)
     return;
 
-  if (!lv_table_has_cell_ctrl(table, row, col, LV_TABLE_CELL_CTRL_CUSTOM_1) ||
-      index != selected_terrarium) {
+  if (index != selected_terrarium) {
     selected_terrarium = index;
     update_overview_screen();
     update_detail_screen();
@@ -1173,7 +1184,7 @@ static void config_dropdown_event_cb(lv_event_t *e) {
   char sel[64];
   lv_dropdown_get_selected_str(dd, sel, sizeof(sel));
   terrarium_t *terrarium =
-      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied)
     return;
   esp_err_t err = ESP_OK;
@@ -1222,7 +1233,7 @@ static void config_dropdown_event_cb(lv_event_t *e) {
 static void add_certificate_event_cb(lv_event_t *e) {
   (void)e;
   terrarium_t *terrarium =
-      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied)
     return;
   reptile_certificate_t cert = {0};
@@ -1266,7 +1277,7 @@ static void inventory_button_event_cb(lv_event_t *e) {
 static void education_switch_event_cb(lv_event_t *e) {
   lv_obj_t *sw = lv_event_get_target(e);
   terrarium_t *terrarium =
-      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied)
     return;
   bool enabled = lv_obj_has_state(sw, LV_STATE_CHECKED);
@@ -1279,7 +1290,7 @@ static void education_switch_event_cb(lv_event_t *e) {
 static void register_button_event_cb(lv_event_t *e) {
   (void)e;
   terrarium_t *terrarium =
-      reptile_facility_get_terrarium(&g_facility, selected_terrarium);
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied)
     return;
   if (terrarium->config.register_completed) {
