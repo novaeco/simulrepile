@@ -1411,8 +1411,10 @@ static void update_economy_screen(void) {
   lv_label_set_text_fmt(
       economy_summary_label,
       "Jour %" PRIu32
-      " | Recettes: %.2f € | Dépenses: %.2f € | Amendes cumulées: %.2f €",
+      " | Revenu hebdo: %.2f € | Revenu d'exploitation: %.2f € | Dépenses: %.2f € |"
+      " Amendes cumulées: %.2f €",
       g_facility.economy.days_elapsed,
+      g_facility.economy.weekly_subsidy_cents / 100.0,
       g_facility.economy.daily_income_cents / 100.0,
       g_facility.economy.daily_expenses_cents / 100.0,
       g_facility.economy.fines_cents / 100.0);

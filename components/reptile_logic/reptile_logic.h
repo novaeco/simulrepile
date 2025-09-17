@@ -110,6 +110,7 @@ typedef struct {
   int64_t daily_expenses_cents;
   int64_t fines_cents;
   uint32_t days_elapsed;
+  int64_t weekly_subsidy_cents;
 } reptile_economy_t;
 
 typedef struct {
