@@ -1020,9 +1020,52 @@ static void update_detail_screen(void) {
       reptile_facility_get_terrarium_const(&g_facility,
                                            (uint8_t)selected_terrarium);
   if (!terrarium || !terrarium->occupied) {
-    lv_label_set_text(detail_title, "Terrarium libre");
+    lv_label_set_text(detail_title, "Terrarium disponible");
     lv_label_set_text(detail_status_label,
-                      "Sélectionner un terrarium occupé pour éditer");
+                      "Attribuer une espèce pour configurer ce terrarium");
+    if (detail_status_icon) {
+      lv_img_set_src(detail_status_icon, &gImage_terrarium_ok);
+    }
+    if (detail_env_table) {
+      static const char *kLabels[12] = {
+          "Température",    "Humidité",   "Index UV",      "Satiété",
+          "Hydratation",    "Croissance", "Poids",        "Stade",
+          "Pathologie",     "Incident",   "Dimensions",    "Obligations",
+      };
+      for (uint32_t row = 0; row < 12U; ++row) {
+        lv_table_set_cell_value(detail_env_table, row, 0, kLabels[row]);
+        lv_table_set_cell_value(detail_env_table, row, 1, "-");
+      }
+    }
+    if (detail_cert_table) {
+      lv_table_set_row_count(detail_cert_table, 2);
+      lv_table_set_cell_value(detail_cert_table, 0, 0, "Identifiant");
+      lv_table_set_cell_value(detail_cert_table, 0, 1, "Échéance");
+      lv_table_set_cell_value(detail_cert_table, 1, 0, "-");
+      lv_table_set_cell_value(detail_cert_table, 1, 1,
+                              "Aucun certificat enregistré");
+    }
+    if (detail_compliance_label) {
+      lv_label_set_text(detail_compliance_label,
+                        "Aucune conformité requise sans espèce");
+    }
+    dropdown_select_none(dropdown_substrate);
+    dropdown_select_none(dropdown_heating);
+    dropdown_select_none(dropdown_decor);
+    dropdown_select_none(dropdown_uv);
+    dropdown_select_none(dropdown_size);
+    if (education_switch_detail) {
+      lv_obj_clear_state(education_switch_detail, LV_STATE_CHECKED);
+    }
+    if (detail_register_label) {
+      lv_label_set_text(detail_register_label, "Registre non renseigné");
+    }
+    if (register_button) {
+      lv_obj_t *label = lv_obj_get_child(register_button, 0);
+      if (label) {
+        lv_label_set_text(label, "Consigner la cession");
+      }
+    }
     return;
   }
   const species_profile_t *profile = &terrarium->species;

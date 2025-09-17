@@ -39,6 +39,33 @@ int main(void) {
   printf("Initial occupied=%u free=%u cash=%.2f€\n", metrics.occupied,
          metrics.free_slots, facility.economy.cash_cents / 100.0);
 
+  terrarium_t *t0_setup = reptile_facility_get_terrarium(&facility, 0);
+  terrarium_t *t1_setup = reptile_facility_get_terrarium(&facility, 1);
+  terrarium_t *t2_setup = reptile_facility_get_terrarium(&facility, 2);
+  terrarium_t *t3_setup = reptile_facility_get_terrarium(&facility, 3);
+  const species_profile_t *gecko = reptile_species_get(REPTILE_SPECIES_GECKO);
+  const species_profile_t *python = reptile_species_get(REPTILE_SPECIES_PYTHON);
+  const species_profile_t *tortoise =
+      reptile_species_get(REPTILE_SPECIES_TORTOISE);
+  const species_profile_t *chameleon =
+      reptile_species_get(REPTILE_SPECIES_CHAMELEON);
+  if (t0_setup && gecko) {
+    reptile_terrarium_set_species(t0_setup, gecko, "Gecko 01");
+  }
+  if (t1_setup && python) {
+    reptile_terrarium_set_species(t1_setup, python, "Python 01");
+  }
+  if (t2_setup && tortoise) {
+    reptile_terrarium_set_species(t2_setup, tortoise, "Tortue 01");
+  }
+  if (t3_setup && chameleon) {
+    reptile_terrarium_set_species(t3_setup, chameleon, "Caméléon 01");
+  }
+
+  reptile_facility_compute_metrics(&facility, &metrics);
+  printf("Après attribution manuelle occupied=%u free=%u\n", metrics.occupied,
+         metrics.free_slots);
+
   esp_err_t custom_err = reptile_terrarium_set_species(
       reptile_facility_get_terrarium(&facility, 4),
       reptile_species_get(REPTILE_SPECIES_CUSTOM), "Custom");

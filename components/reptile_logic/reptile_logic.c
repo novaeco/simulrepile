@@ -261,7 +261,7 @@ static void terrarium_reset(terrarium_t *terrarium) {
   copy_string(terrarium->config.uv_setup, sizeof(terrarium->config.uv_setup),
               "UVB T5 5%");
   terrarium_set_compliance_message(terrarium,
-                                   "Aucune espèce attribuée");
+                                   "Terrarium disponible (aucune espèce attribuée)");
 }
 
 static void facility_reset(reptile_facility_t *facility) {
@@ -291,30 +291,6 @@ static void facility_reset(reptile_facility_t *facility) {
   facility->mature_count = 0;
   facility->last_persist_time = 0;
   facility->average_growth = 0.0f;
-
-  const species_profile_t *gecko = reptile_species_get(REPTILE_SPECIES_GECKO);
-  const species_profile_t *python = reptile_species_get(REPTILE_SPECIES_PYTHON);
-  const species_profile_t *tortoise =
-      reptile_species_get(REPTILE_SPECIES_TORTOISE);
-  const species_profile_t *chameleon =
-      reptile_species_get(REPTILE_SPECIES_CHAMELEON);
-
-  if (gecko) {
-    reptile_terrarium_set_species(&facility->terrariums[0], gecko,
-                                  "Gecko 01");
-  }
-  if (python) {
-    reptile_terrarium_set_species(&facility->terrariums[1], python,
-                                  "Python 01");
-  }
-  if (tortoise) {
-    reptile_terrarium_set_species(&facility->terrariums[2], tortoise,
-                                  "Tortue 01");
-  }
-  if (chameleon) {
-    reptile_terrarium_set_species(&facility->terrariums[3], chameleon,
-                                  "Caméléon 01");
-  }
 }
 
 static const char *mode_dir(game_mode_t mode) {
