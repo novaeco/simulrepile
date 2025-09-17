@@ -74,6 +74,19 @@ void reset_last_mode(void) { save_last_mode(APP_MODE_MENU_OVERRIDE); }
 
 static void sleep_timer_cb(lv_timer_t *timer);
 
+void sleep_timer_arm(bool arm) {
+  if (!sleep_timer)
+    return;
+
+  if (!sleep_enabled || !arm || !reptile_game_is_active()) {
+    lv_timer_pause(sleep_timer);
+    return;
+  }
+
+  lv_timer_resume(sleep_timer);
+  lv_timer_reset(sleep_timer);
+}
+
 static void start_game_mode(void) {
   reptile_game_stop();
   reptile_game_init();
@@ -81,7 +94,9 @@ static void start_game_mode(void) {
   logging_init(reptile_get_state);
   if (!sleep_timer)
     sleep_timer = lv_timer_create(sleep_timer_cb, 120000, NULL);
+  lv_timer_pause(sleep_timer);
   settings_apply();
+  sleep_timer_arm(true);
 }
 
 static void menu_btn_game_cb(lv_event_t *e) {
@@ -95,6 +110,7 @@ static void menu_btn_real_cb(lv_event_t *e) {
   (void)e;
   game_mode_set(GAME_MODE_REAL);
   reptile_game_stop();
+  sleep_timer_arm(false);
   if (game_mode_get() == GAME_MODE_REAL) {
     esp_err_t err = sensors_init();
     if (err == ESP_ERR_NOT_FOUND) {
@@ -123,6 +139,7 @@ static void menu_btn_real_cb(lv_event_t *e) {
 static void menu_btn_settings_cb(lv_event_t *e) {
   (void)e;
   reptile_game_stop();
+  sleep_timer_arm(false);
   save_last_mode(APP_MODE_SETTINGS);
   settings_screen_show();
 }
@@ -133,11 +150,8 @@ void sleep_set_enabled(bool enabled) {
     return;
   if (enabled) {
     lv_timer_set_period(sleep_timer, 120000);
-    lv_timer_resume(sleep_timer);
-    lv_timer_reset(sleep_timer);
-  } else {
-    lv_timer_pause(sleep_timer);
   }
+  sleep_timer_arm(enabled);
 }
 
 bool sleep_is_enabled(void) { return sleep_enabled; }
@@ -256,6 +270,8 @@ static void backlight_init(void) {
 
 static void sleep_timer_cb(lv_timer_t *timer) {
   (void)timer;
+  if (!reptile_game_is_active())
+    return;
   lv_timer_t *t = lv_timer_get_next(NULL);
   while (t) {
     lv_timer_pause(t);
@@ -301,7 +317,7 @@ cleanup:
     lv_timer_resume(t);
     t = lv_timer_get_next(t);
   }
-  lv_timer_reset(timer);
+  sleep_timer_arm(true);
 }
 
 // Main application function
