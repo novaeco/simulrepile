@@ -24,6 +24,7 @@ typedef enum {
     REPTILE_ENV_ALARM_TEMP_HIGH      = (1u << 2),
     REPTILE_ENV_ALARM_HUM_LOW        = (1u << 3),
     REPTILE_ENV_ALARM_HUM_HIGH       = (1u << 4),
+    REPTILE_ENV_ALARM_LIGHT_LOW      = (1u << 5),
 } reptile_env_alarm_flags_t;
 
 /** Simple representation of a wall-clock time of day. */
@@ -88,18 +89,23 @@ typedef struct {
     time_t timestamp;           /*!< Wall-clock timestamp */
     float temperature_c;        /*!< Measured temperature */
     float humidity_pct;         /*!< Measured humidity */
+    float light_lux;            /*!< Measured illuminance (lux) */
     float target_temperature_c; /*!< Active target temperature */
     float target_humidity_pct;  /*!< Active target humidity */
+    float target_light_lux;     /*!< Expected minimum illuminance when UV is on */
 } reptile_env_history_entry_t;
 
 /** Runtime state of a single terrarium. */
 typedef struct {
     float temperature_c;        /*!< Last measured temperature */
     float humidity_pct;         /*!< Last measured humidity */
+    float light_lux;            /*!< Last measured illuminance in lux */
     float target_temperature_c; /*!< Target temperature according to schedule */
     float target_humidity_pct;  /*!< Target humidity according to schedule */
+    float target_light_lux;     /*!< Expected minimum illuminance when UV should be on */
     bool  temperature_valid;    /*!< Measurement validity */
     bool  humidity_valid;       /*!< Measurement validity */
+    bool  light_valid;          /*!< Measurement validity */
     bool  heating;              /*!< Heating actuator active */
     bool  pumping;              /*!< Humidification actuator active */
     bool  uv_light;             /*!< UV lighting active */

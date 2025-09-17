@@ -13,6 +13,7 @@
 #define TAG "env_control"
 
 #define HISTORY_SAMPLE_PERIOD_S 60
+#define MIN_UV_LUX_THRESHOLD 50.0f
 
 typedef struct {
     reptile_env_history_entry_t samples[REPTILE_ENV_HISTORY_LENGTH];
@@ -117,7 +118,14 @@ static void notify_state(size_t index)
 static void update_alarm_flags(terrarium_ctrl_t *terr)
 {
     uint32_t flags = REPTILE_ENV_ALARM_NONE;
+    bool sensor_failure = false;
     if (!terr->state.temperature_valid || !terr->state.humidity_valid) {
+        sensor_failure = true;
+    }
+    if (terr->state.target_light_lux > 0.0f && !terr->state.light_valid) {
+        sensor_failure = true;
+    }
+    if (sensor_failure) {
         flags |= REPTILE_ENV_ALARM_SENSOR_FAILURE;
     }
     if (terr->state.temperature_valid) {
@@ -142,6 +150,11 @@ static void update_alarm_flags(terrarium_ctrl_t *terr)
         }
         if (hum >= high_h) {
             flags |= REPTILE_ENV_ALARM_HUM_HIGH;
+        }
+    }
+    if (terr->state.light_valid && terr->state.target_light_lux > 0.0f) {
+        if (terr->state.light_lux < terr->state.target_light_lux) {
+            flags |= REPTILE_ENV_ALARM_LIGHT_LOW;
         }
     }
     terr->state.alarm_flags = flags;
@@ -385,10 +398,13 @@ static void controller_timer_cb(TimerHandle_t timer)
 
         float temp = sensors_read_temperature_channel(terr->cfg.sensor_channel);
         float hum = sensors_read_humidity_channel(terr->cfg.sensor_channel);
+        float lux = sensors_read_lux_channel(terr->cfg.sensor_channel);
         terr->state.temperature_c = temp;
         terr->state.humidity_pct = hum;
+        terr->state.light_lux = lux;
         terr->state.temperature_valid = !isnan(temp);
         terr->state.humidity_valid = !isnan(hum);
+        terr->state.light_valid = !isnan(lux);
 
         bool day_active = is_day_profile_active(terr, &tm_now);
         terr->state.day_profile_active = day_active;
@@ -400,6 +416,7 @@ static void controller_timer_cb(TimerHandle_t timer)
         bool uv_desired = terr->uv_manual ? terr->uv_manual_state
                                           : uv_schedule_should_enable(terr, &tm_now);
         update_uv_state_locked(terr, uv_desired);
+        terr->state.target_light_lux = terr->state.uv_light ? MIN_UV_LUX_THRESHOLD : 0.0f;
 
         update_alarm_flags(terr);
         evaluate_heat(terr, now);
@@ -410,8 +427,10 @@ static void controller_timer_cb(TimerHandle_t timer)
                 .timestamp = now,
                 .temperature_c = terr->state.temperature_c,
                 .humidity_pct = terr->state.humidity_pct,
+                .light_lux = terr->state.light_lux,
                 .target_temperature_c = terr->state.target_temperature_c,
                 .target_humidity_pct = terr->state.target_humidity_pct,
+                .target_light_lux = terr->state.target_light_lux,
             };
             history_push(&terr->history, &entry);
         }
@@ -470,8 +489,10 @@ static void controller_reset_locked(void)
         memset(&terr->state, 0, sizeof(terr->state));
         terr->state.temperature_c = NAN;
         terr->state.humidity_pct = NAN;
+        terr->state.light_lux = NAN;
         terr->state.target_temperature_c = terr->cfg.day.temperature_c;
         terr->state.target_humidity_pct = terr->cfg.day.humidity_pct;
+        terr->state.target_light_lux = 0.0f;
         terr->state.last_update = time(NULL);
         terr->heat_task = NULL;
         terr->pump_task = NULL;

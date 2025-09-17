@@ -42,6 +42,15 @@ float sensors_read_humidity(void)
     return NAN;
 }
 
+float sensors_read_lux(void)
+{
+    sensors_select_driver();
+    if (s_driver && s_driver->read_lux) {
+        return s_driver->read_lux();
+    }
+    return NAN;
+}
+
 float sensors_read_temperature_channel(size_t channel)
 {
     sensors_select_driver();
@@ -68,6 +77,21 @@ float sensors_read_humidity_channel(size_t channel)
     }
     if (channel == 0 && s_driver->read_humidity) {
         return s_driver->read_humidity();
+    }
+    return NAN;
+}
+
+float sensors_read_lux_channel(size_t channel)
+{
+    sensors_select_driver();
+    if (!s_driver) {
+        return NAN;
+    }
+    if (s_driver->read_lux_channel) {
+        return s_driver->read_lux_channel(channel);
+    }
+    if (channel == 0 && s_driver->read_lux) {
+        return s_driver->read_lux();
     }
     return NAN;
 }
