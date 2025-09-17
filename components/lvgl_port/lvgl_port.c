@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -7,9 +9,12 @@
 #include "esp_heap_caps.h"
 #include "lvgl_port.h"
 
+extern void sleep_timer_arm(bool arm);
+
 static const char *TAG = "lv_port";
 static SemaphoreHandle_t lvgl_mux;
 static TaskHandle_t lvgl_task_handle = NULL;
+static bool s_touch_active = false;
 
 /**
  * @brief Flush callback: copy rendered area to the display and notify LVGL.
@@ -59,14 +64,22 @@ static void touchpad_read(lv_indev_t *indev, lv_indev_data_t *data)
     esp_lcd_touch_read_data(tp);
     bool pressed = esp_lcd_touch_get_coordinates(tp, &touchpad_x, &touchpad_y, NULL, &touchpad_cnt, 1);
 
-    if (pressed && touchpad_cnt > 0) {
+    bool touch_active = pressed && touchpad_cnt > 0;
+
+    if (touch_active) {
         data->point.x = touchpad_x;
         data->point.y = touchpad_y;
         data->state = LV_INDEV_STATE_PRESSED;
         ESP_LOGD(TAG, "Touch position: %u,%u", touchpad_x, touchpad_y);
+        sleep_timer_arm(true);
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
+        if (s_touch_active) {
+            sleep_timer_arm(true);
+        }
     }
+
+    s_touch_active = touch_active;
 }
 
 /**

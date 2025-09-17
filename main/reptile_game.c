@@ -635,6 +635,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
 
 void reptile_game_stop(void) {
   s_game_active = false;
+  sleep_timer_arm(false);
   if (facility_timer) {
     lv_timer_del(facility_timer);
     facility_timer = NULL;
