@@ -5,6 +5,7 @@
 #include "sleep.h"
 #include "logging.h"
 #include "game_mode.h"
+#include "settings.h"
 #include "esp_log.h"
 #include "regulations.h"
 #include "sd.h"
@@ -13,6 +14,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <time.h>
 
@@ -48,11 +50,14 @@ typedef enum {
 
 static reptile_facility_t g_facility;
 static char s_active_slot[sizeof(g_facility.slot)] = "slot_a";
+static lv_obj_t *screen_simulation_menu;
 static lv_obj_t *screen_overview;
 static lv_obj_t *screen_detail;
 static lv_obj_t *screen_economy;
 static lv_obj_t *screen_save;
 static lv_obj_t *screen_regulations;
+static lv_obj_t *menu_slot_dropdown;
+static lv_obj_t *menu_status_label;
 static lv_obj_t *table_terrariums;
 static lv_obj_t *label_cash;
 static lv_obj_t *label_cycle;
@@ -120,11 +125,20 @@ static const char *size_options =
 
 static const lv_image_dsc_t *icon_currency = &gImage_currency_card;
 
+static const char *slot_options = "slot_a\nslot_b\nslot_c\nslot_d";
+
+static void build_simulation_menu_screen(void);
 static void build_overview_screen(void);
 static void build_detail_screen(void);
 static void build_economy_screen(void);
 static void build_save_screen(void);
 static void build_regulation_screen(void);
+static void ensure_game_screens(void);
+static void simulation_enter_overview(void);
+static void simulation_apply_active_slot(const char *slot);
+static void simulation_get_selected_slot(char *slot, size_t len);
+static void simulation_sync_slot_dropdowns(void);
+static void simulation_set_status(const char *fmt, ...);
 static void update_overview_screen(void);
 static void update_detail_screen(void);
 static void update_economy_screen(void);
@@ -140,6 +154,9 @@ static void inventory_button_event_cb(lv_event_t *e);
 static void save_slot_event_cb(lv_event_t *e);
 static void save_action_event_cb(lv_event_t *e);
 static void menu_button_event_cb(lv_event_t *e);
+static void simulation_new_game_event_cb(lv_event_t *e);
+static void simulation_resume_event_cb(lv_event_t *e);
+static void simulation_settings_event_cb(lv_event_t *e);
 static void sleep_switch_event_cb(lv_event_t *e);
 static void education_switch_event_cb(lv_event_t *e);
 static void register_button_event_cb(lv_event_t *e);
@@ -198,6 +215,143 @@ static void destroy_styles(void) {
   lv_style_reset(&style_table_header);
   lv_style_reset(&style_cell_selected);
   lv_style_reset(&style_value);
+}
+
+static void simulation_set_status(const char *fmt, ...) {
+  if (!menu_status_label || !fmt)
+    return;
+  char buffer[128];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  lv_label_set_text(menu_status_label, buffer);
+}
+
+static void simulation_apply_active_slot(const char *slot) {
+  const char *effective = (slot && slot[0] != '\0') ? slot : "slot_a";
+  snprintf(g_facility.slot, sizeof(g_facility.slot), "%s", effective);
+  snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
+  simulation_sync_slot_dropdowns();
+}
+
+static void simulation_get_selected_slot(char *slot, size_t len) {
+  if (!slot || len == 0)
+    return;
+  if (menu_slot_dropdown) {
+    lv_dropdown_get_selected_str(menu_slot_dropdown, slot, len);
+  } else {
+    slot[0] = '\0';
+  }
+  if (slot[0] == '\0') {
+    const char *fallback = (s_active_slot[0] != '\0') ? s_active_slot : "slot_a";
+    snprintf(slot, len, "%s", fallback);
+  }
+}
+
+static void simulation_sync_slot_dropdowns(void) {
+  if (menu_slot_dropdown) {
+    lv_dropdown_set_options(menu_slot_dropdown, slot_options);
+    load_dropdown_value(menu_slot_dropdown, slot_options, g_facility.slot);
+  }
+  if (save_slot_dropdown) {
+    lv_dropdown_set_options(save_slot_dropdown, slot_options);
+    load_dropdown_value(save_slot_dropdown, slot_options, g_facility.slot);
+  }
+}
+
+static void ensure_game_screens(void) {
+  if (!screen_detail) {
+    build_detail_screen();
+  }
+  if (!screen_economy) {
+    build_economy_screen();
+  }
+  if (!screen_save) {
+    build_save_screen();
+  }
+  if (!screen_regulations) {
+    build_regulation_screen();
+  }
+  if (!screen_overview) {
+    build_overview_screen();
+  }
+}
+
+static void simulation_enter_overview(void) {
+  ensure_game_screens();
+  simulation_sync_slot_dropdowns();
+  if (save_status_label) {
+    lv_label_set_text_fmt(save_status_label, "Slot actif: %s", g_facility.slot);
+  }
+  update_overview_screen();
+  update_detail_screen();
+  update_economy_screen();
+  update_regulation_screen();
+  lv_scr_load(screen_overview);
+}
+
+static void build_simulation_menu_screen(void) {
+  screen_simulation_menu = lv_obj_create(NULL);
+  lv_obj_clear_flag(screen_simulation_menu, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(screen_simulation_menu);
+  lv_obj_add_style(title, &style_title, 0);
+  lv_label_set_text(title, "Simulation reptiles");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+  lv_obj_t *slot_label = lv_label_create(screen_simulation_menu);
+  lv_obj_add_style(slot_label, &style_value, 0);
+  lv_label_set_text(slot_label, "Slot de sauvegarde");
+  lv_obj_align(slot_label, LV_ALIGN_TOP_MID, 0, 80);
+
+  menu_slot_dropdown = lv_dropdown_create(screen_simulation_menu);
+  lv_dropdown_set_options(menu_slot_dropdown, slot_options);
+  lv_obj_set_width(menu_slot_dropdown, 220);
+  lv_obj_align(menu_slot_dropdown, LV_ALIGN_TOP_MID, 0, 120);
+
+  lv_obj_t *btn_new = lv_btn_create(screen_simulation_menu);
+  lv_obj_set_size(btn_new, 240, 54);
+  lv_obj_align(btn_new, LV_ALIGN_CENTER, 0, -40);
+  lv_obj_add_event_cb(btn_new, simulation_new_game_event_cb, LV_EVENT_CLICKED,
+                      NULL);
+  lv_obj_t *lbl_new = lv_label_create(btn_new);
+  lv_label_set_text(lbl_new, "Nouvelle partie");
+  lv_obj_center(lbl_new);
+
+  lv_obj_t *btn_resume = lv_btn_create(screen_simulation_menu);
+  lv_obj_set_size(btn_resume, 240, 54);
+  lv_obj_align(btn_resume, LV_ALIGN_CENTER, 0, 30);
+  lv_obj_add_event_cb(btn_resume, simulation_resume_event_cb, LV_EVENT_CLICKED,
+                      NULL);
+  lv_obj_t *lbl_resume = lv_label_create(btn_resume);
+  lv_label_set_text(lbl_resume, "Reprendre");
+  lv_obj_center(lbl_resume);
+
+  lv_obj_t *btn_settings = lv_btn_create(screen_simulation_menu);
+  lv_obj_set_size(btn_settings, 220, 48);
+  lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 100);
+  lv_obj_add_event_cb(btn_settings, simulation_settings_event_cb,
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_t *lbl_settings = lv_label_create(btn_settings);
+  lv_label_set_text(lbl_settings, "Paramètres");
+  lv_obj_center(lbl_settings);
+
+  lv_obj_t *btn_main_menu = lv_btn_create(screen_simulation_menu);
+  lv_obj_set_size(btn_main_menu, 220, 48);
+  lv_obj_align(btn_main_menu, LV_ALIGN_BOTTOM_LEFT, 20, -20);
+  lv_obj_add_event_cb(btn_main_menu, menu_button_event_cb, LV_EVENT_CLICKED,
+                      NULL);
+  lv_obj_t *lbl_main_menu = lv_label_create(btn_main_menu);
+  lv_label_set_text(lbl_main_menu, "Menu principal");
+  lv_obj_center(lbl_main_menu);
+
+  menu_status_label = lv_label_create(screen_simulation_menu);
+  lv_obj_add_style(menu_status_label, &style_value, 0);
+  lv_obj_align(menu_status_label, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+
+  simulation_sync_slot_dropdowns();
+  simulation_set_status("Slot actif: %s", g_facility.slot);
 }
 
 static void build_overview_screen(void) {
@@ -280,9 +434,10 @@ static void build_overview_screen(void) {
   lv_obj_t *btn_menu = lv_btn_create(screen_overview);
   lv_obj_set_size(btn_menu, 180, 48);
   lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-  lv_obj_add_event_cb(btn_menu, menu_button_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_simulation_menu);
   lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu principal");
+  lv_label_set_text(lbl_menu, "Menu Simulation");
   lv_obj_center(lbl_menu);
 
   sleep_switch = lv_switch_create(screen_overview);
@@ -449,6 +604,15 @@ static void build_detail_screen(void) {
   lv_obj_t *lbl_back = lv_label_create(btn_back);
   lv_label_set_text(lbl_back, "Retour");
   lv_obj_center(lbl_back);
+
+  lv_obj_t *btn_menu = lv_btn_create(screen_detail);
+  lv_obj_set_size(btn_menu, 180, 44);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 190, -10);
+  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_simulation_menu);
+  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
+  lv_label_set_text(lbl_menu, "Menu Simulation");
+  lv_obj_center(lbl_menu);
 }
 
 static void build_economy_screen(void) {
@@ -490,6 +654,15 @@ static void build_economy_screen(void) {
   lv_obj_add_style(economy_summary_label, &style_value, 0);
   lv_obj_align(economy_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -10);
 
+  lv_obj_t *btn_menu = lv_btn_create(screen_economy);
+  lv_obj_set_size(btn_menu, 180, 44);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -60);
+  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_simulation_menu);
+  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
+  lv_label_set_text(lbl_menu, "Menu Simulation");
+  lv_obj_center(lbl_menu);
+
   lv_obj_t *btn_back = lv_btn_create(screen_economy);
   lv_obj_set_size(btn_back, 160, 44);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
@@ -510,7 +683,7 @@ static void build_save_screen(void) {
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
 
   save_slot_dropdown = lv_dropdown_create(screen_save);
-  lv_dropdown_set_options(save_slot_dropdown, "slot_a\nslot_b\nslot_c\nslot_d");
+  lv_dropdown_set_options(save_slot_dropdown, slot_options);
   lv_obj_align(save_slot_dropdown, LV_ALIGN_TOP_LEFT, 10, 60);
   lv_obj_add_event_cb(save_slot_dropdown, save_slot_event_cb,
                       LV_EVENT_VALUE_CHANGED, NULL);
@@ -545,6 +718,15 @@ static void build_save_screen(void) {
   lv_obj_t *lbl_reset = lv_label_create(btn_reset);
   lv_label_set_text(lbl_reset, "Réinitialiser les compteurs");
   lv_obj_center(lbl_reset);
+
+  lv_obj_t *btn_menu = lv_btn_create(screen_save);
+  lv_obj_set_size(btn_menu, 180, 48);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_simulation_menu);
+  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
+  lv_label_set_text(lbl_menu, "Menu Simulation");
+  lv_obj_center(lbl_menu);
 
   lv_obj_t *btn_back = lv_btn_create(screen_save);
   lv_obj_set_size(btn_back, 160, 48);
@@ -598,6 +780,15 @@ static void build_regulation_screen(void) {
   lv_label_set_text(regulations_export_label, "Aucun export réalisé");
   lv_obj_align(regulations_export_label, LV_ALIGN_BOTTOM_LEFT, 260, -30);
 
+  lv_obj_t *btn_menu = lv_btn_create(screen_regulations);
+  lv_obj_set_size(btn_menu, 180, 48);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
+                      screen_simulation_menu);
+  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
+  lv_label_set_text(lbl_menu, "Menu Simulation");
+  lv_obj_center(lbl_menu);
+
   lv_obj_t *btn_back = lv_btn_create(screen_regulations);
   lv_obj_set_size(btn_back, 160, 48);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
@@ -615,18 +806,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   s_game_active = true;
   init_styles();
 
-  build_detail_screen();
-  build_economy_screen();
-  build_save_screen();
-  build_regulation_screen();
-  build_overview_screen();
-
-  load_dropdown_value(save_slot_dropdown, "slot_a\nslot_b\nslot_c\nslot_d",
-                      g_facility.slot);
-  update_overview_screen();
-  update_detail_screen();
-  update_economy_screen();
-  update_regulation_screen();
+  build_simulation_menu_screen();
 
   facility_timer = lv_timer_create(facility_timer_cb, FACILITY_UPDATE_PERIOD_MS,
                                    NULL);
@@ -635,7 +815,7 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   prev_income_snapshot = g_facility.economy.daily_income_cents;
   prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
 
-  lv_scr_load(screen_overview);
+  lv_scr_load(screen_simulation_menu);
 }
 
 void reptile_game_stop(void) {
@@ -645,6 +825,12 @@ void reptile_game_stop(void) {
     lv_timer_del(facility_timer);
     facility_timer = NULL;
   }
+  if (screen_simulation_menu) {
+    lv_obj_del(screen_simulation_menu);
+    screen_simulation_menu = NULL;
+  }
+  menu_slot_dropdown = NULL;
+  menu_status_label = NULL;
   if (screen_overview) {
     lv_obj_del(screen_overview);
     screen_overview = NULL;
@@ -1338,12 +1524,19 @@ static void save_slot_event_cb(lv_event_t *e) {
   char slot[16];
   lv_dropdown_get_selected_str(lv_event_get_target(e), slot, sizeof(slot));
   if (reptile_facility_set_slot(&g_facility, slot) == ESP_OK) {
-    snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
-    lv_label_set_text_fmt(save_status_label, "Slot actif: %s",
-                         g_facility.slot);
+    simulation_apply_active_slot(g_facility.slot);
+    selected_terrarium = 0;
+    prev_income_snapshot = g_facility.economy.daily_income_cents;
+    prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
+    if (save_status_label) {
+      lv_label_set_text_fmt(save_status_label, "Slot actif: %s",
+                           g_facility.slot);
+    }
+    simulation_set_status("Slot actif: %s", g_facility.slot);
     update_overview_screen();
     update_detail_screen();
     update_economy_screen();
+    update_regulation_screen();
   } else {
     lv_label_set_text_fmt(save_status_label, "Échec chargement slot %s", slot);
   }
@@ -1376,6 +1569,61 @@ static void save_action_event_cb(lv_event_t *e) {
     lv_label_set_text(save_status_label, "Compteurs journaliers remis à zéro");
     break;
   }
+}
+
+static void simulation_new_game_event_cb(lv_event_t *e) {
+  (void)e;
+  char slot[sizeof(g_facility.slot)];
+  simulation_get_selected_slot(slot, sizeof(slot));
+  simulation_apply_active_slot(slot);
+
+  reptile_facility_reset_state(&g_facility);
+  esp_err_t err = reptile_facility_save(&g_facility);
+
+  selected_terrarium = 0;
+  autosave_ms = 0;
+  last_tick_ms = lv_tick_get();
+  prev_income_snapshot = g_facility.economy.daily_income_cents;
+  prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
+
+  if (err == ESP_OK) {
+    simulation_set_status("Nouvelle partie sur %s", g_facility.slot);
+  } else {
+    simulation_set_status("Slot %s: sauvegarde impossible", g_facility.slot);
+  }
+
+  simulation_enter_overview();
+}
+
+static void simulation_resume_event_cb(lv_event_t *e) {
+  (void)e;
+  char slot[sizeof(g_facility.slot)];
+  simulation_get_selected_slot(slot, sizeof(slot));
+  char previous_slot[sizeof(g_facility.slot)];
+  snprintf(previous_slot, sizeof(previous_slot), "%s", g_facility.slot);
+  simulation_apply_active_slot(slot);
+
+  esp_err_t err = reptile_facility_load(&g_facility);
+  if (err != ESP_OK) {
+    simulation_set_status("Chargement échoué (%s)", g_facility.slot);
+    simulation_apply_active_slot(previous_slot);
+    return;
+  }
+
+  selected_terrarium = 0;
+  autosave_ms = 0;
+  last_tick_ms = lv_tick_get();
+  prev_income_snapshot = g_facility.economy.daily_income_cents;
+  prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
+
+  simulation_set_status("Slot chargé: %s", g_facility.slot);
+  simulation_enter_overview();
+}
+
+static void simulation_settings_event_cb(lv_event_t *e) {
+  (void)e;
+  settings_screen_show();
+  simulation_set_status("Paramètres ouverts");
 }
 
 static void menu_button_event_cb(lv_event_t *e) {

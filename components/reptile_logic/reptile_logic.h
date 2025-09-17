@@ -201,6 +201,7 @@ const terrarium_t *reptile_facility_get_terrarium_const(
 void reptile_facility_compute_metrics(const reptile_facility_t *facility,
                                       reptile_facility_metrics_t *out);
 void reptile_facility_reset_statistics(reptile_facility_t *facility);
+void reptile_facility_reset_state(reptile_facility_t *facility);
 
 esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
                                         const species_profile_t *profile,
