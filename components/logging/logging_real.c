@@ -18,6 +18,18 @@ static FILE *s_real_files[REPTILE_ENV_MAX_TERRARIUMS];
 static size_t s_real_count;
 static bool s_real_active;
 
+static void logging_real_cleanup(void)
+{
+    for (size_t i = 0; i < REPTILE_ENV_MAX_TERRARIUMS; ++i) {
+        if (s_real_files[i]) {
+            fclose(s_real_files[i]);
+        }
+    }
+    memset(s_real_files, 0, sizeof(s_real_files));
+    s_real_count = 0;
+    s_real_active = false;
+}
+
 static void sanitize_name(const char *name, char *out, size_t len)
 {
     size_t j = 0;
@@ -75,8 +87,8 @@ esp_err_t logging_real_start(size_t terrarium_count, const reptile_env_config_t 
         return err;
     }
     memset(s_real_files, 0, sizeof(s_real_files));
-    s_real_count = terrarium_count;
-    s_real_active = true;
+    s_real_count = 0;
+    s_real_active = false;
 
     for (size_t i = 0; i < terrarium_count; ++i) {
         char safe_name[32];
@@ -88,7 +100,7 @@ esp_err_t logging_real_start(size_t terrarium_count, const reptile_env_config_t 
         FILE *f = fopen(path, "a");
         if (!f) {
             ESP_LOGE(REAL_LOG_TAG, "Failed to open %s", path);
-            s_real_active = false;
+            logging_real_cleanup();
             return ESP_FAIL;
         }
         if (need_header) {
@@ -97,6 +109,8 @@ esp_err_t logging_real_start(size_t terrarium_count, const reptile_env_config_t 
         }
         s_real_files[i] = f;
     }
+    s_real_count = terrarium_count;
+    s_real_active = true;
     return ESP_OK;
 }
 
@@ -140,15 +154,17 @@ void logging_real_append(size_t terrarium_index, const reptile_env_terrarium_sta
 void logging_real_stop(void)
 {
     if (!s_real_active) {
-        return;
-    }
-    for (size_t i = 0; i < REPTILE_ENV_MAX_TERRARIUMS; ++i) {
-        if (s_real_files[i]) {
-            fclose(s_real_files[i]);
-            s_real_files[i] = NULL;
+        bool has_open_handles = false;
+        for (size_t i = 0; i < REPTILE_ENV_MAX_TERRARIUMS; ++i) {
+            if (s_real_files[i]) {
+                has_open_handles = true;
+                break;
+            }
+        }
+        if (!has_open_handles) {
+            return;
         }
     }
-    s_real_active = false;
-    s_real_count = 0;
+    logging_real_cleanup();
 }
 
