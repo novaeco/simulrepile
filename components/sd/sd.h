@@ -36,7 +36,7 @@
 #define SD_SPI_MOSI GPIO_NUM_11              // MOSI routed to the TF socket
 #define SD_SPI_MISO GPIO_NUM_13              // MISO routed to the TF socket
 #define SD_SPI_CLK  GPIO_NUM_12              // SPI clock routed to the TF socket
-#define SD_SPI_CS   GPIO_NUM_10              // Chip-select for the TF socket
+#define SD_SPI_CS   IO_EXTENSION_IO_4        // Chip-select routed through the IO extension
 
 // Function declarations
 
