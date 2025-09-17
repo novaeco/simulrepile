@@ -57,13 +57,22 @@ enum {
   APP_MODE_MENU_OVERRIDE = 0xFF,
 };
 
-// GPIO used at boot to ignore the persisted last mode when held low
-#define MODE_OVERRIDE_BTN GPIO_NUM_0
+// Active-low GPIO sampled at boot to optionally fast-start the last mode
+#define QUICK_START_BTN GPIO_NUM_0
 
 static void save_last_mode(uint8_t mode) {
   nvs_handle_t nvs;
+  uint8_t persisted = APP_MODE_MENU_OVERRIDE;
+
+  if (mode == APP_MODE_GAME || mode == APP_MODE_REAL ||
+      mode == APP_MODE_SETTINGS) {
+    persisted = mode;
+  } else if (mode == APP_MODE_MENU_OVERRIDE) {
+    persisted = APP_MODE_MENU_OVERRIDE;
+  }
+
   if (nvs_open("cfg", NVS_READWRITE, &nvs) == ESP_OK) {
-    nvs_set_u8(nvs, "last_mode", mode);
+    nvs_set_u8(nvs, "last_mode", persisted);
     nvs_commit(nvs);
     nvs_close(nvs);
   }
@@ -411,43 +420,78 @@ void app_main() {
     lv_label_set_text(label, "Param\u00e8tres");
     lv_obj_center(label);
 
-    uint8_t last_mode = APP_MODE_MENU;
+    uint8_t last_mode = APP_MODE_MENU_OVERRIDE;
+    bool has_persisted_mode = false;
     nvs_handle_t nvs;
     if (nvs_open("cfg", NVS_READWRITE, &nvs) == ESP_OK) {
-      nvs_get_u8(nvs, "last_mode", &last_mode);
+      esp_err_t nvs_ret = nvs_get_u8(nvs, "last_mode", &last_mode);
       nvs_close(nvs);
-    }
 
-    bool force_menu = (last_mode == APP_MODE_MENU_OVERRIDE);
-
-    // If override button is held during boot, ignore stored mode
-    gpio_reset_pin(MODE_OVERRIDE_BTN);
-    gpio_set_direction(MODE_OVERRIDE_BTN, GPIO_MODE_INPUT);
-    gpio_pullup_en(MODE_OVERRIDE_BTN);
-    if (gpio_get_level(MODE_OVERRIDE_BTN) == 0) {
-      force_menu = true;
-    }
-
-    if (force_menu) {
-      last_mode = APP_MODE_MENU;
-    }
-
-    switch (last_mode) {
-    case APP_MODE_GAME:
-      start_game_mode();
-      break;
-    case APP_MODE_REAL:
-      game_mode_set(GAME_MODE_REAL);
-      if (game_mode_get() == GAME_MODE_REAL) {
-        reptile_real_start(panel_handle, tp_handle);
+      if (nvs_ret == ESP_OK &&
+          (last_mode == APP_MODE_GAME || last_mode == APP_MODE_REAL ||
+           last_mode == APP_MODE_SETTINGS)) {
+        has_persisted_mode = true;
+      } else {
+        last_mode = APP_MODE_MENU_OVERRIDE;
       }
-      break;
-    case APP_MODE_SETTINGS:
-      settings_screen_show();
-      break;
-    default:
-      lv_scr_load(menu_screen);
-      break;
+    }
+
+    gpio_reset_pin(QUICK_START_BTN);
+    gpio_set_direction(QUICK_START_BTN, GPIO_MODE_INPUT);
+    gpio_pullup_en(QUICK_START_BTN);
+
+    bool quick_start_requested = (gpio_get_level(QUICK_START_BTN) == 0);
+
+    if (has_persisted_mode) {
+      const char *last_mode_text = NULL;
+      switch (last_mode) {
+      case APP_MODE_GAME:
+        last_mode_text = "Mode Jeu";
+        break;
+      case APP_MODE_REAL:
+        last_mode_text = "Mode R\u00e9el";
+        break;
+      case APP_MODE_SETTINGS:
+        last_mode_text = "Param\u00e8tres";
+        break;
+      default:
+        last_mode_text = "Menu";
+        break;
+      }
+
+      lv_obj_t *hint_label = lv_label_create(menu_screen);
+      lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(hint_label, 300);
+      lv_label_set_text_fmt(hint_label,
+                            "Dernier mode s\u00e9lectionn\u00e9 : %s\n"
+                            "(maintenir le bouton physique au d\u00e9marrage pour relancer)",
+                            last_mode_text);
+      lv_obj_align(hint_label, LV_ALIGN_CENTER, 0, 140);
+    }
+
+    lv_scr_load(menu_screen);
+
+    if (quick_start_requested && has_persisted_mode) {
+      ESP_LOGI(TAG, "D\u00e9marrage rapide demand\u00e9");
+      switch (last_mode) {
+      case APP_MODE_GAME:
+        start_game_mode();
+        break;
+      case APP_MODE_REAL:
+        game_mode_set(GAME_MODE_REAL);
+        if (game_mode_get() == GAME_MODE_REAL) {
+          reptile_real_start(panel_handle, tp_handle);
+        }
+        break;
+      case APP_MODE_SETTINGS:
+        settings_screen_show();
+        break;
+      default:
+        break;
+      }
+    } else if (quick_start_requested && !has_persisted_mode) {
+      ESP_LOGW(TAG,
+               "Bouton de d\u00e9marrage rapide actif mais aucun mode persistant valide");
     }
 
     lvgl_port_unlock();
