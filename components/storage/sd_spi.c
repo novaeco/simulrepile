@@ -1,5 +1,6 @@
 #include "sd.h"
 
+#include "sdkconfig.h"
 #include "ch422g.h"
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
@@ -21,7 +22,11 @@
 #define SD_SPI_MISO 13
 #define SD_SPI_SCLK 12
 
-#define CH422G_EXIO_SD_CS 4
+#ifndef CONFIG_CH422G_EXIO_SD_CS
+#define CONFIG_CH422G_EXIO_SD_CS 4
+#endif
+
+#define CH422G_EXIO_SD_CS CONFIG_CH422G_EXIO_SD_CS
 
 #ifndef CONFIG_STORAGE_SD_USE_GPIO_CS
 #define CONFIG_STORAGE_SD_USE_GPIO_CS 0

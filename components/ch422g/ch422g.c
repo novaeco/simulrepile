@@ -30,7 +30,17 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
-    esp_err_t ret = DEV_I2C_Set_Slave_Addr(&s_dev, CH422G_DEFAULT_ADDR);
+    esp_err_t ret = DEV_I2C_Probe(CH422G_DEFAULT_ADDR);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "No ACK from CH422G at 0x%02X: %s. Check 3V3 supply, SDA=%d,"
+                 " SCL=%d and external pull-ups (2.2k–4.7kΩ).",
+                 CH422G_DEFAULT_ADDR, esp_err_to_name(ret),
+                 CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+        return ret;
+    }
+
+    ret = DEV_I2C_Set_Slave_Addr(&s_dev, CH422G_DEFAULT_ADDR);
     ESP_RETURN_ON_ERROR(ret, TAG, "attach CH422G");
 
     /* Force all EXIO outputs high so that downstream peripherals stay
