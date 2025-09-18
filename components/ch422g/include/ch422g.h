@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,9 +14,11 @@ extern "C" {
 #define CH422G_I2C_SDA 8
 #define CH422G_I2C_SCL 9
 
-/* TODO: confirm the actual 7-bit address and EXIO register offset on the
- * Waveshare carrier revision in use. */
-#define CH422G_DEFAULT_ADDR 0x20u
+#ifndef CONFIG_CH422G_I2C_ADDRESS
+#define CONFIG_CH422G_I2C_ADDRESS 0x20u
+#endif
+
+#define CH422G_DEFAULT_ADDR CONFIG_CH422G_I2C_ADDRESS
 #define CH422G_REG_EXIO 0x01u
 
 /**

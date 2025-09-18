@@ -14,18 +14,31 @@
 #ifndef __I2C_H
 #define __I2C_H
 
-#include <stdio.h>          // Standard input/output library
-#include <string.h>         // String manipulation functions
-#include "driver/i2c_master.h"    // ESP32 I2C master driver library
-#include "esp_log.h"        // ESP32 logging library for debugging
-#include "gpio.h"           // GPIO header for pin configuration
+#include <stdio.h>           // Standard input/output library
+#include <string.h>          // String manipulation functions
+#include "driver/i2c_master.h" // ESP32 I2C master driver library
+#include "esp_log.h"         // ESP32 logging library for debugging
+#include "gpio.h"            // GPIO header for pin configuration
+#include "sdkconfig.h"
 
-// Define the SDA (data) and SCL (clock) pins for I2C communication
-#define EXAMPLE_I2C_MASTER_SDA GPIO_NUM_8  // SDA pin
-#define EXAMPLE_I2C_MASTER_SCL GPIO_NUM_9  // SCL pin
+// Allow the SDA/SCL pins and bus frequency to be adjusted from menuconfig.
+#ifndef CONFIG_I2C_MASTER_SDA_GPIO
+#define CONFIG_I2C_MASTER_SDA_GPIO 8
+#endif
+
+#ifndef CONFIG_I2C_MASTER_SCL_GPIO
+#define CONFIG_I2C_MASTER_SCL_GPIO 9
+#endif
+
+#ifndef CONFIG_I2C_MASTER_FREQUENCY_HZ
+#define CONFIG_I2C_MASTER_FREQUENCY_HZ (200 * 1000)
+#endif
+
+#define EXAMPLE_I2C_MASTER_SDA ((gpio_num_t)CONFIG_I2C_MASTER_SDA_GPIO)
+#define EXAMPLE_I2C_MASTER_SCL ((gpio_num_t)CONFIG_I2C_MASTER_SCL_GPIO)
 
 // Define the I2C frequency (reduced to 200 kHz for improved signal integrity)
-#define EXAMPLE_I2C_MASTER_FREQUENCY (200 * 1000)  // I2C speed
+#define EXAMPLE_I2C_MASTER_FREQUENCY CONFIG_I2C_MASTER_FREQUENCY_HZ
 
 // Define the I2C master port number (I2C_NUM_0 in this case)
 #define EXAMPLE_I2C_MASTER_NUM I2C_NUM_0

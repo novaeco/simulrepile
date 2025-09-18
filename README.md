@@ -114,6 +114,17 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 - `CONFIG_REPTILE_DEBUG` : désactive la mise en veille automatique au démarrage afin
   de faciliter le débogage. La veille peut ensuite être réactivée ou désactivée à
   l'exécution via le bouton **Veille ON/OFF** de l'interface.
+- `CONFIG_I2C_MASTER_SDA_GPIO` / `CONFIG_I2C_MASTER_SCL_GPIO` : sélection des broches
+  SDA/SCL partagées par le CH422G, le GT911 et les capteurs. Adapter ces valeurs si
+  le faisceau a été recâblé.
+- `CONFIG_I2C_MASTER_FREQUENCY_HZ` : fréquence du bus I²C (200 kHz par défaut) ; à
+  réduire si les longueurs de nappe imposent une marge sur les fronts montants.
+- `CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS` : active les résistances internes de
+  tirage pour consolider les pull-ups externes sur SDA/SCL.
+- `CONFIG_CH422G_I2C_ADDRESS` / `CONFIG_CH422G_EXIO_SD_CS` : adresse 7 bits de
+  l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD.
+- `CONFIG_STORAGE_SD_USE_GPIO_CS` + `CONFIG_STORAGE_SD_GPIO_CS_NUM` : bypass du
+  CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
 
 ## Menu de démarrage et modes d'exécution
 Au reset, le firmware affiche un menu minimaliste permettant de choisir entre deux modes :

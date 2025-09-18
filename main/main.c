@@ -37,6 +37,7 @@
 #include "sleep.h" // Sleep control interface
 #include "settings.h"     // Application settings
 #include "game_mode.h"
+#include "sdkconfig.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -56,6 +57,8 @@ static lv_obj_t *prev_screen;
 lv_obj_t *menu_screen;
 
 static sdmmc_card_t *s_sd_card = NULL;
+static bool s_sd_cs_ready = false;
+static esp_err_t s_sd_cs_last_err = ESP_OK;
 
 enum {
   APP_MODE_MENU = 0,
@@ -92,11 +95,34 @@ void reset_last_mode(void) { save_last_mode(APP_MODE_MENU_OVERRIDE); }
 static void sleep_timer_cb(lv_timer_t *timer);
 
 static void sd_cs_selftest(void) {
-  esp_err_t ret = sd_spi_cs_selftest();
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s", esp_err_to_name(ret));
-    ESP_ERROR_CHECK(ret);
+  s_sd_cs_ready = false;
+  s_sd_cs_last_err = sd_spi_cs_selftest();
+  if (s_sd_cs_last_err == ESP_OK) {
+    s_sd_cs_ready = true;
+    return;
   }
+
+  ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s",
+           esp_err_to_name(s_sd_cs_last_err));
+  if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
+    ESP_LOGE(TAG,
+             "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
+             "SCL=GPIO%d et les résistances de tirage 2.2–4.7 kΩ.",
+             CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+  } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE) {
+    ESP_LOGE(TAG,
+             "Bus I2C instable : lecture NACK pendant la configuration de la "
+             "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
+  }
+
+#if !CONFIG_STORAGE_SD_USE_GPIO_CS
+  ESP_LOGW(TAG,
+           "Le firmware continuera sans carte SD tant que le bus CH422G ne "
+           "répond pas ou qu'un fallback GPIO n'est pas configuré.");
+#else
+  ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
+           CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#endif
 }
 
 static void sd_write_selftest(void) {
@@ -236,6 +262,15 @@ static void wait_for_sd_card(void) {
   bool wdt_registered = false;
 
   if (sd_is_mounted()) {
+    return;
+  }
+
+  if (!s_sd_cs_ready) {
+    ESP_LOGE(TAG,
+             "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
+             "CH422G ou activez le fallback GPIO dans menuconfig.",
+             esp_err_to_name(s_sd_cs_last_err));
+    show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
     return;
   }
 
@@ -397,12 +432,18 @@ void app_main() {
 
   // Initialize SD card at boot for early log availability
   sd_cs_selftest();
-  esp_err_t sd_ret = sd_mount(&s_sd_card);
-  if (sd_ret == ESP_OK) {
-    sd_write_selftest();
+  if (s_sd_cs_ready) {
+    esp_err_t sd_ret = sd_mount(&s_sd_card);
+    if (sd_ret == ESP_OK) {
+      sd_write_selftest();
+    } else {
+      ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
+      s_sd_card = NULL;
+    }
   } else {
-    ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
-    s_sd_card = NULL;
+    ESP_LOGW(TAG,
+             "Initial SD init skipped: autotest CS échoué (%s)",
+             esp_err_to_name(s_sd_cs_last_err));
   }
 
   // Initialize the GT911 touch screen controller

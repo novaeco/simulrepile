@@ -33,9 +33,11 @@ DEV_I2C_Port DEV_I2C_Init()
         return handle;
     }
 
+#if CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS
     // Ensure the internal pull-ups are enabled in addition to the external ones
     gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SDA, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SCL, GPIO_PULLUP_ONLY);
+#endif
 
     // Define I2C bus configuration parameters
     i2c_master_bus_config_t i2c_bus_config = {
@@ -49,8 +51,12 @@ DEV_I2C_Port DEV_I2C_Init()
     esp_err_t ret = i2c_new_master_bus(&i2c_bus_config, &handle.bus);
     if (ret == ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "I2C bus already initialized");
-    } else {
-        ESP_ERROR_CHECK(ret);
+    } else if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialise I2C bus on SDA=%d SCL=%d: %s",
+                 CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO,
+                 esp_err_to_name(ret));
+        handle.bus = NULL;
+        return handle;
     }
 
     // No device is added here; handle.dev remains NULL until configured
@@ -75,7 +81,11 @@ esp_err_t DEV_I2C_Probe(uint8_t addr)
 
     esp_err_t ret = i2c_master_probe(handle.bus, addr, 100);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "I2C device 0x%02X not found: %s", addr, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "I2C device 0x%02X not found: %s. Verify VCC=3V3, pull-ups and"
+                 " wiring on SDA=%d / SCL=%d.",
+                 addr, esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO,
+                 CONFIG_I2C_MASTER_SCL_GPIO);
     }
     return ret;
 }
