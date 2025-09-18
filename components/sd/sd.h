@@ -39,10 +39,28 @@
 #define SD_SPI_MOSI GPIO_NUM_11              // MOSI routed to the TF socket
 #define SD_SPI_MISO GPIO_NUM_13              // MISO routed to the TF socket
 #define SD_SPI_CLK  GPIO_NUM_12              // SPI clock routed to the TF socket
+
+// Default control path for the SD chip-select line (runtime fallback handled in sd.c)
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
-#define SD_SPI_CS   IO_EXTENSION_IO_4        // Chip-select routed through the IO extension
+#define SD_SPI_USE_IO_EXT_DEFAULT 1
 #else
-#define SD_SPI_CS   CONFIG_REPTILE_SD_SPI_DIRECT_CS_GPIO // Direct chip-select GPIO when IO expander is bypassed
+#define SD_SPI_USE_IO_EXT_DEFAULT 0
+#endif
+
+#define SD_SPI_IO_EXT_PIN IO_EXTENSION_IO_4
+
+#ifdef CONFIG_REPTILE_SD_SPI_DIRECT_CS_GPIO
+#define SD_SPI_DIRECT_GPIO CONFIG_REPTILE_SD_SPI_DIRECT_CS_GPIO
+#else
+#define SD_SPI_DIRECT_GPIO 10
+#endif
+
+// Retained legacy macro (compile-time selection); the implementation now supports
+// switching to the direct GPIO path at runtime when the IO expander path fails.
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
+#define SD_SPI_CS SD_SPI_IO_EXT_PIN
+#else
+#define SD_SPI_CS SD_SPI_DIRECT_GPIO
 #endif
 
 // Function declarations
