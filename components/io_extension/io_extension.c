@@ -48,7 +48,6 @@ esp_err_t IO_EXTENSION_IO_Mode(uint8_t pin)
  */
 esp_err_t IO_EXTENSION_Init()
 {
-
     if (IO_EXTENSION.addr != NULL) {
         return ESP_OK;
     }
@@ -66,24 +65,7 @@ esp_err_t IO_EXTENSION_Init()
         return ret;
     }
 
-    ret = IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
-
-    if (IO_EXTENSION.addr == NULL) {
-        // Set the I2C slave address for the IO_EXTENSION device only once
-        esp_err_t ret = DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to set I2C address: %s", esp_err_to_name(ret));
-            return ret;
-        }
-    }
-
-    if (IO_EXTENSION.addr == NULL) {
-        ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t ret = IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
-
+    ret = IO_EXTENSION_IO_Mode(0xFF); // Set all pins to output mode
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set IO mode: %s", esp_err_to_name(ret));
         IO_EXTENSION.addr = NULL;
