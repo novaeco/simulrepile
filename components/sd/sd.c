@@ -514,6 +514,15 @@ esp_err_t sd_mmc_init() {
         host.max_freq_khz = init_freq_khz;
         host.do_transaction = sd_spi_do_transaction;
 
+        esp_err_t clk_preset_ret = sdspi_host_set_card_clk(sdspi_device, init_freq_khz);
+        if (clk_preset_ret != ESP_OK) {
+            ESP_LOGE(SD_TAG, "Failed to configure SD SPI probing clock (%s)", esp_err_to_name(clk_preset_ret));
+            sd_spi_teardown_filesystem();
+            sd_spi_detach_device();
+            ret = clk_preset_ret;
+            continue;
+        }
+
         card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
         if (card == NULL) {
             ESP_LOGE(SD_TAG, "Failed to allocate sdmmc_card_t structure");
