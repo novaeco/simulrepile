@@ -18,6 +18,7 @@
 #include <stdio.h>
 
 #include "esp_log.h"
+#include "esp_check.h"
 #include "sd.h"  // Include header file for SD card functions
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
@@ -31,7 +32,7 @@ static sdspi_dev_handle_t sdspi_device = -1;
 static bool spi_bus_initialized = false;
 static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
-static char sdcard_drive_path[3] = {0};
+static char sdcard_drive_path[8] = {0};
 static bool io_extension_ready = false;
 static bool io_extension_init_error_logged = false;
 static bool io_extension_drive_error_logged = false;
@@ -184,8 +185,10 @@ static esp_err_t sd_spi_prepare_filesystem(const esp_vfs_fat_mount_config_t *mou
         return (ret == ESP_OK) ? ESP_ERR_NO_MEM : ret;
     }
 
+    size_t written = snprintf(sdcard_drive_path, sizeof(sdcard_drive_path), "%u:", (unsigned)pdrv);
+    ESP_RETURN_ON_FALSE(written < sizeof(sdcard_drive_path), ESP_ERR_INVALID_SIZE, SD_TAG,
+                        "Drive path buffer too small for drive %u", (unsigned)pdrv);
     sdcard_drive_num = pdrv;
-    snprintf(sdcard_drive_path, sizeof(sdcard_drive_path), "%u:", (unsigned)pdrv);
 
     ff_diskio_register_sdmmc(sdcard_drive_num, card);
     ff_sdmmc_set_disk_status_check(sdcard_drive_num, mount_config->disk_status_check_enable);
