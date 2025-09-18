@@ -90,6 +90,7 @@ static esp_err_t sd_configure_direct_cs(void)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&cfg), TAG, "gpio_config CS");
     ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "gpio high");
+    ESP_LOGI(TAG, "Direct SD CS fallback active on GPIO%d", STORAGE_SD_GPIO_CS);
     s_direct_cs_configured = true;
     return ESP_OK;
 }
