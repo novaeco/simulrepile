@@ -48,11 +48,19 @@ esp_err_t IO_EXTENSION_IO_Mode(uint8_t pin)
  */
 esp_err_t IO_EXTENSION_Init()
 {
-    // Set the I2C slave address for the IO_EXTENSION device
-    esp_err_t ret = DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set I2C address: %s", esp_err_to_name(ret));
-        return ret;
+    DEV_I2C_Port port = DEV_I2C_Init();
+    if (port.bus == NULL) {
+        ESP_LOGE(TAG, "I2C master bus not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (IO_EXTENSION.addr == NULL) {
+        // Set the I2C slave address for the IO_EXTENSION device only once
+        esp_err_t ret = DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set I2C address: %s", esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     if (IO_EXTENSION.addr == NULL) {
@@ -60,7 +68,7 @@ esp_err_t IO_EXTENSION_Init()
         return ESP_ERR_INVALID_STATE;
     }
 
-    ret = IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
+    esp_err_t ret = IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set IO mode: %s", esp_err_to_name(ret));
         return ret;
