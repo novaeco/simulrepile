@@ -48,27 +48,41 @@ esp_err_t IO_EXTENSION_IO_Mode(uint8_t pin)
  */
 esp_err_t IO_EXTENSION_Init()
 {
-    // Set the I2C slave address for the IO_EXTENSION device
+    if (IO_EXTENSION.addr != NULL) {
+        return ESP_OK;
+    }
+
+    DEV_I2C_Port port = DEV_I2C_Init();
+    if (port.bus == NULL) {
+        ESP_LOGE(TAG, "I2C master bus not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     esp_err_t ret = DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set I2C address: %s", esp_err_to_name(ret));
+        IO_EXTENSION.addr = NULL;
         return ret;
-    }
-
-    if (IO_EXTENSION.addr == NULL) {
-        ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
-        return ESP_ERR_INVALID_STATE;
     }
 
     ret = IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set IO mode: %s", esp_err_to_name(ret));
+        IO_EXTENSION.addr = NULL;
         return ret;
     }
 
     // Initialize control flags for IO output enable and open-drain output mode
     IO_EXTENSION.Last_io_value = 0xFF; // All pins are initially set to high (output mode)
     IO_EXTENSION.Last_od_value = 0xFF; // All pins are initially set to high (open-drain mode)
+
+    uint8_t data[2] = {IO_EXTENSION_IO_OUTPUT_ADDR, IO_EXTENSION.Last_io_value};
+    ret = DEV_I2C_Write_Nbyte(IO_EXTENSION.addr, data, sizeof(data));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize IO outputs: %s", esp_err_to_name(ret));
+        IO_EXTENSION.addr = NULL;
+        return ret;
+    }
 
     return ESP_OK;
 }

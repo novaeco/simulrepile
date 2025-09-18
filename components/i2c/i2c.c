@@ -86,6 +86,27 @@ esp_err_t DEV_I2C_Probe(uint8_t addr)
  */
 esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Addr)
 {
+    if (dev_handle == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (*dev_handle != NULL) {
+        return ESP_OK;
+    }
+
+    if (handle.bus == NULL) {
+        DEV_I2C_Port port = DEV_I2C_Init();
+        if (port.bus == NULL) {
+            ESP_LOGE(TAG, "I2C bus not initialized");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    if (Addr > 0x7F) {
+        ESP_LOGE(TAG, "Invalid 7-bit I2C address 0x%02X", Addr);
+        return ESP_ERR_INVALID_ARG;
+    }
+
     // Configure the new device address
     i2c_device_config_t i2c_dev_conf = {
         .scl_speed_hz = EXAMPLE_I2C_MASTER_FREQUENCY,  // I2C frequency
@@ -95,9 +116,16 @@ esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Ad
     // Update the device with the new address and return status
     esp_err_t ret = i2c_master_bus_add_device(handle.bus, &i2c_dev_conf, dev_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2C address modification failed");  // Log error if address modification fails
+        ESP_LOGE(TAG, "Failed to add I2C device 0x%02X: %s", Addr, esp_err_to_name(ret));
+        *dev_handle = NULL;
+        return ret;
     }
-    return ret;
+
+    if (handle.dev == NULL) {
+        handle.dev = *dev_handle;
+    }
+
+    return ESP_OK;
 }
 
 /**
