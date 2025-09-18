@@ -20,6 +20,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_attr.h"
 #include "sd.h"  // Include header file for SD card functions
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
@@ -44,6 +45,8 @@ static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
 static char sdcard_drive_path[8] = {0};
 static bool cs_selftest_success_logged = false;
+static spi_device_handle_t sd_dummy_spi_device = NULL;
+static uint32_t sd_dummy_spi_freq_hz = 0;
 
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
 static bool io_extension_ready = false;
@@ -58,7 +61,8 @@ static esp_err_t sd_spi_drive_cs_level(int level);
 static void sd_spi_assert_cs(spi_transaction_t *trans);
 static void sd_spi_release_cs(spi_transaction_t *trans);
 static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd);
-static esp_err_t sd_spi_send_dummy_clocks(sdspi_dev_handle_t handle);
+static esp_err_t sd_spi_send_dummy_clocks(uint32_t freq_khz);
+static void sd_spi_destroy_dummy_device(void);
 static size_t sd_spi_compute_allocation_unit(size_t sector_size, size_t requested_size);
 static esp_err_t sd_spi_format_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
 static esp_err_t sd_spi_prepare_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
@@ -197,36 +201,6 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
     esp_err_t rel_ret = sd_spi_drive_cs_level(1);
     if (rel_ret != ESP_OK && ret == ESP_OK) {
         ret = rel_ret;
-    }
-
-    return ret;
-}
-
-static esp_err_t sd_spi_send_dummy_clocks(sdspi_dev_handle_t handle) {
-    if (!sdspi_handle_is_valid(handle)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    static const uint8_t dummy_bytes[10] = {
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    };
-
-    spi_transaction_t trans = {
-        .flags = 0,
-        .length = sizeof(dummy_bytes) * 8,
-        .tx_buffer = dummy_bytes,
-        .rx_buffer = NULL,
-    };
-
-    esp_err_t ret = sd_spi_drive_cs_level(1);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    ret = spi_device_polling_transmit((spi_device_handle_t)handle, &trans);
-    if (ret != ESP_OK) {
-        ESP_LOGE(SD_TAG, "Failed to send SPI dummy clocks: %s", esp_err_to_name(ret));
     }
 
     return ret;
@@ -403,6 +377,8 @@ static void sd_spi_detach_device(void) {
         }
     }
 
+    sd_spi_destroy_dummy_device();
+
     esp_err_t deinit_ret = sdspi_host_deinit();
     if (deinit_ret != ESP_OK && deinit_ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(SD_TAG, "sdspi_host_deinit failed: %s", esp_err_to_name(deinit_ret));
@@ -428,6 +404,68 @@ static void sd_spi_configure_bus_pullups(void) {
         if (ret != ESP_OK) {
             ESP_LOGW(SD_TAG, "Failed to enable pull-up on GPIO%d: %s", pin, esp_err_to_name(ret));
         }
+    }
+}
+
+static esp_err_t sd_spi_send_dummy_clocks(uint32_t freq_khz) {
+    uint32_t freq_hz = freq_khz ? freq_khz * 1000U : (SDMMC_FREQ_PROBING * 1000U);
+
+    if (sd_dummy_spi_device == NULL || sd_dummy_spi_freq_hz != freq_hz) {
+        if (sd_dummy_spi_device != NULL) {
+            esp_err_t rem_ret = spi_bus_remove_device(sd_dummy_spi_device);
+            if (rem_ret != ESP_OK) {
+                ESP_LOGW(SD_TAG, "Failed to update dummy SPI device clock (%s)", esp_err_to_name(rem_ret));
+            }
+            sd_dummy_spi_device = NULL;
+            sd_dummy_spi_freq_hz = 0;
+        }
+
+        spi_device_interface_config_t dummy_cfg = {
+            .clock_speed_hz = (int)freq_hz,
+            .mode = 0,
+            .spics_io_num = GPIO_NUM_NC,
+            .queue_size = 1,
+        };
+
+        esp_err_t add_ret = spi_bus_add_device(SD_SPI_HOST, &dummy_cfg, &sd_dummy_spi_device);
+        if (add_ret != ESP_OK) {
+            ESP_LOGE(SD_TAG, "Failed to create dummy SPI device: %s", esp_err_to_name(add_ret));
+            return add_ret;
+        }
+        sd_dummy_spi_freq_hz = freq_hz;
+    }
+
+    static DMA_ATTR uint8_t dummy_bytes[12];
+    memset(dummy_bytes, 0xFF, sizeof(dummy_bytes));
+
+    spi_transaction_t trans = {
+        .length = 10 * 8,
+        .tx_buffer = dummy_bytes,
+        .rx_buffer = dummy_bytes,
+    };
+
+    esp_err_t ret = sd_spi_drive_cs_level(1);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = spi_device_polling_transmit(sd_dummy_spi_device, &trans);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "Failed to send SPI dummy clocks: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static void sd_spi_destroy_dummy_device(void) {
+    if (sd_dummy_spi_device != NULL) {
+        esp_err_t ret = spi_bus_remove_device(sd_dummy_spi_device);
+        if (ret != ESP_OK) {
+            ESP_LOGW(SD_TAG, "Failed to remove dummy SPI device: %s", esp_err_to_name(ret));
+        }
+        sd_dummy_spi_device = NULL;
+        sd_dummy_spi_freq_hz = 0;
     }
 }
 
@@ -563,7 +601,7 @@ esp_err_t sd_mmc_init() {
         }
 
 
-        esp_err_t dummy_ret = sd_spi_send_dummy_clocks(sdspi_device);
+        esp_err_t dummy_ret = sd_spi_send_dummy_clocks(init_freq_khz);
         if (dummy_ret != ESP_OK) {
             ESP_LOGE(SD_TAG, "Failed to generate SD SPI idle clocks (%s)", esp_err_to_name(dummy_ret));
             sd_spi_teardown_filesystem();
