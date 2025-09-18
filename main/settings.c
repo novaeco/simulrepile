@@ -5,6 +5,7 @@
 #include "sleep.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define NVS_NS "cfg"
@@ -61,26 +62,89 @@ static lv_obj_t *create_label(lv_obj_t *parent, const char *txt)
     return label;
 }
 
+static uint8_t digits_required_int_range(int32_t min, int32_t max)
+{
+    if (min > max) {
+        int32_t tmp = min;
+        min = max;
+        max = tmp;
+    }
+
+    long long max_abs = llabs((long long)max);
+    long long min_abs = llabs((long long)min);
+    if (min_abs > max_abs) {
+        max_abs = min_abs;
+    }
+
+    uint8_t digits = 1;
+    while (max_abs >= 10) {
+        max_abs /= 10;
+        ++digits;
+    }
+    return digits;
+}
+
+static uint8_t digits_required_float_range(float min, float max, uint8_t decimal_pos)
+{
+    float floor_min = floorf(fminf(min, max));
+    float ceil_max = ceilf(fmaxf(min, max));
+    uint8_t digits = digits_required_int_range((int32_t)floor_min, (int32_t)ceil_max);
+    digits += decimal_pos;
+
+    uint8_t min_digits = (uint8_t)(decimal_pos + 1U);
+    if (digits < min_digits) {
+        digits = min_digits;
+    }
+
+    return digits;
+}
+
 static lv_obj_t *create_spinbox_int(lv_obj_t *parent, int32_t min, int32_t max, int32_t step, int32_t value)
 {
+    int32_t min_bound = (min < max) ? min : max;
+    int32_t max_bound = (max > min) ? max : min;
+    int32_t clamped_value = value;
+    if (clamped_value < min_bound) {
+        clamped_value = min_bound;
+    } else if (clamped_value > max_bound) {
+        clamped_value = max_bound;
+    }
+
+    if (step <= 0) {
+        step = 1;
+    }
+
     lv_obj_t *sb = lv_spinbox_create(parent);
-    lv_spinbox_set_range(sb, min, max);
+    lv_spinbox_set_range(sb, min_bound, max_bound);
     lv_spinbox_set_step(sb, step);
-    lv_spinbox_set_digit_format(sb, 3, 0);
-    lv_spinbox_set_value(sb, value);
+    lv_spinbox_set_digit_format(sb, digits_required_int_range(min_bound, max_bound), 0);
+    lv_spinbox_set_value(sb, clamped_value);
     return sb;
 }
 
 static lv_obj_t *create_spinbox_1dp(lv_obj_t *parent, float min, float max, float step, float value)
 {
-    lv_obj_t *sb = lv_spinbox_create(parent);
-    int32_t imin = (int32_t)lroundf(min * SPIN_SCALE_1DP);
-    int32_t imax = (int32_t)lroundf(max * SPIN_SCALE_1DP);
+    float range_min = fminf(min, max);
+    float range_max = fmaxf(min, max);
+
+    int32_t imin = (int32_t)lroundf(range_min * SPIN_SCALE_1DP);
+    int32_t imax = (int32_t)lroundf(range_max * SPIN_SCALE_1DP);
     int32_t istep = (int32_t)lroundf(step * SPIN_SCALE_1DP);
+    if (istep <= 0) {
+        istep = 1;
+    }
+
     int32_t ivalue = (int32_t)lroundf(value * SPIN_SCALE_1DP);
+    if (ivalue < imin) {
+        ivalue = imin;
+    } else if (ivalue > imax) {
+        ivalue = imax;
+    }
+
+    lv_obj_t *sb = lv_spinbox_create(parent);
     lv_spinbox_set_range(sb, imin, imax);
     lv_spinbox_set_step(sb, istep);
-    lv_spinbox_set_digit_format(sb, 4, 1);
+    lv_spinbox_set_digit_format(sb, digits_required_float_range(range_min, range_max, 1), 1);
     lv_spinbox_set_value(sb, ivalue);
     return sb;
 }
