@@ -90,6 +90,7 @@ esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Ad
         return ESP_ERR_INVALID_ARG;
     }
 
+
     if (*dev_handle != NULL) {
         return ESP_OK;
     }
@@ -105,6 +106,7 @@ esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Ad
     if (Addr > 0x7F) {
         ESP_LOGE(TAG, "Invalid 7-bit I2C address 0x%02X", Addr);
         return ESP_ERR_INVALID_ARG;
+
     }
 
     // Configure the new device address
