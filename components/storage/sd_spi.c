@@ -1,5 +1,7 @@
 #include "sd.h"
 
+#include <inttypes.h>
+
 #include "sdkconfig.h"
 #include "ch422g.h"
 #include "driver/gpio.h"
@@ -10,6 +12,8 @@
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "esp_vfs_fat.h"
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
 
 #define TAG "sd"
 
@@ -172,6 +176,8 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS release");
 #endif
 
+    int64_t start_us = esp_timer_get_time();
+    (void)esp_task_wdt_reset();
     esp_err_t err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_cfg, &mount_cfg, &s_card);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_vfs_fat_sdspi_mount failed: %s", esp_err_to_name(err));
@@ -182,6 +188,10 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     }
 
     sdmmc_card_print_info(stdout, s_card);
+
+    int64_t elapsed_ms = (esp_timer_get_time() - start_us) / 1000;
+    ESP_LOGI(TAG, "Carte SD montée en %" PRIi64 " ms", elapsed_ms);
+    (void)esp_task_wdt_reset();
 
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
     gpio_set_level(STORAGE_SD_GPIO_CS, 1);
@@ -250,9 +260,11 @@ esp_err_t sd_spi_cs_selftest(void)
     ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
 #else
     ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "ch422g init");
+    (void)esp_task_wdt_reset();
     ESP_RETURN_ON_ERROR(sd_ch422g_select(), TAG, "CS low");
     esp_rom_delay_us(5);
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS high");
 #endif
+    (void)esp_task_wdt_reset();
     return ESP_OK;
 }

@@ -40,12 +40,18 @@
 #include "sdkconfig.h"
 
 #include <errno.h>
+#include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_timer.h"
+#include "esp_idf_version.h"
+#include "esp_bit_defs.h"
 
 static const char *TAG = "main"; // Tag for logging
+
+#define STARTUP_WDT_TIMEOUT_MS 15000U
 
 static lv_timer_t *sleep_timer; // Inactivity timer handle
 static bool sleep_enabled;      // Runtime sleep state
@@ -59,6 +65,136 @@ lv_obj_t *menu_screen;
 static sdmmc_card_t *s_sd_card = NULL;
 static bool s_sd_cs_ready = false;
 static esp_err_t s_sd_cs_last_err = ESP_OK;
+static char s_boot_error_msg[160];
+static bool s_boot_error_pending = false;
+
+#ifdef CONFIG_ESP_TASK_WDT_EN
+static bool s_boot_wdt_registered = false;
+#endif
+
+static int64_t s_boot_time_origin = 0;
+
+static void set_boot_error_message(const char *fmt, ...) {
+  if (!fmt)
+    return;
+
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(s_boot_error_msg, sizeof(s_boot_error_msg), fmt, args);
+  va_end(args);
+  s_boot_error_pending = true;
+}
+
+static inline void boot_trace_event(const char *phase) {
+  if (!phase)
+    return;
+
+  int64_t now = esp_timer_get_time();
+  if (s_boot_time_origin == 0) {
+    s_boot_time_origin = now;
+  }
+  uint32_t delta_ms = (uint32_t)((now - s_boot_time_origin) / 1000);
+  ESP_LOGI(TAG, "[BOOT][%05" PRIu32 " ms] %s", delta_ms, phase);
+#ifdef CONFIG_ESP_TASK_WDT_EN
+  if (s_boot_wdt_registered) {
+    esp_err_t wdt_ret = esp_task_wdt_reset();
+    if (wdt_ret != ESP_OK) {
+      ESP_LOGW(TAG, "esp_task_wdt_reset: %s", esp_err_to_name(wdt_ret));
+    }
+  }
+#endif
+}
+
+#ifdef CONFIG_ESP_TASK_WDT_EN
+static void configure_startup_wdt(void) {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+  const esp_task_wdt_config_t cfg = {
+      .timeout_ms = STARTUP_WDT_TIMEOUT_MS,
+#if CONFIG_FREERTOS_UNICORE
+      .idle_core_mask = BIT(0),
+#else
+      .idle_core_mask = BIT(0) | BIT(1),
+#endif
+      .trigger_panic = false,
+  };
+  esp_err_t cfg_ret = esp_task_wdt_reconfigure(&cfg);
+  if (cfg_ret == ESP_ERR_INVALID_STATE) {
+    cfg_ret = esp_task_wdt_init(&cfg);
+  }
+  if (cfg_ret != ESP_OK && cfg_ret != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "Configuration TWDT boot impossible: %s", esp_err_to_name(cfg_ret));
+  }
+#else
+  esp_err_t cfg_ret = esp_task_wdt_init(STARTUP_WDT_TIMEOUT_MS / 1000, false);
+  if (cfg_ret != ESP_OK && cfg_ret != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "Configuration TWDT boot impossible: %s", esp_err_to_name(cfg_ret));
+  }
+#endif
+
+  esp_err_t add_ret = esp_task_wdt_add(NULL);
+  if (add_ret == ESP_OK) {
+    s_boot_wdt_registered = true;
+  } else if (add_ret == ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "esp_task_wdt_add: TWDT inactif");
+  } else if (add_ret != ESP_OK) {
+    ESP_LOGW(TAG, "esp_task_wdt_add: %s", esp_err_to_name(add_ret));
+  }
+}
+
+static void restore_runtime_wdt(void) {
+  if (s_boot_wdt_registered) {
+    esp_err_t reset_ret = esp_task_wdt_reset();
+    if (reset_ret != ESP_OK) {
+      ESP_LOGW(TAG, "esp_task_wdt_reset finale: %s", esp_err_to_name(reset_ret));
+    }
+  }
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+  uint32_t runtime_timeout_ms = CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000U;
+  if (runtime_timeout_ms == 0) {
+    runtime_timeout_ms = 5000U;
+  }
+  const esp_task_wdt_config_t cfg = {
+      .timeout_ms = runtime_timeout_ms,
+#if CONFIG_FREERTOS_UNICORE
+      .idle_core_mask = BIT(0),
+#else
+      .idle_core_mask = BIT(0) | BIT(1),
+#endif
+      .trigger_panic = false,
+  };
+  esp_err_t cfg_ret = esp_task_wdt_reconfigure(&cfg);
+  if (cfg_ret != ESP_OK) {
+    ESP_LOGW(TAG, "Restauration TWDT runtime impossible: %s", esp_err_to_name(cfg_ret));
+  }
+#endif
+
+  if (s_boot_wdt_registered) {
+    esp_err_t del_ret = esp_task_wdt_delete(NULL);
+    if (del_ret != ESP_OK && del_ret != ESP_ERR_NOT_FOUND) {
+      ESP_LOGW(TAG, "esp_task_wdt_delete: %s", esp_err_to_name(del_ret));
+    }
+    if (del_ret == ESP_OK || del_ret == ESP_ERR_NOT_FOUND) {
+      s_boot_wdt_registered = false;
+    }
+  }
+}
+#else
+static inline void configure_startup_wdt(void) {}
+static inline void restore_runtime_wdt(void) {}
+#endif
+
+static void halt_with_error(void) {
+  restore_runtime_wdt();
+  while (true) {
+#ifdef CONFIG_ESP_TASK_WDT_EN
+    if (s_boot_wdt_registered) {
+      esp_task_wdt_reset();
+    }
+#endif
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
 
 enum {
   APP_MODE_MENU = 0,
@@ -104,6 +240,9 @@ static void sd_cs_selftest(void) {
 
   ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s",
            esp_err_to_name(s_sd_cs_last_err));
+  set_boot_error_message(
+      "Autotest CS SD échoué (%s)\nVérifier CH422G / câblage CS",
+      esp_err_to_name(s_sd_cs_last_err));
   if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
     ESP_LOGE(TAG,
              "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
@@ -259,7 +398,6 @@ static void wait_for_sd_card(void) {
   esp_err_t err;
   int attempts = 0;
   const int max_attempts = 10;
-  bool wdt_registered = false;
 
   if (sd_is_mounted()) {
     return;
@@ -270,33 +408,20 @@ static void wait_for_sd_card(void) {
              "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
              "CH422G ou activez le fallback GPIO dans menuconfig.",
              esp_err_to_name(s_sd_cs_last_err));
-    show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
+    set_boot_error_message("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
     return;
   }
 
-  esp_err_t wdt_ret = esp_task_wdt_add(NULL);
-  if (wdt_ret == ESP_OK) {
-    wdt_registered = true;
-  } else {
-    ESP_LOGW(TAG, "Impossible d'enregistrer le WDT tâche: %s",
-             esp_err_to_name(wdt_ret));
-  }
-
   while (true) {
-    if (wdt_registered) {
+#ifdef CONFIG_ESP_TASK_WDT_EN
+    if (s_boot_wdt_registered) {
       esp_task_wdt_reset();
     }
+#endif
     err = sd_mount(&s_sd_card);
     if (err == ESP_OK) {
       hide_error_screen();
       sd_write_selftest();
-      if (wdt_registered) {
-        esp_err_t del_ret = esp_task_wdt_delete(NULL);
-        if (del_ret != ESP_OK) {
-          ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
-                   esp_err_to_name(del_ret));
-        }
-      }
       return;
     }
 
@@ -307,14 +432,6 @@ static void wait_for_sd_card(void) {
     if (++attempts >= max_attempts) {
       show_error_screen("Carte SD absente - redémarrage");
       vTaskDelay(pdMS_TO_TICKS(2000));
-      if (wdt_registered) {
-        esp_err_t del_ret = esp_task_wdt_delete(NULL);
-        if (del_ret != ESP_OK) {
-          ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
-                   esp_err_to_name(del_ret));
-        }
-        wdt_registered = false;
-      }
       esp_restart();
       return;
     }
@@ -415,10 +532,13 @@ cleanup:
 
 // Main application function
 void app_main() {
+  configure_startup_wdt();
+  boot_trace_event("Séquence d'initialisation démarrée");
+
   esp_reset_reason_t rr = esp_reset_reason();
   ESP_LOGI(TAG, "Reset reason: %d", rr);
 
-  // Initialize NVS flash storage with error handling for page issues
+  ESP_LOGI(TAG, "Initialisation NVS flash");
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
       ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -426,15 +546,19 @@ void app_main() {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  boot_trace_event("NVS initialisée");
 
-  // Load persisted application settings
+  ESP_LOGI(TAG, "Chargement des paramètres persistants");
   settings_init();
+  boot_trace_event("Paramètres chargés");
 
-  // Initialize SD card at boot for early log availability
+  ESP_LOGI(TAG, "Autotest ligne CS SD");
   sd_cs_selftest();
+  boot_trace_event("Autotest CS SD terminé");
   if (s_sd_cs_ready) {
     esp_err_t sd_ret = sd_mount(&s_sd_card);
     if (sd_ret == ESP_OK) {
+      boot_trace_event("Carte SD montée (boot)");
       sd_write_selftest();
     } else {
       ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
@@ -446,28 +570,35 @@ void app_main() {
              esp_err_to_name(s_sd_cs_last_err));
   }
 
-  // Initialize the GT911 touch screen controller
+  ESP_LOGI(TAG, "Initialisation contrôleur tactile GT911");
+  bool touch_ready = true;
   esp_err_t tp_ret = touch_gt911_init(&tp_handle);
   if (tp_ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to initialize GT911 touch controller: %s",
-             esp_err_to_name(tp_ret));
-    return;
+    touch_ready = false;
+    ESP_LOGE(TAG, "GT911 injoignable: %s", esp_err_to_name(tp_ret));
+    set_boot_error_message("Contrôleur tactile GT911 indisponible\n"
+                           "Vérifier câblage SDA/SCL/INT/RST");
   }
+  boot_trace_event(touch_ready ? "GT911 initialisé" : "GT911 indisponible");
 
-  // Initialize the Waveshare ESP32-S3 RGB LCD hardware
+  ESP_LOGI(TAG, "Initialisation panneau RGB");
   panel_handle = waveshare_esp32_s3_rgb_lcd_init();
+  boot_trace_event("Panneau RGB initialisé");
 
+  ESP_LOGI(TAG, "Initialisation rétroéclairage");
   backlight_init();
+  boot_trace_event("PWM rétroéclairage active");
 
-  /* Configure reptile control outputs */
+  ESP_LOGI(TAG, "Configuration sorties terrarium");
   DEV_GPIO_Mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
   DEV_Digital_Write(SERVO_FEED_PIN, 0);
   DEV_GPIO_Mode(WATER_PUMP_PIN, GPIO_MODE_OUTPUT);
   DEV_Digital_Write(WATER_PUMP_PIN, 0);
   DEV_GPIO_Mode(HEAT_RES_PIN, GPIO_MODE_OUTPUT);
   DEV_Digital_Write(HEAT_RES_PIN, 0);
+  boot_trace_event("Sorties terrarium initialisées");
 
-  // Initialize CAN bus (125 kbps)
+  ESP_LOGI(TAG, "Initialisation bus CAN");
   const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_125KBITS();
   const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   const twai_general_config_t g_config =
@@ -475,18 +606,38 @@ void app_main() {
   if (can_init(t_config, f_config, g_config) != ESP_OK) {
     ESP_LOGW(TAG, "CAN indisponible – fonctionnalité désactivée");
   }
+  boot_trace_event("Bus CAN configuré");
 
-  // Initialize LVGL with the panel and touch handles
-  ESP_ERROR_CHECK(lvgl_port_init(panel_handle, tp_handle));
+  ESP_LOGI(TAG, "Initialisation LVGL");
+  esp_err_t lvgl_ret = lvgl_port_init(panel_handle, touch_ready ? tp_handle : NULL);
+  if (lvgl_ret != ESP_OK) {
+    ESP_LOGE(TAG, "LVGL init failed: %s", esp_err_to_name(lvgl_ret));
+    set_boot_error_message("Initialisation LVGL échouée (%s)",
+                           esp_err_to_name(lvgl_ret));
+    if (s_boot_error_pending) {
+      show_error_screen(s_boot_error_msg);
+    }
+    halt_with_error();
+    return;
+  }
+  boot_trace_event("LVGL initialisé");
 
-  // Initialize SD card (retry until available)
+  if (s_boot_error_pending) {
+    show_error_screen(s_boot_error_msg);
+  }
+
+  if (!touch_ready) {
+    halt_with_error();
+    return;
+  }
+
+  boot_trace_event("Attente carte SD");
   wait_for_sd_card();
+  boot_trace_event(sd_is_mounted() ? "Carte SD prête" : "Carte SD indisponible");
 
   ESP_LOGI(TAG, "Display LVGL demos");
 
-  // Lock the mutex because LVGL APIs are not thread-safe
   if (lvgl_port_lock(-1)) {
-    // Create main menu screen
     menu_screen = lv_obj_create(NULL);
 
     lv_obj_t *btn_game = lv_btn_create(menu_screen);
@@ -502,7 +653,7 @@ void app_main() {
     lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_event_cb(btn_real, menu_btn_real_cb, LV_EVENT_CLICKED, NULL);
     label = lv_label_create(btn_real);
-    lv_label_set_text(label, "Mode R\u00e9el");
+    lv_label_set_text(label, "Mode Réel");
     lv_obj_center(label);
 
     lv_obj_t *btn_settings = lv_btn_create(menu_screen);
@@ -511,7 +662,7 @@ void app_main() {
     lv_obj_add_event_cb(btn_settings, menu_btn_settings_cb, LV_EVENT_CLICKED,
                         NULL);
     label = lv_label_create(btn_settings);
-    lv_label_set_text(label, "Param\u00e8tres");
+    lv_label_set_text(label, "Paramètres");
     lv_obj_center(label);
 
     uint8_t last_mode = APP_MODE_MENU_OVERRIDE;
@@ -543,10 +694,10 @@ void app_main() {
         last_mode_text = "Mode Jeu";
         break;
       case APP_MODE_REAL:
-        last_mode_text = "Mode R\u00e9el";
+        last_mode_text = "Mode Réel";
         break;
       case APP_MODE_SETTINGS:
-        last_mode_text = "Param\u00e8tres";
+        last_mode_text = "Paramètres";
         break;
       default:
         last_mode_text = "Menu";
@@ -557,8 +708,8 @@ void app_main() {
       lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
       lv_obj_set_width(hint_label, 300);
       lv_label_set_text_fmt(hint_label,
-                            "Dernier mode s\u00e9lectionn\u00e9 : %s\n"
-                            "(maintenir le bouton physique au d\u00e9marrage pour relancer)",
+                            "Dernier mode sélectionné : %s\n"
+                            "(maintenir le bouton physique au démarrage pour relancer)",
                             last_mode_text);
       lv_obj_align(hint_label, LV_ALIGN_CENTER, 0, 140);
     }
@@ -566,7 +717,7 @@ void app_main() {
     lv_scr_load(menu_screen);
 
     if (quick_start_requested && has_persisted_mode) {
-      ESP_LOGI(TAG, "D\u00e9marrage rapide demand\u00e9");
+      ESP_LOGI(TAG, "Démarrage rapide demandé");
       switch (last_mode) {
       case APP_MODE_GAME:
         start_game_mode();
@@ -585,9 +736,13 @@ void app_main() {
       }
     } else if (quick_start_requested && !has_persisted_mode) {
       ESP_LOGW(TAG,
-               "Bouton de d\u00e9marrage rapide actif mais aucun mode persistant valide");
+               "Bouton de démarrage rapide actif mais aucun mode persistant valide");
     }
 
     lvgl_port_unlock();
   }
+
+  boot_trace_event("Interface LVGL prête");
+  restore_runtime_wdt();
 }
+

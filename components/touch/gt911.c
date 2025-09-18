@@ -6,12 +6,15 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
 
 #include "i2c.h"
 #include "gpio.h"
@@ -375,17 +378,29 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
     *out_handle = NULL;
     s_tp_handle = NULL;
 
+    int64_t start_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "Démarrage initialisation GT911");
+
     esp_lcd_panel_io_handle_t tp_io_handle = NULL;  // Declare a handle for touch panel I/O
     // Configure the I2C communication settings for the GT911 touch controller
     const esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
 
     // Reset the touch screen before usage
     DEV_I2C_Port port = DEV_I2C_Init();  // Initialize I2C port
+    if (port.bus == NULL) {
+        ESP_LOGE(TAG, "Bus I2C non initialisé pour GT911");
+        return ESP_ERR_INVALID_STATE;
+    }
+    (void)esp_task_wdt_reset();
     esp_err_t ret = IO_EXTENSION_Init();  // Initialize the IO EXTENSION GPIO chip for backlight control
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "IO extension init failed: %s", esp_err_to_name(ret));
+        if (ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGE(TAG, "IO_EXTENSION timeout: vérifier SDA/SCL et alimentation 3V3");
+        }
         return ret;
     }
+    (void)esp_task_wdt_reset();
     DEV_GPIO_Mode(EXAMPLE_PIN_NUM_TOUCH_INT, GPIO_MODE_INPUT_OUTPUT);  // Set GPIO pin mode for interrupt
     ret = IO_EXTENSION_Output(IO_EXTENSION_IO_1, 0);  // Set GPIO for backlight control to low (off)
     if (ret != ESP_OK) {
@@ -393,9 +408,12 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
         return ret;
     }
 
+    (void)esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(100));  // Wait for 100ms
+    (void)esp_task_wdt_reset();
     DEV_Digital_Write(EXAMPLE_PIN_NUM_TOUCH_INT, 0);  // Set interrupt pin low (disable interrupt)
 
+    (void)esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(100));  // Wait for another 100ms
     ret = IO_EXTENSION_Output(IO_EXTENSION_IO_1, 1);  // Set GPIO for backlight control to high (on)
     if (ret != ESP_OK) {
@@ -403,13 +421,18 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
         return ret;
     }
 
+    (void)esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(200));  // Wait for 200ms to ensure the touch controller is ready
+    (void)esp_task_wdt_reset();
 
     ESP_LOGI(TAG, "Initialize I2C panel IO");  // Log I2C panel I/O initialization
     // Create a new I2C panel I/O handle for the touch controller
     ret = esp_lcd_new_panel_io_i2c(port.bus, &tp_io_config, &tp_io_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "I2C panel IO init failed: %s", esp_err_to_name(ret));
+        if (ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGE(TAG, "GT911 I2C panel IO timeout: vérifier INT/RST et pull-ups");
+        }
         return ret;
     }
 
@@ -438,6 +461,9 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
         return ret;
     }
 
+    int64_t elapsed_ms = (esp_timer_get_time() - start_us) / 1000;
+    ESP_LOGI(TAG, "GT911 initialisé en %" PRIi64 " ms", elapsed_ms);
+    (void)esp_task_wdt_reset();
     *out_handle = s_tp_handle;
     return ESP_OK;
 }

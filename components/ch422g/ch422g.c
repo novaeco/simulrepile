@@ -1,7 +1,11 @@
 #include "ch422g.h"
 
+#include <inttypes.h>
+
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "i2c.h"
 
 #define TAG "ch422g"
@@ -29,9 +33,13 @@ static esp_err_t ch422g_detect_address(uint8_t *out_addr)
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
     ESP_RETURN_ON_FALSE(out_addr != NULL, ESP_ERR_INVALID_ARG, TAG, "missing output buffer");
 
+    int64_t start_us = esp_timer_get_time();
+    (void)esp_task_wdt_reset();
     esp_err_t ret = i2c_master_probe(port.bus, CH422G_DEFAULT_ADDR, 100);
     if (ret == ESP_OK) {
         *out_addr = CH422G_DEFAULT_ADDR;
+        int64_t elapsed_ms = (esp_timer_get_time() - start_us) / 1000;
+        ESP_LOGI(TAG, "CH422G détecté à l'adresse par défaut en %" PRIi64 " ms", elapsed_ms);
         return ESP_OK;
     }
 
@@ -48,10 +56,13 @@ static esp_err_t ch422g_detect_address(uint8_t *out_addr)
             continue;
         }
 
+        (void)esp_task_wdt_reset();
         last_ret = i2c_master_probe(port.bus, addr, 100);
         if (last_ret == ESP_OK) {
             ESP_LOGW(TAG, "CH422G acknowledged at alternative address 0x%02X", addr);
             *out_addr = addr;
+            int64_t elapsed_ms = (esp_timer_get_time() - start_us) / 1000;
+            ESP_LOGI(TAG, "CH422G détecté à l'adresse 0x%02X en %" PRIi64 " ms", addr, elapsed_ms);
             return ESP_OK;
         }
     }
@@ -64,6 +75,7 @@ static esp_err_t ch422g_detect_address(uint8_t *out_addr)
     ESP_LOGE(TAG,
              "CH422G remains unreachable: %s. Verify wiring or configure the SD CS GPIO fallback.",
              esp_err_to_name(ret));
+    (void)esp_task_wdt_reset();
     return ret;
 #endif
 }
@@ -77,11 +89,14 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
+    int64_t start_us = esp_timer_get_time();
+    (void)esp_task_wdt_reset();
     esp_err_t ret = ch422g_detect_address(&s_addr);
     if (ret != ESP_OK) {
         return ret;
     }
 
+    (void)esp_task_wdt_reset();
     ret = DEV_I2C_Set_Slave_Addr(&s_dev, s_addr);
     ESP_RETURN_ON_ERROR(ret, TAG, "attach CH422G");
 
@@ -90,11 +105,14 @@ esp_err_t ch422g_init(void)
     s_shadow = 0xFFu;
     ret = ch422g_write_shadow();
     if (ret == ESP_OK) {
+        int64_t elapsed_ms = (esp_timer_get_time() - start_us) / 1000;
         ESP_LOGI(TAG, "CH422G ready on 0x%02X", s_addr);
+        ESP_LOGD(TAG, "Initialisation CH422G en %" PRIi64 " ms", elapsed_ms);
     } else {
         ESP_LOGE(TAG, "Failed to initialise CH422G outputs: %s", esp_err_to_name(ret));
     }
 
+    (void)esp_task_wdt_reset();
     return ret;
 }
 
