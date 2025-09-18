@@ -12,7 +12,7 @@ idf_component_register(
         reptile_logic
         env_control
         config
-        sd
+        storage
         logging
         can
         gpio
