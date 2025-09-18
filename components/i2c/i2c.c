@@ -33,6 +33,10 @@ DEV_I2C_Port DEV_I2C_Init()
         return handle;
     }
 
+    // Ensure the internal pull-ups are enabled in addition to the external ones
+    gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SDA, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SCL, GPIO_PULLUP_ONLY);
+
     // Define I2C bus configuration parameters
     i2c_master_bus_config_t i2c_bus_config = {
         .clk_source = I2C_CLK_SRC_DEFAULT,       // Default clock source for I2C

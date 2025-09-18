@@ -24,8 +24,8 @@
 #define EXAMPLE_I2C_MASTER_SDA GPIO_NUM_8  // SDA pin
 #define EXAMPLE_I2C_MASTER_SCL GPIO_NUM_9  // SCL pin
 
-// Define the I2C frequency (400 kHz)
-#define EXAMPLE_I2C_MASTER_FREQUENCY (400 * 1000)  // I2C speed
+// Define the I2C frequency (reduced to 200 kHz for improved signal integrity)
+#define EXAMPLE_I2C_MASTER_FREQUENCY (200 * 1000)  // I2C speed
 
 // Define the I2C master port number (I2C_NUM_0 in this case)
 #define EXAMPLE_I2C_MASTER_NUM I2C_NUM_0
