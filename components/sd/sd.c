@@ -13,6 +13,7 @@
  ******************************************************************************/
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -30,7 +31,7 @@
 
 // Global variable for SD card structure
 static sdmmc_card_t *card;
-static sdspi_dev_handle_t sdspi_device = -1;
+static sdspi_dev_handle_t sdspi_device = NULL;
 static bool spi_bus_initialized = false;
 static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
@@ -50,6 +51,7 @@ static esp_err_t sd_spi_drive_cs_level(int level);
 static void sd_spi_assert_cs(spi_transaction_t *trans);
 static void sd_spi_release_cs(spi_transaction_t *trans);
 static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd);
+static esp_err_t sd_spi_send_dummy_clocks(sdspi_dev_handle_t handle);
 static size_t sd_spi_compute_allocation_unit(size_t sector_size, size_t requested_size);
 static esp_err_t sd_spi_format_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
 static esp_err_t sd_spi_prepare_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
@@ -162,8 +164,8 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    sdspi_dev_handle_t handle = (sdspi_dev_handle_t)slot;
-    if (handle < 0) {
+    sdspi_dev_handle_t handle = (sdspi_dev_handle_t)(intptr_t)slot;
+    if (handle == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -188,6 +190,36 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
     esp_err_t rel_ret = sd_spi_drive_cs_level(1);
     if (rel_ret != ESP_OK && ret == ESP_OK) {
         ret = rel_ret;
+    }
+
+    return ret;
+}
+
+static esp_err_t sd_spi_send_dummy_clocks(sdspi_dev_handle_t handle) {
+    if (handle == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    static const uint8_t dummy_bytes[10] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    };
+
+    spi_transaction_t trans = {
+        .flags = 0,
+        .length = sizeof(dummy_bytes) * 8,
+        .tx_buffer = dummy_bytes,
+        .rx_buffer = NULL,
+    };
+
+    esp_err_t ret = sd_spi_drive_cs_level(1);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = spi_device_polling_transmit((spi_device_handle_t)handle, &trans);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "Failed to send SPI dummy clocks: %s", esp_err_to_name(ret));
     }
 
     return ret;
@@ -355,9 +387,9 @@ static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle) {
 }
 
 static void sd_spi_detach_device(void) {
-    if (sdspi_device >= 0) {
+    if (sdspi_device != NULL) {
         sdspi_dev_handle_t handle = sdspi_device;
-        sdspi_device = -1;
+        sdspi_device = NULL;
         esp_err_t ret = sdspi_host_remove_device(handle);
         if (ret != ESP_OK) {
             ESP_LOGW(SD_TAG, "sdspi_host_remove_device failed: %s", esp_err_to_name(ret));
@@ -444,7 +476,7 @@ esp_err_t sd_mmc_init() {
         return ret;
     }
 
-    sdspi_device = -1;
+    sdspi_device = NULL;
     ret = ESP_FAIL;
     const int max_attempts = 3;
 
@@ -500,17 +532,17 @@ esp_err_t sd_mmc_init() {
             break;
         }
 
-        sdspi_dev_handle_t device_handle = -1;
+        sdspi_dev_handle_t device_handle = NULL;
         ret = sd_spi_attach_device(&device_handle);
         if (ret != ESP_OK) {
             ESP_LOGE(SD_TAG, "Failed to attach SDSPI device (%s)", esp_err_to_name(ret));
-            sdspi_device = -1;
+            sdspi_device = NULL;
             sd_spi_detach_device();
             continue;
         }
 
         sdspi_device = device_handle;
-        host.slot = sdspi_device;
+        host.slot = (intptr_t)sdspi_device;
         host.max_freq_khz = init_freq_khz;
         host.do_transaction = sd_spi_do_transaction;
 
@@ -523,6 +555,17 @@ esp_err_t sd_mmc_init() {
             continue;
         }
 
+
+        esp_err_t dummy_ret = sd_spi_send_dummy_clocks(sdspi_device);
+        if (dummy_ret != ESP_OK) {
+            ESP_LOGE(SD_TAG, "Failed to generate SD SPI idle clocks (%s)", esp_err_to_name(dummy_ret));
+            sd_spi_teardown_filesystem();
+            sd_spi_detach_device();
+            ret = dummy_ret;
+            continue;
+        }
+
+        esp_rom_delay_us(2000);
         card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
         if (card == NULL) {
             ESP_LOGE(SD_TAG, "Failed to allocate sdmmc_card_t structure");
@@ -586,7 +629,7 @@ esp_err_t sd_mmc_init() {
  * about the SD card to the standard output.
  */
 esp_err_t sd_card_print_info() {
-    if (card == NULL || sdspi_device < 0) {
+    if (card == NULL || sdspi_device == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     sdmmc_card_print_info(stdout, card);
@@ -639,7 +682,7 @@ esp_err_t sd_mmc_unmount() {
  * @retval ESP_FAIL if an error occurs while fetching capacity information.
  */
 esp_err_t read_sd_capacity(size_t *total_capacity, size_t *available_capacity) {
-    if (card == NULL || sdspi_device < 0) {
+    if (card == NULL || sdspi_device == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     FATFS *fs;
