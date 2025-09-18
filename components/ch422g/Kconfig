@@ -9,6 +9,14 @@ config CH422G_I2C_ADDRESS
         Waveshare utilisent 0x20 par défaut (0x40 au format 8 bits). Adaptez
         cette valeur si les broches A0/A1/A2 sont recâblées.
 
+config CH422G_AUTOSCAN_ADDRESSES
+    bool "Scanner automatiquement les adresses alternatives"
+    default y
+    help
+        Lorsque l'adresse configurée ne répond pas, essayer successivement les
+        autres combinaisons A0/A1 (0x20 à 0x27). Cette option rattrape les
+        variantes de câblage sans modifier le binaire.
+
 config CH422G_EXIO_SD_CS
     int "CH422G EXIO line driving the SD CS"
     range 1 8
