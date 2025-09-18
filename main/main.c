@@ -38,6 +38,12 @@
 #include "settings.h"     // Application settings
 #include "game_mode.h"
 
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_timer.h"
+
 static const char *TAG = "main"; // Tag for logging
 
 static lv_timer_t *sleep_timer; // Inactivity timer handle
@@ -48,6 +54,8 @@ static esp_lcd_touch_handle_t tp_handle = NULL;
 static lv_obj_t *error_screen;
 static lv_obj_t *prev_screen;
 lv_obj_t *menu_screen;
+
+static sdmmc_card_t *s_sd_card = NULL;
 
 enum {
   APP_MODE_MENU = 0,
@@ -89,6 +97,29 @@ static void sd_cs_selftest(void) {
     ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s", esp_err_to_name(ret));
     ESP_ERROR_CHECK(ret);
   }
+}
+
+static void sd_write_selftest(void) {
+  const char *path = SD_MOUNT_POINT "/selftest.txt";
+  FILE *f = fopen(path, "w");
+  if (!f) {
+    ESP_LOGE(TAG, "Impossible de créer %s: %s", path, strerror(errno));
+    return;
+  }
+
+  unsigned long now_us = (unsigned long)esp_timer_get_time();
+  if (fprintf(f, "OK %lu\n", now_us) < 0) {
+    ESP_LOGE(TAG, "Écriture selftest échouée: %s", strerror(errno));
+    fclose(f);
+    return;
+  }
+
+  if (fclose(f) != 0) {
+    ESP_LOGE(TAG, "Fermeture selftest.txt échouée: %s", strerror(errno));
+    return;
+  }
+
+  ESP_LOGI(TAG, "SD selftest.txt written");
 }
 
 void sleep_timer_arm(bool arm) {
@@ -204,6 +235,10 @@ static void wait_for_sd_card(void) {
   const int max_attempts = 10;
   bool wdt_registered = false;
 
+  if (sd_is_mounted()) {
+    return;
+  }
+
   esp_err_t wdt_ret = esp_task_wdt_add(NULL);
   if (wdt_ret == ESP_OK) {
     wdt_registered = true;
@@ -216,9 +251,10 @@ static void wait_for_sd_card(void) {
     if (wdt_registered) {
       esp_task_wdt_reset();
     }
-    err = sd_mmc_init();
+    err = sd_mount(&s_sd_card);
     if (err == ESP_OK) {
       hide_error_screen();
+      sd_write_selftest();
       if (wdt_registered) {
         esp_err_t del_ret = esp_task_wdt_delete(NULL);
         if (del_ret != ESP_OK) {
@@ -229,6 +265,7 @@ static void wait_for_sd_card(void) {
       return;
     }
 
+    s_sd_card = NULL;
     ESP_LOGE(TAG, "Carte SD absente ou illisible (%s)", esp_err_to_name(err));
     show_error_screen("Insérer une carte SD valide");
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -301,10 +338,14 @@ static void sleep_timer_cb(lv_timer_t *timer) {
 
   esp_sleep_wakeup_cause_t cause = ESP_SLEEP_WAKEUP_UNDEFINED;
   logging_pause();
-  esp_err_t err = sd_mmc_unmount();
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "D\u00e9montage SD: %s", esp_err_to_name(err));
-    goto cleanup;
+  esp_err_t err = ESP_OK;
+  if (sd_is_mounted()) {
+    err = sd_unmount();
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "D\u00e9montage SD: %s", esp_err_to_name(err));
+      goto cleanup;
+    }
+    s_sd_card = NULL;
   }
   // Use ANY_LOW to ensure compatibility with ESP32-S3 and avoid deprecated
   // ALL_LOW
@@ -356,9 +397,12 @@ void app_main() {
 
   // Initialize SD card at boot for early log availability
   sd_cs_selftest();
-  esp_err_t sd_ret = sd_mmc_init();
-  if (sd_ret != ESP_OK) {
+  esp_err_t sd_ret = sd_mount(&s_sd_card);
+  if (sd_ret == ESP_OK) {
+    sd_write_selftest();
+  } else {
     ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
+    s_sd_card = NULL;
   }
 
   // Initialize the GT911 touch screen controller

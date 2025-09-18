@@ -95,6 +95,21 @@ idf.py build flash monitor
 Cette commande récupère automatiquement les dépendances déclarées dans `idf_component.yml`,
 compile le projet, programme le microcontrôleur puis ouvre le moniteur série.
 
+### Résolution de l'erreur « GetOverlappedResult failed (Access is denied) » sous Windows
+
+Lorsque `idf.py monitor` échoue sur Windows avec l'erreur ci-dessus, appliquer la séquence
+suivante élimine les conflits de port série :
+
+1. Fermer *toutes* les applications susceptibles d'accéder au port COM (ESP Flash Download Tool,
+   PuTTY, terminaux série VS Code, etc.).
+2. Débrancher puis rebrancher le câble USB-C de la Waveshare ESP32-S3, patienter jusqu'à la
+   réapparition du port dans le Gestionnaire de périphériques.
+3. Lancer le moniteur avec la syntaxe complète du port : `idf.py -p \\.\\COMxx monitor`.
+4. En cas de doute, exécuter l'invite PowerShell en administrateur et augmenter la vitesse avec
+   `--monitor-baud 921600`.
+
+Ces étapes garantissent la libération du port avant de relancer le moniteur ESP-IDF.
+
 ## Options de configuration
 - `CONFIG_REPTILE_DEBUG` : désactive la mise en veille automatique au démarrage afin
   de faciliter le débogage. La veille peut ensuite être réactivée ou désactivée à
