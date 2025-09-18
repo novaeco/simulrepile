@@ -40,6 +40,7 @@ static esp_err_t sd_spi_ensure_io_extension(void);
 static void sd_spi_drive_cs_level(int level);
 static void sd_spi_assert_cs(spi_transaction_t *trans);
 static void sd_spi_release_cs(spi_transaction_t *trans);
+static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd);
 static size_t sd_spi_compute_allocation_unit(size_t sector_size, size_t requested_size);
 static esp_err_t sd_spi_format_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
 static esp_err_t sd_spi_prepare_filesystem(const esp_vfs_fat_mount_config_t *mount_config, sdmmc_card_t *card);
@@ -99,6 +100,22 @@ static void sd_spi_assert_cs(spi_transaction_t *trans) {
 static void sd_spi_release_cs(spi_transaction_t *trans) {
     (void)trans;
     sd_spi_drive_cs_level(1);
+}
+
+static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
+    if (cmd == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    sdspi_dev_handle_t handle = (sdspi_dev_handle_t)slot;
+    if (handle < 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    sd_spi_assert_cs(NULL);
+    esp_err_t ret = sdspi_host_do_transaction(handle, cmd);
+    sd_spi_release_cs(NULL);
+    return ret;
 }
 
 static size_t sd_spi_compute_allocation_unit(size_t sector_size, size_t requested_size) {
@@ -248,25 +265,12 @@ static esp_err_t sd_spi_teardown_filesystem(void) {
 static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle) {
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = SD_SPI_HOST;
-    slot_config.gpio_cs = GPIO_NUM_NC;
+    slot_config.gpio_cs = SDSPI_SLOT_NO_CS;
     slot_config.gpio_cd = SDSPI_SLOT_NO_CD;
     slot_config.gpio_wp = SDSPI_SLOT_NO_WP;
     slot_config.gpio_int = SDSPI_SLOT_NO_INT;
 
-    spi_device_interface_config_t spi_cfg = {
-        .command_bits = 0,
-        .address_bits = 0,
-        .dummy_bits = 0,
-        .mode = 0,
-        .clock_speed_hz = SDMMC_FREQ_PROBING * 1000,
-        .spics_io_num = -1,
-        .queue_size = 4,
-        .flags = SPI_DEVICE_HALFDUPLEX,
-        .pre_cb = sd_spi_assert_cs,
-        .post_cb = sd_spi_release_cs,
-    };
-
-    esp_err_t ret = sdspi_host_init_device(&slot_config, &spi_cfg, out_handle);
+    esp_err_t ret = sdspi_host_init_device(&slot_config, out_handle);
     if (ret == ESP_OK) {
         sd_spi_release_cs(NULL);
     }
@@ -275,17 +279,20 @@ static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle) {
 
 static void sd_spi_detach_device(void) {
     if (sdspi_device >= 0) {
-        esp_err_t ret = sdspi_host_remove_device(sdspi_device);
+        sdspi_dev_handle_t handle = sdspi_device;
+        sdspi_device = -1;
+        esp_err_t ret = sdspi_host_remove_device(handle);
         if (ret != ESP_OK) {
             ESP_LOGW(SD_TAG, "sdspi_host_remove_device failed: %s", esp_err_to_name(ret));
         }
-        sdspi_device = -1;
     }
 
     esp_err_t deinit_ret = sdspi_host_deinit();
     if (deinit_ret != ESP_OK && deinit_ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(SD_TAG, "sdspi_host_deinit failed: %s", esp_err_to_name(deinit_ret));
     }
+
+    sd_spi_release_cs(NULL);
 }
 
 /**
@@ -338,6 +345,8 @@ esp_err_t sd_mmc_init() {
         }
     }
 
+    const uint32_t sd_operating_freq_khz = SDMMC_FREQ_DEFAULT;
+
     for (int attempt = 1; attempt <= max_attempts; ++attempt) {
         ESP_LOGI(SD_TAG, "Initializing SD card over SPI (attempt %d/%d)", attempt, max_attempts);
 
@@ -345,6 +354,7 @@ esp_err_t sd_mmc_init() {
 
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         host.slot = SD_SPI_HOST;
+        host.max_freq_khz = sd_operating_freq_khz;
 
         esp_err_t host_ret = host.init();
         if (host_ret != ESP_OK && host_ret != ESP_ERR_INVALID_STATE) {
@@ -364,6 +374,8 @@ esp_err_t sd_mmc_init() {
 
         sdspi_device = device_handle;
         host.slot = sdspi_device;
+        host.max_freq_khz = sd_operating_freq_khz;
+        host.do_transaction = sd_spi_do_transaction;
 
         card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
         if (card == NULL) {
@@ -381,6 +393,17 @@ esp_err_t sd_mmc_init() {
             card = NULL;
             sd_spi_teardown_filesystem();
             sd_spi_detach_device();
+            continue;
+        }
+
+        esp_err_t clk_ret = sdspi_host_set_card_clk(sdspi_device, host.max_freq_khz);
+        if (clk_ret != ESP_OK) {
+            ESP_LOGE(SD_TAG, "Failed to set SD SPI clock (%s)", esp_err_to_name(clk_ret));
+            free(card);
+            card = NULL;
+            sd_spi_teardown_filesystem();
+            sd_spi_detach_device();
+            ret = clk_ret;
             continue;
         }
 
