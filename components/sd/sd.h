@@ -23,8 +23,11 @@
 #include "sdmmc_cmd.h"       // SD card commands
 #include "driver/gpio.h"     // GPIO numbering for SPI pins
 #include "driver/sdspi_host.h" // SDSPI host driver
+#include "sdkconfig.h"
 
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
 #include "io_extension.h"          // IO EXTENSION I2C CAN control header (optional inclusion)
+#endif
 
 #define SD_TAG "sd"          // Log tag for SD card functions
 
@@ -36,7 +39,11 @@
 #define SD_SPI_MOSI GPIO_NUM_11              // MOSI routed to the TF socket
 #define SD_SPI_MISO GPIO_NUM_13              // MISO routed to the TF socket
 #define SD_SPI_CLK  GPIO_NUM_12              // SPI clock routed to the TF socket
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
 #define SD_SPI_CS   IO_EXTENSION_IO_4        // Chip-select routed through the IO extension
+#else
+#define SD_SPI_CS   CONFIG_REPTILE_SD_SPI_DIRECT_CS_GPIO // Direct chip-select GPIO when IO expander is bypassed
+#endif
 
 // Function declarations
 
@@ -77,5 +84,17 @@ esp_err_t sd_card_print_info();
  * @retval ESP_FAIL if an error occurs.
  */
 esp_err_t read_sd_capacity(size_t *total_capacity, size_t *available_capacity);
+
+/**
+ * @brief Perform a low-level self-test of the SD card chip-select line.
+ *
+ * This helper toggles the CS line low/high to ensure that the IO expander or
+ * direct GPIO path is configured correctly before starting the SPI reset
+ * sequence.  It is intended to be called during early boot diagnostics.
+ *
+ * @retval ESP_OK if the CS line can be driven successfully.
+ * @retval Error code propagated from the underlying driver otherwise.
+ */
+esp_err_t sd_spi_cs_selftest(void);
 
 #endif  // __SD_H

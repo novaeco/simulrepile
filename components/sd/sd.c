@@ -35,11 +35,17 @@ static bool spi_bus_initialized = false;
 static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
 static char sdcard_drive_path[8] = {0};
+static bool cs_selftest_success_logged = false;
+
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
 static bool io_extension_ready = false;
 static bool io_extension_init_error_logged = false;
 static bool io_extension_drive_error_logged = false;
+#else
+static bool direct_cs_configured = false;
+#endif
 
-static esp_err_t sd_spi_ensure_io_extension(void);
+static esp_err_t sd_spi_prepare_cs_line(void);
 static esp_err_t sd_spi_drive_cs_level(int level);
 static void sd_spi_assert_cs(spi_transaction_t *trans);
 static void sd_spi_release_cs(spi_transaction_t *trans);
@@ -55,7 +61,8 @@ static void sd_spi_configure_bus_pullups(void);
 // Define the mount point for the SD card
 const char mount_point[] = MOUNT_POINT;
 
-static esp_err_t sd_spi_ensure_io_extension(void) {
+static esp_err_t sd_spi_prepare_cs_line(void) {
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
     if (io_extension_ready) {
         return ESP_OK;
     }
@@ -77,31 +84,57 @@ static esp_err_t sd_spi_ensure_io_extension(void) {
         io_extension_init_error_logged = true;
     }
     return ret;
+#else
+    if (direct_cs_configured) {
+        return ESP_OK;
+    }
+
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << SD_SPI_CS,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    esp_err_t ret = gpio_config(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "Failed to configure direct SD CS GPIO%d: %s", SD_SPI_CS, esp_err_to_name(ret));
+        return ret;
+    }
+
+    gpio_set_level(SD_SPI_CS, 1);
+    direct_cs_configured = true;
+    return ESP_OK;
+#endif
 }
 
 static esp_err_t sd_spi_drive_cs_level(int level) {
-    esp_err_t ret = sd_spi_ensure_io_extension();
+    esp_err_t ret = sd_spi_prepare_cs_line();
     if (ret != ESP_OK) {
         return ret;
     }
 
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
     ret = IO_EXTENSION_Output(SD_SPI_CS, level ? 1 : 0);
     if (ret != ESP_OK) {
+        io_extension_ready = false;
         if (!io_extension_drive_error_logged) {
             ESP_LOGE(SD_TAG, "Failed to drive SD CS line to %d: %s", level, esp_err_to_name(ret));
             io_extension_drive_error_logged = true;
         }
         return ret;
     }
-
     io_extension_drive_error_logged = false;
+#else
+    gpio_set_level(SD_SPI_CS, level ? 1 : 0);
+#endif
 
     /*
-     * The SD card chip-select signal is routed through the external IO expander.
-     * Add a short guard time after updating the register so that the level is
-     * effectively propagated on the TF socket before the SPI transaction
-     * starts. Without this settling delay the first command often sees the CS
-     * edge late, leading to sporadic ESP_ERR_TIMEOUT during card reset.
+     * Add a short guard time after updating the CS level so that the signal is
+     * stable on the TF socket before the SPI transaction starts. Without this
+     * settling delay the first command often sees the CS edge late, leading to
+     * sporadic ESP_ERR_TIMEOUT during card reset.
      */
     esp_rom_delay_us(2);
 
@@ -141,6 +174,16 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
     }
 
     esp_err_t ret = sdspi_host_do_transaction(handle, cmd);
+
+    if (ret == ESP_ERR_INVALID_CRC) {
+        uint32_t r1 = 0;
+        if (cmd->flags & SCF_RSP_R1) {
+            r1 = cmd->response[0];
+        }
+        ESP_LOGW(SD_TAG, "SPI command %d CRC error (R1=0x%02x)", cmd->opcode, (unsigned)(r1 & 0xFF));
+    } else if (ret == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(SD_TAG, "SPI command %d timeout", cmd->opcode);
+    }
 
     esp_err_t rel_ret = sd_spi_drive_cs_level(1);
     if (rel_ret != ESP_OK && ret == ESP_OK) {
@@ -349,6 +392,38 @@ static void sd_spi_configure_bus_pullups(void) {
     }
 }
 
+esp_err_t sd_spi_cs_selftest(void) {
+    esp_err_t ret = sd_spi_prepare_cs_line();
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "CS self-test failed during preparation: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = sd_spi_drive_cs_level(0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "CS self-test unable to drive low: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    esp_rom_delay_us(5);
+
+    ret = sd_spi_drive_cs_level(1);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "CS self-test unable to release high: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    if (!cs_selftest_success_logged) {
+        cs_selftest_success_logged = true;
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
+        ESP_LOGI(SD_TAG, "SD CS verified via IO expander");
+#else
+        ESP_LOGI(SD_TAG, "SD CS verified on GPIO%d (direct wiring)", SD_SPI_CS);
+#endif
+    }
+
+    return ESP_OK;
+}
+
 /**
  * @brief Initialize the SD card and mount the filesystem.
  *
@@ -364,8 +439,13 @@ esp_err_t sd_mmc_init() {
         return ESP_OK;
     }
 
+    esp_err_t ret = sd_spi_cs_selftest();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     sdspi_device = -1;
-    esp_err_t ret = ESP_FAIL;
+    ret = ESP_FAIL;
     const int max_attempts = 3;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
@@ -400,6 +480,7 @@ esp_err_t sd_mmc_init() {
         }
     }
 
+    const uint32_t sd_probe_freq_khz = SDMMC_FREQ_PROBING;
     const uint32_t sd_operating_freq_khz = SDMMC_FREQ_DEFAULT;
 
     for (int attempt = 1; attempt <= max_attempts; ++attempt) {
@@ -409,7 +490,8 @@ esp_err_t sd_mmc_init() {
 
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         host.slot = SD_SPI_HOST;
-        host.max_freq_khz = sd_operating_freq_khz;
+        uint32_t init_freq_khz = (attempt == 1) ? sd_probe_freq_khz : sd_operating_freq_khz;
+        host.max_freq_khz = init_freq_khz;
 
         esp_err_t host_ret = host.init();
         if (host_ret != ESP_OK && host_ret != ESP_ERR_INVALID_STATE) {
@@ -429,7 +511,7 @@ esp_err_t sd_mmc_init() {
 
         sdspi_device = device_handle;
         host.slot = sdspi_device;
-        host.max_freq_khz = sd_operating_freq_khz;
+        host.max_freq_khz = init_freq_khz;
         host.do_transaction = sd_spi_do_transaction;
 
         card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
@@ -451,7 +533,7 @@ esp_err_t sd_mmc_init() {
             continue;
         }
 
-        esp_err_t clk_ret = sdspi_host_set_card_clk(sdspi_device, host.max_freq_khz);
+        esp_err_t clk_ret = sdspi_host_set_card_clk(sdspi_device, sd_operating_freq_khz);
         if (clk_ret != ESP_OK) {
             ESP_LOGE(SD_TAG, "Failed to set SD SPI clock (%s)", esp_err_to_name(clk_ret));
             free(card);
@@ -461,6 +543,8 @@ esp_err_t sd_mmc_init() {
             ret = clk_ret;
             continue;
         }
+
+        host.max_freq_khz = sd_operating_freq_khz;
 
         ret = sd_spi_prepare_filesystem(&mount_config, card);
         if (ret == ESP_OK) {
