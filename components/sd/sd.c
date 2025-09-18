@@ -31,7 +31,14 @@
 
 // Global variable for SD card structure
 static sdmmc_card_t *card;
-static sdspi_dev_handle_t sdspi_device = NULL;
+
+#define SDSPI_DEVICE_HANDLE_INVALID ((sdspi_dev_handle_t)(-1))
+
+static inline bool sdspi_handle_is_valid(sdspi_dev_handle_t handle) {
+    return handle != SDSPI_DEVICE_HANDLE_INVALID;
+}
+
+static sdspi_dev_handle_t sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
 static bool spi_bus_initialized = false;
 static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
@@ -165,7 +172,7 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
     }
 
     sdspi_dev_handle_t handle = (sdspi_dev_handle_t)(intptr_t)slot;
-    if (handle == NULL) {
+    if (!sdspi_handle_is_valid(handle)) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -196,7 +203,7 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
 }
 
 static esp_err_t sd_spi_send_dummy_clocks(sdspi_dev_handle_t handle) {
-    if (handle == NULL) {
+    if (!sdspi_handle_is_valid(handle)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -387,9 +394,9 @@ static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle) {
 }
 
 static void sd_spi_detach_device(void) {
-    if (sdspi_device != NULL) {
+    if (sdspi_handle_is_valid(sdspi_device)) {
         sdspi_dev_handle_t handle = sdspi_device;
-        sdspi_device = NULL;
+        sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
         esp_err_t ret = sdspi_host_remove_device(handle);
         if (ret != ESP_OK) {
             ESP_LOGW(SD_TAG, "sdspi_host_remove_device failed: %s", esp_err_to_name(ret));
@@ -476,7 +483,7 @@ esp_err_t sd_mmc_init() {
         return ret;
     }
 
-    sdspi_device = NULL;
+    sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
     ret = ESP_FAIL;
     const int max_attempts = 3;
 
@@ -532,11 +539,11 @@ esp_err_t sd_mmc_init() {
             break;
         }
 
-        sdspi_dev_handle_t device_handle = NULL;
+        sdspi_dev_handle_t device_handle = SDSPI_DEVICE_HANDLE_INVALID;
         ret = sd_spi_attach_device(&device_handle);
         if (ret != ESP_OK) {
             ESP_LOGE(SD_TAG, "Failed to attach SDSPI device (%s)", esp_err_to_name(ret));
-            sdspi_device = NULL;
+            sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
             sd_spi_detach_device();
             continue;
         }
@@ -629,7 +636,7 @@ esp_err_t sd_mmc_init() {
  * about the SD card to the standard output.
  */
 esp_err_t sd_card_print_info() {
-    if (card == NULL || sdspi_device == NULL) {
+    if (card == NULL || !sdspi_handle_is_valid(sdspi_device)) {
         return ESP_ERR_INVALID_STATE;
     }
     sdmmc_card_print_info(stdout, card);
@@ -682,7 +689,7 @@ esp_err_t sd_mmc_unmount() {
  * @retval ESP_FAIL if an error occurs while fetching capacity information.
  */
 esp_err_t read_sd_capacity(size_t *total_capacity, size_t *available_capacity) {
-    if (card == NULL || sdspi_device == NULL) {
+    if (card == NULL || !sdspi_handle_is_valid(sdspi_device)) {
         return ESP_ERR_INVALID_STATE;
     }
     FATFS *fs;
