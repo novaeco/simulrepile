@@ -83,6 +83,14 @@ void reset_last_mode(void) { save_last_mode(APP_MODE_MENU_OVERRIDE); }
 
 static void sleep_timer_cb(lv_timer_t *timer);
 
+static void sd_cs_selftest(void) {
+  esp_err_t ret = sd_spi_cs_selftest();
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s", esp_err_to_name(ret));
+    ESP_ERROR_CHECK(ret);
+  }
+}
+
 void sleep_timer_arm(bool arm) {
   if (!sleep_timer)
     return;
@@ -347,6 +355,7 @@ void app_main() {
   settings_init();
 
   // Initialize SD card at boot for early log availability
+  sd_cs_selftest();
   esp_err_t sd_ret = sd_mmc_init();
   if (sd_ret != ESP_OK) {
     ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
