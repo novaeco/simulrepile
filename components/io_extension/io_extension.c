@@ -13,6 +13,7 @@
  ******************************************************************************/
 #include "io_extension.h"  // Include IO_EXTENSION driver header for GPIO functions
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "IO_EXTENSION";
  
@@ -58,6 +59,7 @@ esp_err_t IO_EXTENSION_Init()
         return ESP_ERR_INVALID_STATE;
     }
 
+    (void)esp_task_wdt_reset();
     esp_err_t ret = DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set I2C address: %s", esp_err_to_name(ret));
@@ -65,6 +67,7 @@ esp_err_t IO_EXTENSION_Init()
         return ret;
     }
 
+    (void)esp_task_wdt_reset();
     ret = IO_EXTENSION_IO_Mode(0xFF); // Set all pins to output mode
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set IO mode: %s", esp_err_to_name(ret));
@@ -84,6 +87,7 @@ esp_err_t IO_EXTENSION_Init()
         return ret;
     }
 
+    (void)esp_task_wdt_reset();
     return ESP_OK;
 }
 
@@ -102,6 +106,7 @@ esp_err_t IO_EXTENSION_Output(uint8_t pin, uint8_t value)
         ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
         return ESP_ERR_INVALID_STATE;
     }
+    (void)esp_task_wdt_reset();
     // Update the output value based on the pin and value
     if (value == 1)
         IO_EXTENSION.Last_io_value |= (1 << pin); // Set the pin high
@@ -114,6 +119,7 @@ esp_err_t IO_EXTENSION_Output(uint8_t pin, uint8_t value)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write IO output: %s", esp_err_to_name(ret));
     }
+    (void)esp_task_wdt_reset();
     return ret;
 }
 
@@ -135,6 +141,7 @@ esp_err_t IO_EXTENSION_Input(uint8_t pin, uint8_t *value)
         ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
         return ESP_ERR_INVALID_STATE;
     }
+    (void)esp_task_wdt_reset();
     uint8_t read_val = 0;
 
     // Read the value of the input pins
@@ -145,6 +152,7 @@ esp_err_t IO_EXTENSION_Input(uint8_t pin, uint8_t *value)
     }
     // Return the value of the specific pin(s) by masking with the provided bit mask
     *value = ((read_val & (1 << pin)) > 0);
+    (void)esp_task_wdt_reset();
     return ESP_OK;
 }
 
@@ -162,6 +170,7 @@ esp_err_t IO_EXTENSION_Pwm_Output(uint8_t Value)
         ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
         return ESP_ERR_INVALID_STATE;
     }
+    (void)esp_task_wdt_reset();
     // Prevent the screen from completely turning off
     if (Value >= 97)
     {
@@ -176,6 +185,7 @@ esp_err_t IO_EXTENSION_Pwm_Output(uint8_t Value)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set PWM output: %s", esp_err_to_name(ret));
     }
+    (void)esp_task_wdt_reset();
     return ret;
 }
 
@@ -200,5 +210,6 @@ esp_err_t IO_EXTENSION_Adc_Input(uint16_t *value)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read ADC input: %s", esp_err_to_name(ret));
     }
+    (void)esp_task_wdt_reset();
     return ret;
 }
