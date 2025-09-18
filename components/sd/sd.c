@@ -20,8 +20,10 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "sd.h"  // Include header file for SD card functions
+#include "driver/gpio.h"
 #include "driver/spi_common.h"
 #include "driver/spi_master.h"
+#include "esp_rom_sys.h"
 #include "diskio_impl.h"
 #include "diskio_sdmmc.h"
 #include "ff.h"
@@ -38,7 +40,7 @@ static bool io_extension_init_error_logged = false;
 static bool io_extension_drive_error_logged = false;
 
 static esp_err_t sd_spi_ensure_io_extension(void);
-static void sd_spi_drive_cs_level(int level);
+static esp_err_t sd_spi_drive_cs_level(int level);
 static void sd_spi_assert_cs(spi_transaction_t *trans);
 static void sd_spi_release_cs(spi_transaction_t *trans);
 static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd);
@@ -48,6 +50,7 @@ static esp_err_t sd_spi_prepare_filesystem(const esp_vfs_fat_mount_config_t *mou
 static esp_err_t sd_spi_teardown_filesystem(void);
 static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle);
 static void sd_spi_detach_device(void);
+static void sd_spi_configure_bus_pullups(void);
 
 // Define the mount point for the SD card
 const char mount_point[] = MOUNT_POINT;
@@ -76,10 +79,10 @@ static esp_err_t sd_spi_ensure_io_extension(void) {
     return ret;
 }
 
-static void sd_spi_drive_cs_level(int level) {
+static esp_err_t sd_spi_drive_cs_level(int level) {
     esp_err_t ret = sd_spi_ensure_io_extension();
     if (ret != ESP_OK) {
-        return;
+        return ret;
     }
 
     ret = IO_EXTENSION_Output(SD_SPI_CS, level ? 1 : 0);
@@ -88,19 +91,37 @@ static void sd_spi_drive_cs_level(int level) {
             ESP_LOGE(SD_TAG, "Failed to drive SD CS line to %d: %s", level, esp_err_to_name(ret));
             io_extension_drive_error_logged = true;
         }
-    } else {
-        io_extension_drive_error_logged = false;
+        return ret;
     }
+
+    io_extension_drive_error_logged = false;
+
+    /*
+     * The SD card chip-select signal is routed through the external IO expander.
+     * Add a short guard time after updating the register so that the level is
+     * effectively propagated on the TF socket before the SPI transaction
+     * starts. Without this settling delay the first command often sees the CS
+     * edge late, leading to sporadic ESP_ERR_TIMEOUT during card reset.
+     */
+    esp_rom_delay_us(2);
+
+    return ESP_OK;
 }
 
 static void sd_spi_assert_cs(spi_transaction_t *trans) {
     (void)trans;
-    sd_spi_drive_cs_level(0);
+    esp_err_t ret = sd_spi_drive_cs_level(0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(SD_TAG, "Unable to assert SD CS: %s", esp_err_to_name(ret));
+    }
 }
 
 static void sd_spi_release_cs(spi_transaction_t *trans) {
     (void)trans;
-    sd_spi_drive_cs_level(1);
+    esp_err_t ret = sd_spi_drive_cs_level(1);
+    if (ret != ESP_OK) {
+        ESP_LOGW(SD_TAG, "Unable to release SD CS: %s", esp_err_to_name(ret));
+    }
 }
 
 static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
@@ -113,9 +134,19 @@ static esp_err_t sd_spi_do_transaction(int slot, sdmmc_command_t *cmd) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    sd_spi_assert_cs(NULL);
+    esp_err_t cs_ret = sd_spi_drive_cs_level(0);
+    if (cs_ret != ESP_OK) {
+        (void)sd_spi_drive_cs_level(1);
+        return cs_ret;
+    }
+
     esp_err_t ret = sdspi_host_do_transaction(handle, cmd);
-    sd_spi_release_cs(NULL);
+
+    esp_err_t rel_ret = sd_spi_drive_cs_level(1);
+    if (rel_ret != ESP_OK && ret == ESP_OK) {
+        ret = rel_ret;
+    }
+
     return ret;
 }
 
@@ -298,6 +329,26 @@ static void sd_spi_detach_device(void) {
     sd_spi_release_cs(NULL);
 }
 
+static void sd_spi_configure_bus_pullups(void) {
+    const gpio_num_t pullup_pins[] = {
+        SD_SPI_MOSI,
+        SD_SPI_MISO,
+        SD_SPI_CLK,
+    };
+
+    for (size_t i = 0; i < sizeof(pullup_pins) / sizeof(pullup_pins[0]); ++i) {
+        gpio_num_t pin = pullup_pins[i];
+        if (pin == GPIO_NUM_NC) {
+            continue;
+        }
+
+        esp_err_t ret = gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+        if (ret != ESP_OK) {
+            ESP_LOGW(SD_TAG, "Failed to enable pull-up on GPIO%d: %s", pin, esp_err_to_name(ret));
+        }
+    }
+}
+
 /**
  * @brief Initialize the SD card and mount the filesystem.
  *
@@ -339,6 +390,7 @@ esp_err_t sd_mmc_init() {
     };
 
     if (!spi_bus_initialized) {
+        sd_spi_configure_bus_pullups();
         esp_err_t bus_ret = spi_bus_initialize(SD_SPI_HOST, &bus_config, SDSPI_DEFAULT_DMA);
         if (bus_ret == ESP_OK || bus_ret == ESP_ERR_INVALID_STATE) {
             spi_bus_initialized = true;
