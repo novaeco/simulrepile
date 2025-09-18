@@ -555,6 +555,7 @@ esp_err_t sd_mmc_init() {
             continue;
         }
 
+
         esp_err_t dummy_ret = sd_spi_send_dummy_clocks(sdspi_device);
         if (dummy_ret != ESP_OK) {
             ESP_LOGE(SD_TAG, "Failed to generate SD SPI idle clocks (%s)", esp_err_to_name(dummy_ret));
@@ -565,7 +566,6 @@ esp_err_t sd_mmc_init() {
         }
 
         esp_rom_delay_us(2000);
-
         card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
         if (card == NULL) {
             ESP_LOGE(SD_TAG, "Failed to allocate sdmmc_card_t structure");
