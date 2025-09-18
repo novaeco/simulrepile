@@ -44,16 +44,26 @@ static bool spi_bus_initialized = false;
 static FATFS *sdcard_fs = NULL;
 static BYTE sdcard_drive_num = FF_DRV_NOT_USED;
 static char sdcard_drive_path[8] = {0};
-static bool cs_selftest_success_logged = false;
+static bool cs_selftest_logged_io_ext = false;
+static bool cs_selftest_logged_direct = false;
 static spi_device_handle_t sd_dummy_spi_device = NULL;
 static uint32_t sd_dummy_spi_freq_hz = 0;
 
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
+static bool use_io_ext_cs = true;
 static bool io_extension_ready = false;
 static bool io_extension_init_error_logged = false;
 static bool io_extension_drive_error_logged = false;
 #else
+static bool use_io_ext_cs = false;
+#endif
+
 static bool direct_cs_configured = false;
+static const gpio_num_t direct_cs_gpio =
+#ifdef SD_SPI_DIRECT_GPIO
+    (gpio_num_t)SD_SPI_DIRECT_GPIO;
+#else
+    GPIO_NUM_10;
 #endif
 
 static esp_err_t sd_spi_prepare_cs_line(void);
@@ -70,40 +80,51 @@ static esp_err_t sd_spi_teardown_filesystem(void);
 static esp_err_t sd_spi_attach_device(sdspi_dev_handle_t *out_handle);
 static void sd_spi_detach_device(void);
 static void sd_spi_configure_bus_pullups(void);
+static void sd_spi_force_direct_cs(void);
 
 // Define the mount point for the SD card
 const char mount_point[] = MOUNT_POINT;
 
 static esp_err_t sd_spi_prepare_cs_line(void) {
+    if (use_io_ext_cs) {
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
-    if (io_extension_ready) {
-        return ESP_OK;
-    }
+        if (io_extension_ready) {
+            return ESP_OK;
+        }
 
-    esp_err_t ret = IO_EXTENSION_Init();
-    if (ret == ESP_OK) {
-        ret = IO_EXTENSION_Output(SD_SPI_CS, 1);
-    }
+        esp_err_t ret = IO_EXTENSION_Init();
+        if (ret == ESP_OK) {
+            ret = IO_EXTENSION_Output(SD_SPI_IO_EXT_PIN, 1);
+        }
 
-    if (ret == ESP_OK) {
-        io_extension_ready = true;
-        io_extension_init_error_logged = false;
-        io_extension_drive_error_logged = false;
-        return ESP_OK;
-    }
+        if (ret == ESP_OK) {
+            io_extension_ready = true;
+            io_extension_init_error_logged = false;
+            io_extension_drive_error_logged = false;
+            return ESP_OK;
+        }
 
-    if (!io_extension_init_error_logged) {
-        ESP_LOGE(SD_TAG, "Failed to initialize IO extension for SD CS: %s", esp_err_to_name(ret));
-        io_extension_init_error_logged = true;
-    }
-    return ret;
+        if (!io_extension_init_error_logged) {
+            ESP_LOGE(SD_TAG, "Failed to initialize IO extension for SD CS: %s", esp_err_to_name(ret));
+            io_extension_init_error_logged = true;
+        }
+        return ret;
 #else
+        return ESP_ERR_INVALID_STATE;
+#endif
+    }
+
     if (direct_cs_configured) {
         return ESP_OK;
     }
 
+    if (direct_cs_gpio == GPIO_NUM_NC) {
+        ESP_LOGE(SD_TAG, "Direct SD CS GPIO not configured");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << SD_SPI_CS,
+        .pin_bit_mask = 1ULL << (int)direct_cs_gpio,
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -112,14 +133,18 @@ static esp_err_t sd_spi_prepare_cs_line(void) {
 
     esp_err_t ret = gpio_config(&cfg);
     if (ret != ESP_OK) {
-        ESP_LOGE(SD_TAG, "Failed to configure direct SD CS GPIO%d: %s", SD_SPI_CS, esp_err_to_name(ret));
+        ESP_LOGE(SD_TAG, "Failed to configure direct SD CS GPIO%d: %s", (int)direct_cs_gpio, esp_err_to_name(ret));
         return ret;
     }
 
-    gpio_set_level(SD_SPI_CS, 1);
+    ret = gpio_set_level(direct_cs_gpio, 1);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SD_TAG, "Failed to drive direct SD CS GPIO%d high: %s", (int)direct_cs_gpio, esp_err_to_name(ret));
+        return ret;
+    }
+
     direct_cs_configured = true;
     return ESP_OK;
-#endif
 }
 
 static esp_err_t sd_spi_drive_cs_level(int level) {
@@ -128,20 +153,29 @@ static esp_err_t sd_spi_drive_cs_level(int level) {
         return ret;
     }
 
+    if (use_io_ext_cs) {
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
-    ret = IO_EXTENSION_Output(SD_SPI_CS, level ? 1 : 0);
-    if (ret != ESP_OK) {
-        io_extension_ready = false;
-        if (!io_extension_drive_error_logged) {
-            ESP_LOGE(SD_TAG, "Failed to drive SD CS line to %d: %s", level, esp_err_to_name(ret));
-            io_extension_drive_error_logged = true;
+        ret = IO_EXTENSION_Output(SD_SPI_IO_EXT_PIN, level ? 1 : 0);
+        if (ret != ESP_OK) {
+            io_extension_ready = false;
+            if (!io_extension_drive_error_logged) {
+                ESP_LOGE(SD_TAG, "Failed to drive SD CS line to %d: %s", level, esp_err_to_name(ret));
+                io_extension_drive_error_logged = true;
+            }
+            return ret;
         }
-        return ret;
-    }
-    io_extension_drive_error_logged = false;
+        io_extension_drive_error_logged = false;
 #else
-    gpio_set_level(SD_SPI_CS, level ? 1 : 0);
+        return ESP_ERR_INVALID_STATE;
 #endif
+    } else {
+        ret = gpio_set_level(direct_cs_gpio, level ? 1 : 0);
+        if (ret != ESP_OK) {
+            ESP_LOGE(SD_TAG, "Failed to drive direct SD CS GPIO%d to %d: %s", (int)direct_cs_gpio, level,
+                     esp_err_to_name(ret));
+            return ret;
+        }
+    }
 
     /*
      * Add a short guard time after updating the CS level so that the signal is
@@ -407,6 +441,16 @@ static void sd_spi_configure_bus_pullups(void) {
     }
 }
 
+static void sd_spi_force_direct_cs(void) {
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
+    io_extension_ready = false;
+    io_extension_init_error_logged = false;
+    io_extension_drive_error_logged = false;
+#endif
+    use_io_ext_cs = false;
+    direct_cs_configured = false;
+}
+
 static esp_err_t sd_spi_send_dummy_clocks(uint32_t freq_khz) {
     uint32_t freq_hz = freq_khz ? freq_khz * 1000U : (SDMMC_FREQ_PROBING * 1000U);
 
@@ -489,13 +533,18 @@ esp_err_t sd_spi_cs_selftest(void) {
         return ret;
     }
 
-    if (!cs_selftest_success_logged) {
-        cs_selftest_success_logged = true;
+    if (use_io_ext_cs) {
 #if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
-        ESP_LOGI(SD_TAG, "SD CS verified via IO expander");
+        if (!cs_selftest_logged_io_ext) {
+            ESP_LOGI(SD_TAG, "SD CS verified via IO expander");
+            cs_selftest_logged_io_ext = true;
+        }
 #else
-        ESP_LOGI(SD_TAG, "SD CS verified on GPIO%d (direct wiring)", SD_SPI_CS);
+        ESP_LOGW(SD_TAG, "IO expander CS path requested but not enabled at compile time");
 #endif
+    } else if (!cs_selftest_logged_direct) {
+        ESP_LOGI(SD_TAG, "SD CS verified on GPIO%d (direct wiring)", (int)direct_cs_gpio);
+        cs_selftest_logged_direct = true;
     }
 
     return ESP_OK;
@@ -516,155 +565,174 @@ esp_err_t sd_mmc_init() {
         return ESP_OK;
     }
 
-    esp_err_t ret = sd_spi_cs_selftest();
-    if (ret != ESP_OK) {
-        return ret;
-    }
+    bool fallback_attempted = false;
 
-    sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
-    ret = ESP_FAIL;
-    const int max_attempts = 3;
-
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = EXAMPLE_FORMAT_IF_MOUNT_FAILED,
-        .max_files = 5,
-        .allocation_unit_size = 16 * 1024,
-        .disk_status_check_enable = false,
-        .use_one_fat = false,
-    };
-
-    spi_bus_config_t bus_config = {
-        .mosi_io_num = SD_SPI_MOSI,
-        .miso_io_num = SD_SPI_MISO,
-        .sclk_io_num = SD_SPI_CLK,
-        .quadwp_io_num = GPIO_NUM_NC,
-        .quadhd_io_num = GPIO_NUM_NC,
-        .data4_io_num = GPIO_NUM_NC,
-        .data5_io_num = GPIO_NUM_NC,
-        .data6_io_num = GPIO_NUM_NC,
-        .data7_io_num = GPIO_NUM_NC,
-        .max_transfer_sz = 16 * 1024,
-    };
-
-    if (!spi_bus_initialized) {
-        sd_spi_configure_bus_pullups();
-        esp_err_t bus_ret = spi_bus_initialize(SD_SPI_HOST, &bus_config, SDSPI_DEFAULT_DMA);
-        if (bus_ret == ESP_OK || bus_ret == ESP_ERR_INVALID_STATE) {
-            spi_bus_initialized = true;
-        } else {
-            ESP_LOGE(SD_TAG, "Failed to initialize SPI bus for SD card (%s)", esp_err_to_name(bus_ret));
-            return bus_ret;
+    while (true) {
+        esp_err_t ret = sd_spi_cs_selftest();
+        if (ret != ESP_OK) {
+            return ret;
         }
-    }
 
-    const uint32_t sd_probe_freq_khz = SDMMC_FREQ_PROBING;
-    const uint32_t sd_operating_freq_khz = SDMMC_FREQ_DEFAULT;
+        sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
+        ret = ESP_FAIL;
+        const int max_attempts = 3;
+        bool card_timeouts = false;
 
-    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
-        ESP_LOGI(SD_TAG, "Initializing SD card over SPI (attempt %d/%d)", attempt, max_attempts);
+        esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+            .format_if_mount_failed = EXAMPLE_FORMAT_IF_MOUNT_FAILED,
+            .max_files = 5,
+            .allocation_unit_size = 16 * 1024,
+            .disk_status_check_enable = false,
+            .use_one_fat = false,
+        };
 
+        spi_bus_config_t bus_config = {
+            .mosi_io_num = SD_SPI_MOSI,
+            .miso_io_num = SD_SPI_MISO,
+            .sclk_io_num = SD_SPI_CLK,
+            .quadwp_io_num = GPIO_NUM_NC,
+            .quadhd_io_num = GPIO_NUM_NC,
+            .data4_io_num = GPIO_NUM_NC,
+            .data5_io_num = GPIO_NUM_NC,
+            .data6_io_num = GPIO_NUM_NC,
+            .data7_io_num = GPIO_NUM_NC,
+            .max_transfer_sz = 16 * 1024,
+        };
+
+        if (!spi_bus_initialized) {
+            sd_spi_configure_bus_pullups();
+            esp_err_t bus_ret = spi_bus_initialize(SD_SPI_HOST, &bus_config, SDSPI_DEFAULT_DMA);
+            if (bus_ret == ESP_OK || bus_ret == ESP_ERR_INVALID_STATE) {
+                spi_bus_initialized = true;
+            } else {
+                ESP_LOGE(SD_TAG, "Failed to initialize SPI bus for SD card (%s)", esp_err_to_name(bus_ret));
+                return bus_ret;
+            }
+        }
+
+        const uint32_t sd_probe_freq_khz = SDMMC_FREQ_PROBING;
+        const uint32_t sd_operating_freq_khz = SDMMC_FREQ_DEFAULT;
+
+        for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+            ESP_LOGI(SD_TAG, "Initializing SD card over SPI (attempt %d/%d)", attempt, max_attempts);
+
+            sd_spi_release_cs(NULL);
+
+            sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+            host.slot = SD_SPI_HOST;
+            uint32_t init_freq_khz = (attempt == 1) ? sd_probe_freq_khz : sd_operating_freq_khz;
+            host.max_freq_khz = init_freq_khz;
+
+            esp_err_t host_ret = host.init();
+            if (host_ret != ESP_OK && host_ret != ESP_ERR_INVALID_STATE) {
+                ESP_LOGE(SD_TAG, "Failed to initialize SDSPI host (%s)", esp_err_to_name(host_ret));
+                ret = host_ret;
+                break;
+            }
+
+            sdspi_dev_handle_t device_handle = SDSPI_DEVICE_HANDLE_INVALID;
+            ret = sd_spi_attach_device(&device_handle);
+            if (ret != ESP_OK) {
+                ESP_LOGE(SD_TAG, "Failed to attach SDSPI device (%s)", esp_err_to_name(ret));
+                sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
+                sd_spi_detach_device();
+                continue;
+            }
+
+            sdspi_device = device_handle;
+            host.slot = (intptr_t)sdspi_device;
+            host.max_freq_khz = init_freq_khz;
+            host.do_transaction = sd_spi_do_transaction;
+
+            esp_err_t clk_preset_ret = sdspi_host_set_card_clk(sdspi_device, init_freq_khz);
+            if (clk_preset_ret != ESP_OK) {
+                ESP_LOGE(SD_TAG, "Failed to configure SD SPI probing clock (%s)", esp_err_to_name(clk_preset_ret));
+                sd_spi_teardown_filesystem();
+                sd_spi_detach_device();
+                ret = clk_preset_ret;
+                continue;
+            }
+
+            esp_err_t dummy_ret = sd_spi_send_dummy_clocks(init_freq_khz);
+            if (dummy_ret != ESP_OK) {
+                ESP_LOGE(SD_TAG, "Failed to generate SD SPI idle clocks (%s)", esp_err_to_name(dummy_ret));
+                sd_spi_teardown_filesystem();
+                sd_spi_detach_device();
+                ret = dummy_ret;
+                continue;
+            }
+
+            esp_rom_delay_us(2000);
+            card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
+            if (card == NULL) {
+                ESP_LOGE(SD_TAG, "Failed to allocate sdmmc_card_t structure");
+                ret = ESP_ERR_NO_MEM;
+                sd_spi_teardown_filesystem();
+                sd_spi_detach_device();
+                break;
+            }
+
+            ret = sdmmc_card_init(&host, card);
+            if (ret != ESP_OK) {
+                if (ret == ESP_ERR_TIMEOUT) {
+                    card_timeouts = true;
+                }
+                ESP_LOGE(SD_TAG, "Failed to initialize SD card (%s)", esp_err_to_name(ret));
+                free(card);
+                card = NULL;
+                sd_spi_teardown_filesystem();
+                sd_spi_detach_device();
+                continue;
+            }
+
+            esp_err_t clk_ret = sdspi_host_set_card_clk(sdspi_device, sd_operating_freq_khz);
+            if (clk_ret != ESP_OK) {
+                ESP_LOGE(SD_TAG, "Failed to set SD SPI clock (%s)", esp_err_to_name(clk_ret));
+                free(card);
+                card = NULL;
+                sd_spi_teardown_filesystem();
+                sd_spi_detach_device();
+                ret = clk_ret;
+                continue;
+            }
+
+            host.max_freq_khz = sd_operating_freq_khz;
+
+            ret = sd_spi_prepare_filesystem(&mount_config, card);
+            if (ret == ESP_OK) {
+                ESP_LOGI(SD_TAG, "Filesystem mounted on attempt %d", attempt);
+                return ESP_OK;
+            }
+
+            ESP_LOGE(SD_TAG, "Failed to mount filesystem on attempt %d (%s)", attempt, esp_err_to_name(ret));
+            sd_spi_teardown_filesystem();
+            free(card);
+            card = NULL;
+            sd_spi_detach_device();
+        }
+
+        sd_spi_teardown_filesystem();
+        if (card != NULL) {
+            free(card);
+            card = NULL;
+        }
+        sd_spi_detach_device();
         sd_spi_release_cs(NULL);
 
-        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-        host.slot = SD_SPI_HOST;
-        uint32_t init_freq_khz = (attempt == 1) ? sd_probe_freq_khz : sd_operating_freq_khz;
-        host.max_freq_khz = init_freq_khz;
-
-        esp_err_t host_ret = host.init();
-        if (host_ret != ESP_OK && host_ret != ESP_ERR_INVALID_STATE) {
-            ESP_LOGE(SD_TAG, "Failed to initialize SDSPI host (%s)", esp_err_to_name(host_ret));
-            ret = host_ret;
-            break;
-        }
-
-        sdspi_dev_handle_t device_handle = SDSPI_DEVICE_HANDLE_INVALID;
-        ret = sd_spi_attach_device(&device_handle);
-        if (ret != ESP_OK) {
-            ESP_LOGE(SD_TAG, "Failed to attach SDSPI device (%s)", esp_err_to_name(ret));
-            sdspi_device = SDSPI_DEVICE_HANDLE_INVALID;
-            sd_spi_detach_device();
+#if CONFIG_REPTILE_SD_SPI_USE_IO_EXT
+        if (use_io_ext_cs && !fallback_attempted && card_timeouts) {
+            ESP_LOGW(SD_TAG,
+                     "Card did not respond while SD CS was routed via IO expander, retrying on GPIO%d",
+                     (int)direct_cs_gpio);
+            sd_spi_force_direct_cs();
+            fallback_attempted = true;
             continue;
         }
+#endif
 
-        sdspi_device = device_handle;
-        host.slot = (intptr_t)sdspi_device;
-        host.max_freq_khz = init_freq_khz;
-        host.do_transaction = sd_spi_do_transaction;
-
-        esp_err_t clk_preset_ret = sdspi_host_set_card_clk(sdspi_device, init_freq_khz);
-        if (clk_preset_ret != ESP_OK) {
-            ESP_LOGE(SD_TAG, "Failed to configure SD SPI probing clock (%s)", esp_err_to_name(clk_preset_ret));
-            sd_spi_teardown_filesystem();
-            sd_spi_detach_device();
-            ret = clk_preset_ret;
-            continue;
-        }
-
-
-        esp_err_t dummy_ret = sd_spi_send_dummy_clocks(init_freq_khz);
-        if (dummy_ret != ESP_OK) {
-            ESP_LOGE(SD_TAG, "Failed to generate SD SPI idle clocks (%s)", esp_err_to_name(dummy_ret));
-            sd_spi_teardown_filesystem();
-            sd_spi_detach_device();
-            ret = dummy_ret;
-            continue;
-        }
-
-        esp_rom_delay_us(2000);
-        card = (sdmmc_card_t *)calloc(1, sizeof(sdmmc_card_t));
-        if (card == NULL) {
-            ESP_LOGE(SD_TAG, "Failed to allocate sdmmc_card_t structure");
-            ret = ESP_ERR_NO_MEM;
-            sd_spi_teardown_filesystem();
-            sd_spi_detach_device();
-            break;
-        }
-
-        ret = sdmmc_card_init(&host, card);
-        if (ret != ESP_OK) {
-            ESP_LOGE(SD_TAG, "Failed to initialize SD card (%s)", esp_err_to_name(ret));
-            free(card);
-            card = NULL;
-            sd_spi_teardown_filesystem();
-            sd_spi_detach_device();
-            continue;
-        }
-
-        esp_err_t clk_ret = sdspi_host_set_card_clk(sdspi_device, sd_operating_freq_khz);
-        if (clk_ret != ESP_OK) {
-            ESP_LOGE(SD_TAG, "Failed to set SD SPI clock (%s)", esp_err_to_name(clk_ret));
-            free(card);
-            card = NULL;
-            sd_spi_teardown_filesystem();
-            sd_spi_detach_device();
-            ret = clk_ret;
-            continue;
-        }
-
-        host.max_freq_khz = sd_operating_freq_khz;
-
-        ret = sd_spi_prepare_filesystem(&mount_config, card);
-        if (ret == ESP_OK) {
-            ESP_LOGI(SD_TAG, "Filesystem mounted on attempt %d", attempt);
-            return ESP_OK;
-        }
-
-        ESP_LOGE(SD_TAG, "Failed to mount filesystem on attempt %d (%s)", attempt, esp_err_to_name(ret));
-        sd_spi_teardown_filesystem();
-        free(card);
-        card = NULL;
-        sd_spi_detach_device();
+        ESP_LOGE(SD_TAG, "SD card initialization failed after %d attempts", max_attempts);
+        return ret;
     }
-
-    ESP_LOGE(SD_TAG, "SD card initialization failed after %d attempts", max_attempts);
-    sd_spi_teardown_filesystem();
-    if (card != NULL) {
-        free(card);
-        card = NULL;
-    }
-    sd_spi_detach_device();
-    sd_spi_release_cs(NULL);
-    return ret;
 }
 
 /**
