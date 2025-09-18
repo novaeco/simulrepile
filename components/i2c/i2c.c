@@ -86,6 +86,15 @@ esp_err_t DEV_I2C_Probe(uint8_t addr)
  */
 esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Addr)
 {
+    if (dev_handle == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (handle.bus == NULL) {
+        ESP_LOGE(TAG, "I2C bus not initialized, call DEV_I2C_Init first");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     // Configure the new device address
     i2c_device_config_t i2c_dev_conf = {
         .scl_speed_hz = EXAMPLE_I2C_MASTER_FREQUENCY,  // I2C frequency
