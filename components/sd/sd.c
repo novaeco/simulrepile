@@ -597,6 +597,14 @@ esp_err_t sd_mmc_init() {
             .data6_io_num = GPIO_NUM_NC,
             .data7_io_num = GPIO_NUM_NC,
             .max_transfer_sz = 16 * 1024,
+            /*
+             * The TF slot is wired to GPIO11/12/13 on the Waveshare carrier,
+             * i.e. to non-IOMUX pins of SPI2.  Tell the driver explicitly to
+             * use the GPIO matrix path; otherwise it keeps the default IOMUX
+             * routing, the clock/data never reach the socket and the reset
+             * sequence fails with ESP_ERR_TIMEOUT (CMD52/CMD0 timeouts).
+             */
+            .flags = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_GPIO_PINS,
         };
 
         if (!spi_bus_initialized) {
