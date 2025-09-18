@@ -91,11 +91,13 @@ typedef struct {
 } reptile_facility_v2_t;
 
 static const char *TAG = "reptile_logic";
+static bool s_storage_warned = false;
 
 static void copy_string(char *dst, size_t len, const char *src);
 static void terrarium_reset(terrarium_t *terrarium);
 static void facility_reset(reptile_facility_t *facility);
 static const char *mode_dir(game_mode_t mode);
+static esp_err_t ensure_storage_ready(const char *context);
 static esp_err_t ensure_directories(const reptile_facility_t *facility);
 static const char *facility_get_save_path(const reptile_facility_t *facility);
 static float clampf(float value, float min_val, float max_val);
@@ -335,24 +337,66 @@ static const char *mode_dir(game_mode_t mode) {
   }
 }
 
+static esp_err_t ensure_storage_ready(const char *context) {
+#ifndef ESP_PLATFORM
+  if (!sd_is_mounted()) {
+    if (mkdir(SD_MOUNT_POINT, 0777) == 0) {
+      s_storage_warned = false;
+      return ESP_OK;
+    }
+  }
+  if (sd_is_mounted()) {
+    s_storage_warned = false;
+    return ESP_OK;
+  }
+#else
+  if (sd_is_mounted()) {
+    s_storage_warned = false;
+    return ESP_OK;
+  }
+#endif
+
+  if (!s_storage_warned) {
+    if (context && context[0] != '\0') {
+      ESP_LOGW(TAG,
+               "Support SD non monté - %s ignorée. Progression maintenue uniquement en RAM.",
+               context);
+    } else {
+      ESP_LOGW(TAG,
+               "Support SD non monté - opération ignorée. Progression maintenue uniquement en RAM.");
+    }
+    s_storage_warned = true;
+  }
+  return ESP_ERR_INVALID_STATE;
+}
+
 static esp_err_t ensure_directories(const reptile_facility_t *facility) {
   (void)facility;
+  esp_err_t ready = ensure_storage_ready("préparation des dossiers de sauvegarde");
+  if (ready != ESP_OK) {
+    return ready;
+  }
+
+  esp_err_t status = ESP_OK;
   const char *base = MOUNT_POINT;
   if (mkdir(base, 0777) != 0 && errno != EEXIST) {
     ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", base, errno);
+    status = ESP_FAIL;
   }
 
   char sim_dir[64];
   snprintf(sim_dir, sizeof(sim_dir), "%s/sim", base);
   if (mkdir(sim_dir, 0777) != 0 && errno != EEXIST) {
     ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", sim_dir, errno);
+    status = ESP_FAIL;
   }
   char real_dir[64];
   snprintf(real_dir, sizeof(real_dir), "%s/real", base);
   if (mkdir(real_dir, 0777) != 0 && errno != EEXIST) {
     ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", real_dir, errno);
+    status = ESP_FAIL;
   }
-  return ESP_OK;
+  return status;
 }
 
 static const char *facility_get_save_path(const reptile_facility_t *facility) {
@@ -366,6 +410,11 @@ static const char *facility_get_save_path(const reptile_facility_t *facility) {
 esp_err_t reptile_facility_save(const reptile_facility_t *facility) {
   if (!facility) {
     return ESP_ERR_INVALID_ARG;
+  }
+
+  esp_err_t dir_err = ensure_directories(facility);
+  if (dir_err != ESP_OK) {
+    return dir_err;
   }
 
   facility_blob_t blob = {
@@ -397,6 +446,11 @@ esp_err_t reptile_facility_save(const reptile_facility_t *facility) {
 esp_err_t reptile_facility_load(reptile_facility_t *facility) {
   if (!facility) {
     return ESP_ERR_INVALID_ARG;
+  }
+
+  esp_err_t ready = ensure_storage_ready("chargement de l'élevage");
+  if (ready != ESP_OK) {
+    return ready;
   }
 
   const char *path = facility_get_save_path(facility);
@@ -519,8 +573,17 @@ esp_err_t reptile_facility_init(reptile_facility_t *facility, bool simulation,
     copy_string(facility->slot, sizeof(facility->slot), slot_name);
   }
 
-  ensure_directories(facility);
   facility_reset(facility);
+
+  esp_err_t dir_err = ensure_directories(facility);
+  if (dir_err != ESP_OK) {
+    if (dir_err != ESP_ERR_INVALID_STATE) {
+      ESP_LOGW(TAG,
+               "Dossiers de sauvegarde indisponibles (err=%d). Fonctionnement en RAM uniquement",
+               dir_err);
+    }
+    return ESP_OK;
+  }
 
   if (reptile_facility_load(facility) != ESP_OK) {
     ESP_LOGI(TAG, "Initialisation d'un nouvel élevage (%s)",
@@ -1243,6 +1306,11 @@ esp_err_t reptile_facility_export_regulation_report(
     const reptile_facility_t *facility, const char *relative_path) {
   if (!facility) {
     return ESP_ERR_INVALID_ARG;
+  }
+
+  esp_err_t ready = ensure_storage_ready("export réglementaire");
+  if (ready != ESP_OK) {
+    return ready;
   }
 
   char reports_dir[128];

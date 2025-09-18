@@ -17,6 +17,7 @@
 static FILE *s_real_files[REPTILE_ENV_MAX_TERRARIUMS];
 static size_t s_real_count;
 static bool s_real_active;
+static bool s_real_storage_warned;
 
 static void logging_real_cleanup(void)
 {
@@ -28,6 +29,7 @@ static void logging_real_cleanup(void)
     memset(s_real_files, 0, sizeof(s_real_files));
     s_real_count = 0;
     s_real_active = false;
+    s_real_storage_warned = false;
 }
 
 static void sanitize_name(const char *name, char *out, size_t len)
@@ -82,6 +84,15 @@ esp_err_t logging_real_start(size_t terrarium_count, const reptile_env_config_t 
     if (terrarium_count > REPTILE_ENV_MAX_TERRARIUMS) {
         terrarium_count = REPTILE_ENV_MAX_TERRARIUMS;
     }
+    if (!sd_is_mounted()) {
+        if (!s_real_storage_warned) {
+            ESP_LOGW(REAL_LOG_TAG,
+                     "Support SD non monté - journalisation terrain désactivée");
+            s_real_storage_warned = true;
+        }
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_real_storage_warned = false;
     esp_err_t err = ensure_directory(REAL_LOG_DIR);
     if (err != ESP_OK) {
         return err;
@@ -119,6 +130,15 @@ void logging_real_append(size_t terrarium_index, const reptile_env_terrarium_sta
     if (!s_real_active || !state || terrarium_index >= s_real_count) {
         return;
     }
+    if (!sd_is_mounted()) {
+        if (!s_real_storage_warned) {
+            ESP_LOGW(REAL_LOG_TAG,
+                     "Support SD non monté - acquisition temps réel suspendue");
+            s_real_storage_warned = true;
+        }
+        return;
+    }
+    s_real_storage_warned = false;
     FILE *f = s_real_files[terrarium_index];
     if (!f) {
         return;

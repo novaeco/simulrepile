@@ -12,12 +12,22 @@
 
 static const reptile_facility_t *(*facility_cb)(void);
 static lv_timer_t *log_timer;
+static bool s_log_storage_warned;
 
 static const char *LOG_FILE = "/sdcard/reptile_log.csv";
 
 static void logging_timer_cb(lv_timer_t *t)
 {
     (void)t;
+    if (!sd_is_mounted()) {
+        if (!s_log_storage_warned) {
+            ESP_LOGW(LOG_TAG,
+                     "Support SD non monté - journal CSV suspendu (écriture ignorée)");
+            s_log_storage_warned = true;
+        }
+        return;
+    }
+    s_log_storage_warned = false;
     if (!facility_cb) {
         return;
     }
@@ -60,6 +70,13 @@ static void logging_timer_cb(lv_timer_t *t)
 void logging_init(const reptile_facility_t *(*cb)(void))
 {
     facility_cb = cb;
+    if (!sd_is_mounted()) {
+        ESP_LOGW(LOG_TAG,
+                 "Support SD non monté - journalisation CSV désactivée");
+        s_log_storage_warned = true;
+        return;
+    }
+    s_log_storage_warned = false;
     struct stat st;
     bool need_header = stat(LOG_FILE, &st) != 0;
     FILE *f = fopen(LOG_FILE, "a");
