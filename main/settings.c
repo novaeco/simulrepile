@@ -3,6 +3,10 @@
 #include "lvgl.h"
 #include "nvs.h"
 #include "sleep.h"
+#include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "sdkconfig.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +64,20 @@ static lv_obj_t *create_label(lv_obj_t *parent, const char *txt)
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, txt);
     return label;
+}
+
+static void settings_ui_throttle(void)
+{
+#if CONFIG_ESP_TASK_WDT
+    (void)esp_task_wdt_reset();
+#endif
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        TickType_t delay = pdMS_TO_TICKS(1);
+        if (delay == 0) {
+            delay = 1;
+        }
+        vTaskDelay(delay);
+    }
 }
 
 static uint8_t digits_required_int_range(int32_t min, int32_t max)
@@ -257,6 +275,8 @@ static void populate_terrarium_tab(size_t index,
     lv_textarea_set_text(w->name, cfg->name);
     lv_obj_set_flex_grow(w->name, 1);
 
+    settings_ui_throttle();
+
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -268,6 +288,8 @@ static void populate_terrarium_tab(size_t index,
     create_label(row, "Jour Hum %");
     w->day_hum = create_spinbox_int(row, 0, 100, 1, (int32_t)lroundf(cfg->day.humidity_pct));
 
+    settings_ui_throttle();
+
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -278,6 +300,8 @@ static void populate_terrarium_tab(size_t index,
     w->night_temp = create_spinbox_1dp(row, 5.0f, 40.0f, 0.5f, cfg->night.temperature_c);
     create_label(row, "Nuit Hum %");
     w->night_hum = create_spinbox_int(row, 0, 100, 1, (int32_t)lroundf(cfg->night.humidity_pct));
+
+    settings_ui_throttle();
 
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
@@ -294,6 +318,8 @@ static void populate_terrarium_tab(size_t index,
     create_label(row, "OFF %");
     w->hum_off = create_spinbox_1dp(row, 1.0f, 30.0f, 0.5f, cfg->hysteresis.humidity_off_delta);
 
+    settings_ui_throttle();
+
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -308,6 +334,8 @@ static void populate_terrarium_tab(size_t index,
     w->night_start_hour = create_spinbox_int(row, 0, 23, 1, cfg->night_start.hour);
     create_label(row, ":");
     w->night_start_min = create_spinbox_int(row, 0, 59, 5, cfg->night_start.minute);
+
+    settings_ui_throttle();
 
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
@@ -329,6 +357,8 @@ static void populate_terrarium_tab(size_t index,
     create_label(row, ":");
     w->uv_off_min = create_spinbox_int(row, 0, 59, 5, cfg->uv.off.minute);
 
+    settings_ui_throttle();
+
     row = lv_obj_create(tab);
     lv_obj_set_width(row, LV_PCT(100));
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
@@ -339,6 +369,8 @@ static void populate_terrarium_tab(size_t index,
     w->min_heat = create_spinbox_int(row, 0, 240, 1, cfg->min_minutes_between_heat);
     create_label(row, "Intervalle min pompe (min)");
     w->min_pump = create_spinbox_int(row, 0, 240, 1, cfg->min_minutes_between_pump);
+
+    settings_ui_throttle();
 }
 
 static void save_btn_cb(lv_event_t *e)
@@ -412,9 +444,13 @@ void settings_screen_show(void)
                                   (int32_t)g_settings.env_config.terrarium_count);
     lv_obj_add_event_cb(sb_count, count_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    settings_ui_throttle();
+
     create_label(tab_general, "Période boucle (ms)");
     sb_period = create_spinbox_int(tab_general, 200, 10000, 100,
                                    (int32_t)g_settings.env_config.period_ms);
+
+    settings_ui_throttle();
 
     create_label(tab_general, "Veille par défaut");
     sw_sleep = lv_switch_create(tab_general);
@@ -422,11 +458,15 @@ void settings_screen_show(void)
         lv_obj_add_state(sw_sleep, LV_STATE_CHECKED);
     }
 
+    settings_ui_throttle();
+
     create_label(tab_general, "Niveau log");
     dd_log = lv_dropdown_create(tab_general);
     lv_dropdown_set_options_static(dd_log,
                                    "NONE\nERROR\nWARN\nINFO\nDEBUG\nVERBOSE");
     lv_dropdown_set_selected(dd_log, g_settings.log_level);
+
+    settings_ui_throttle();
 
     reptile_env_config_t defaults;
     reptile_env_get_default_config(&defaults);
@@ -439,9 +479,12 @@ void settings_screen_show(void)
         lv_obj_t *tab = lv_tabview_add_tab(tv, cfg.name[0] ? cfg.name : "Terrarium");
         terrarium_tabs[i] = tab;
         populate_terrarium_tab(i, tab, &cfg);
+        settings_ui_throttle();
     }
 
     apply_count_visibility(g_settings.env_config.terrarium_count);
+
+    settings_ui_throttle();
 
     lv_obj_t *btn = lv_btn_create(screen);
     lv_obj_set_size(btn, 200, 50);
