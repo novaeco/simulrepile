@@ -1,0 +1,8 @@
+I (102) boot: ESP-IDF v5.5-dirty
+I (385) sd: sdmmc_card_print_info:
+I (385) sd: Name: SD16G
+I (386) sd: Type: SDHC/SDXC
+I (386) sd: Speed: 20000 kHz
+I (387) sd: Size: 15193MB
+I (410) main: SD selftest.txt written
+I (411) main: Application start

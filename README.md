@@ -123,36 +123,8 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
   tirage pour consolider les pull-ups externes sur SDA/SCL.
 - `CONFIG_CH422G_I2C_ADDRESS` / `CONFIG_CH422G_EXIO_SD_CS` : adresse 7 bits de
   l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD.
-- `CONFIG_CH422G_AUTOSCAN_ADDRESSES` : active la recherche automatique des
-  adresses 0x20–0x27 si l'expandeur ne répond pas sur l'adresse configurée.
 - `CONFIG_STORAGE_SD_USE_GPIO_CS` + `CONFIG_STORAGE_SD_GPIO_CS_NUM` : bypass du
   CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
-
-### Fallback CS microSD
-
-Par défaut, le projet active un fil de secours reliant la broche **GPIO15** de
-l'ESP32‑S3 directement à l'entrée **CS** du lecteur microSD. Cette modification
-matérielle contourne totalement le CH422G en cas de défaillance du bus I²C.
-
-> ⚠️ **Important** : lorsque la PSRAM octale est activée (configuration par
-> défaut de ce projet), les broches **GPIO26 à GPIO37** sont monopolisées par le
-> bus mémoire. Les utiliser pour la CS microSD déconnecte la PSRAM et provoque
-> des redémarrages en boucle par le watchdog. Sélectionnez impérativement une
-> broche hors de cette plage (ex. GPIO15).
-
-1. Câbler GPIO15 (disponible sur le connecteur d'extension Waveshare) vers la
-   ligne **CS** du convertisseur de niveau du lecteur microSD.
-2. Conserver le retour de masse commun et l'alimentation 3V3.
-3. Laisser INT0/INT1 du CH422G en l'air : l'expandeur peut continuer à piloter
-   les autres lignes même si la CS est isolée.
-
-Au démarrage, le firmware signale dans les logs la mise en service du fallback :
-
-```
-I (XXX) sd: Direct SD CS fallback active on GPIO15
-```
-
-Si le CH422G redevient fonctionnel, il suffit de repasser `CONFIG_STORAGE_SD_USE_GPIO_CS` à `n` pour revenir au câblage d'origine.
 
 ## Menu de démarrage et modes d'exécution
 Au reset, le firmware affiche un menu minimaliste permettant de choisir entre deux modes :
