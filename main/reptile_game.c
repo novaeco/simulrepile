@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "regulations.h"
 #include "sd.h"
+#include "ui_theme.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -26,10 +27,6 @@
 #ifndef MAX
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
-
-LV_FONT_DECLARE(lv_font_montserrat_24);
-LV_FONT_DECLARE(lv_font_montserrat_20);
-LV_FONT_DECLARE(lv_font_montserrat_16);
 
 #define TERRARIUM_GRID_SIZE 5U
 #define FACILITY_UPDATE_PERIOD_MS 1000U
@@ -102,12 +99,6 @@ static lv_obj_t *regulations_alert_table;
 static lv_obj_t *regulations_summary_label;
 static lv_obj_t *regulations_export_label;
 
-static lv_style_t style_title;
-static lv_style_t style_table_header;
-static lv_style_t style_cell_selected;
-static lv_style_t style_value;
-static lv_style_t style_overview_cell;
-
 static lv_timer_t *facility_timer;
 static uint32_t last_tick_ms;
 static uint32_t autosave_ms;
@@ -139,8 +130,6 @@ static const char *uv_options =
     "LED UVB hybride";
 static const char *size_options =
     "90x45x45 cm\n120x60x60 cm\n180x90x60 cm\n200x100x60 cm";
-
-static const lv_image_dsc_t *icon_currency = &gImage_currency_card;
 
 static const char *slot_options = "slot_a\nslot_b\nslot_c\nslot_d";
 
@@ -209,40 +198,6 @@ void reptile_game_init(void) {
 }
 
 const reptile_facility_t *reptile_get_state(void) { return &g_facility; }
-
-static void init_styles(void) {
-  lv_style_init(&style_title);
-  lv_style_set_text_font(&style_title, &lv_font_montserrat_24);
-  lv_style_set_text_color(&style_title, lv_color_hex(0x2E3A59));
-
-  lv_style_init(&style_table_header);
-  lv_style_set_bg_color(&style_table_header, lv_palette_lighten(LV_PALETTE_GREY, 1));
-  lv_style_set_border_color(&style_table_header, lv_palette_main(LV_PALETTE_GREY));
-  lv_style_set_border_width(&style_table_header, 1);
-  lv_style_set_text_font(&style_table_header, &lv_font_montserrat_20);
-  lv_style_set_pad_all(&style_table_header, 6);
-
-  lv_style_init(&style_cell_selected);
-  lv_style_set_bg_color(&style_cell_selected, lv_palette_main(LV_PALETTE_BLUE));
-  lv_style_set_text_color(&style_cell_selected, lv_color_white());
-
-  lv_style_init(&style_value);
-  lv_style_set_text_font(&style_value, &lv_font_montserrat_20);
-
-  lv_style_init(&style_overview_cell);
-  lv_style_set_text_font(&style_overview_cell, &lv_font_montserrat_16);
-  lv_style_set_pad_all(&style_overview_cell, 4);
-  lv_style_set_text_line_space(&style_overview_cell, 2);
-  lv_style_set_text_align(&style_overview_cell, LV_TEXT_ALIGN_CENTER);
-}
-
-static void destroy_styles(void) {
-  lv_style_reset(&style_title);
-  lv_style_reset(&style_table_header);
-  lv_style_reset(&style_cell_selected);
-  lv_style_reset(&style_value);
-  lv_style_reset(&style_overview_cell);
-}
 
 static void simulation_set_status(const char *fmt, ...) {
   if (!menu_status_label || !fmt)
@@ -320,62 +275,54 @@ static void simulation_enter_overview(void) {
 
 static void build_simulation_menu_screen(void) {
   screen_simulation_menu = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_simulation_menu, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_simulation_menu);
+  lv_obj_set_style_pad_all(screen_simulation_menu, 24, 0);
 
   lv_obj_t *title = lv_label_create(screen_simulation_menu);
-  lv_obj_add_style(title, &style_title, 0);
+  ui_theme_apply_title(title);
   lv_label_set_text(title, "Simulation reptiles");
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
 
-  lv_obj_t *slot_label = lv_label_create(screen_simulation_menu);
-  lv_obj_add_style(slot_label, &style_value, 0);
+  lv_obj_t *card = ui_theme_create_card(screen_simulation_menu);
+  lv_obj_set_width(card, 380);
+  lv_obj_align(card, LV_ALIGN_CENTER, 0, 20);
+  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(card, 18, 0);
+
+  lv_obj_t *slot_label = lv_label_create(card);
+  ui_theme_apply_body(slot_label);
   lv_label_set_text(slot_label, "Slot de sauvegarde");
-  lv_obj_align(slot_label, LV_ALIGN_TOP_MID, 0, 80);
+  lv_obj_set_width(slot_label, LV_PCT(100));
 
-  menu_slot_dropdown = lv_dropdown_create(screen_simulation_menu);
+  menu_slot_dropdown = lv_dropdown_create(card);
   lv_dropdown_set_options(menu_slot_dropdown, slot_options);
-  lv_obj_set_width(menu_slot_dropdown, 220);
-  lv_obj_align(menu_slot_dropdown, LV_ALIGN_TOP_MID, 0, 120);
+  ui_theme_apply_dropdown(menu_slot_dropdown);
+  lv_obj_set_width(menu_slot_dropdown, LV_PCT(100));
 
-  lv_obj_t *btn_new = lv_btn_create(screen_simulation_menu);
-  lv_obj_set_size(btn_new, 240, 54);
-  lv_obj_align(btn_new, LV_ALIGN_CENTER, 0, -40);
-  lv_obj_add_event_cb(btn_new, simulation_new_game_event_cb, LV_EVENT_CLICKED,
-                      NULL);
-  lv_obj_t *lbl_new = lv_label_create(btn_new);
-  lv_label_set_text(lbl_new, "Nouvelle partie");
-  lv_obj_center(lbl_new);
+  lv_obj_t *btn_new = ui_theme_create_button(
+      card, "Nouvelle partie", UI_THEME_BUTTON_PRIMARY,
+      simulation_new_game_event_cb, NULL);
+  lv_obj_set_width(btn_new, LV_PCT(100));
 
-  lv_obj_t *btn_resume = lv_btn_create(screen_simulation_menu);
-  lv_obj_set_size(btn_resume, 240, 54);
-  lv_obj_align(btn_resume, LV_ALIGN_CENTER, 0, 30);
-  lv_obj_add_event_cb(btn_resume, simulation_resume_event_cb, LV_EVENT_CLICKED,
-                      NULL);
-  lv_obj_t *lbl_resume = lv_label_create(btn_resume);
-  lv_label_set_text(lbl_resume, "Reprendre");
-  lv_obj_center(lbl_resume);
+  lv_obj_t *btn_resume = ui_theme_create_button(
+      card, "Reprendre", UI_THEME_BUTTON_PRIMARY, simulation_resume_event_cb,
+      NULL);
+  lv_obj_set_width(btn_resume, LV_PCT(100));
 
-  lv_obj_t *btn_settings = lv_btn_create(screen_simulation_menu);
-  lv_obj_set_size(btn_settings, 220, 48);
-  lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 100);
-  lv_obj_add_event_cb(btn_settings, simulation_settings_event_cb,
-                      LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_settings = lv_label_create(btn_settings);
-  lv_label_set_text(lbl_settings, "Paramètres");
-  lv_obj_center(lbl_settings);
+  lv_obj_t *btn_settings = ui_theme_create_button(
+      card, "Paramètres", UI_THEME_BUTTON_SECONDARY,
+      simulation_settings_event_cb, NULL);
+  lv_obj_set_width(btn_settings, LV_PCT(100));
 
-  lv_obj_t *btn_main_menu = lv_btn_create(screen_simulation_menu);
-  lv_obj_set_size(btn_main_menu, 220, 48);
-  lv_obj_align(btn_main_menu, LV_ALIGN_BOTTOM_LEFT, 20, -20);
-  lv_obj_add_event_cb(btn_main_menu, menu_button_event_cb, LV_EVENT_CLICKED,
-                      NULL);
-  lv_obj_t *lbl_main_menu = lv_label_create(btn_main_menu);
-  lv_label_set_text(lbl_main_menu, "Menu principal");
-  lv_obj_center(lbl_main_menu);
+  lv_obj_t *btn_main_menu = ui_theme_create_button(
+      screen_simulation_menu, "Menu principal", UI_THEME_BUTTON_SECONDARY,
+      menu_button_event_cb, NULL);
+  lv_obj_set_width(btn_main_menu, 220);
+  lv_obj_align(btn_main_menu, LV_ALIGN_BOTTOM_LEFT, 24, -20);
 
   menu_status_label = lv_label_create(screen_simulation_menu);
-  lv_obj_add_style(menu_status_label, &style_value, 0);
-  lv_obj_align(menu_status_label, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+  ui_theme_apply_body(menu_status_label);
+  lv_obj_align(menu_status_label, LV_ALIGN_BOTTOM_RIGHT, -24, -20);
 
   simulation_sync_slot_dropdowns();
   simulation_set_status("Slot actif: %s", g_facility.slot);
@@ -383,19 +330,17 @@ static void build_simulation_menu_screen(void) {
 
 static void build_overview_screen(void) {
   screen_overview = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_overview, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_overview);
 
-  table_terrariums = lv_table_create(screen_overview);
-  lv_obj_set_size(table_terrariums, 600, 360);
-  lv_obj_align(table_terrariums, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_t *grid_card = ui_theme_create_card(screen_overview);
+  lv_obj_set_size(grid_card, 660, 400);
+  lv_obj_align(grid_card, LV_ALIGN_TOP_LEFT, 16, 16);
+
+  table_terrariums = lv_table_create(grid_card);
+  lv_obj_set_size(table_terrariums, LV_PCT(100), LV_PCT(100));
   lv_table_set_column_count(table_terrariums, TERRARIUM_GRID_SIZE);
   lv_table_set_row_count(table_terrariums, TERRARIUM_GRID_SIZE);
-  lv_obj_add_style(table_terrariums, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
-  lv_obj_add_style(table_terrariums, &style_overview_cell,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
-  lv_obj_add_style(table_terrariums, &style_cell_selected,
-                   LV_PART_ITEMS | LV_STATE_USER_1);
+  ui_theme_apply_table(table_terrariums, UI_THEME_TABLE_DENSE);
   lv_obj_add_event_cb(table_terrariums, table_event_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
 
@@ -403,94 +348,91 @@ static void build_overview_screen(void) {
     lv_table_set_col_width(table_terrariums, col, 120);
   }
 
-  lv_obj_t *icon = lv_img_create(screen_overview);
-  lv_img_set_src(icon, icon_currency);
-  lv_obj_align(icon, LV_ALIGN_TOP_RIGHT, -20, 10);
+  lv_obj_t *metrics_card = ui_theme_create_card(screen_overview);
+  lv_obj_set_size(metrics_card, 320, 400);
+  lv_obj_align(metrics_card, LV_ALIGN_TOP_RIGHT, -16, 16);
+  lv_obj_set_flex_flow(metrics_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(metrics_card, 14, 0);
 
-  label_cash = lv_label_create(screen_overview);
-  lv_obj_add_style(label_cash, &style_title, 0);
-  lv_obj_align_to(label_cash, icon, LV_ALIGN_OUT_BOTTOM_RIGHT, -40, 10);
+  lv_obj_t *icon = lv_img_create(metrics_card);
+  lv_img_set_src(icon, ui_theme_get_icon(UI_THEME_ICON_CURRENCY));
+  lv_obj_set_style_align_self(icon, LV_ALIGN_END, 0);
 
-  label_cycle = lv_label_create(screen_overview);
-  lv_obj_add_style(label_cycle, &style_value, 0);
-  lv_obj_align(label_cycle, LV_ALIGN_TOP_RIGHT, -20, 120);
+  label_cash = lv_label_create(metrics_card);
+  ui_theme_apply_title(label_cash);
+  lv_label_set_text(label_cash, "Trésorerie");
 
-  label_alerts = lv_label_create(screen_overview);
-  lv_obj_add_style(label_alerts, &style_value, 0);
-  lv_obj_align(label_alerts, LV_ALIGN_TOP_RIGHT, -20, 170);
+  label_cycle = lv_label_create(metrics_card);
+  ui_theme_apply_body(label_cycle);
 
-  overview_status_icon = lv_img_create(screen_overview);
-  lv_img_set_src(overview_status_icon, &gImage_terrarium_ok);
-  lv_obj_align_to(overview_status_icon, label_alerts, LV_ALIGN_OUT_LEFT_MID, -10,
-                  0);
+  lv_obj_t *status_row = lv_obj_create(metrics_card);
+  lv_obj_remove_style_all(status_row);
+  lv_obj_set_width(status_row, LV_PCT(100));
+  lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(status_row, 10, 0);
+  lv_obj_set_scrollbar_mode(status_row, LV_SCROLLBAR_MODE_OFF);
 
-  label_inventory = lv_label_create(screen_overview);
-  lv_obj_add_style(label_inventory, &style_value, 0);
-  lv_obj_align(label_inventory, LV_ALIGN_TOP_RIGHT, -20, 220);
+  overview_status_icon = lv_img_create(status_row);
+  lv_img_set_src(overview_status_icon,
+                 ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
 
-  lv_obj_t *btn_detail = lv_btn_create(screen_overview);
-  lv_obj_set_size(btn_detail, 180, 48);
-  lv_obj_align(btn_detail, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-  lv_obj_add_event_cb(btn_detail, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_detail);
-  lv_obj_t *lbl_detail = lv_label_create(btn_detail);
-  lv_label_set_text(lbl_detail, "Détails terrarium");
-  lv_obj_center(lbl_detail);
+  label_alerts = lv_label_create(status_row);
+  ui_theme_apply_body(label_alerts);
 
-  lv_obj_t *btn_economy = lv_btn_create(screen_overview);
-  lv_obj_set_size(btn_economy, 180, 48);
-  lv_obj_align(btn_economy, LV_ALIGN_BOTTOM_MID, 0, -10);
-  lv_obj_add_event_cb(btn_economy, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_economy);
-  lv_obj_t *lbl_economy = lv_label_create(btn_economy);
-  lv_label_set_text(lbl_economy, "Économie");
-  lv_obj_center(lbl_economy);
+  label_inventory = lv_label_create(metrics_card);
+  ui_theme_apply_body(label_inventory);
+  lv_label_set_long_mode(label_inventory, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label_inventory, LV_PCT(100));
 
-  lv_obj_t *btn_save = lv_btn_create(screen_overview);
-  lv_obj_set_size(btn_save, 180, 48);
-  lv_obj_align(btn_save, LV_ALIGN_BOTTOM_RIGHT, -210, -10);
-  lv_obj_add_event_cb(btn_save, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_save);
-  lv_obj_t *lbl_save = lv_label_create(btn_save);
-  lv_label_set_text(lbl_save, "Sauvegardes");
-  lv_obj_center(lbl_save);
-
-  lv_obj_t *btn_reg = lv_btn_create(screen_overview);
-  lv_obj_set_size(btn_reg, 180, 48);
-  lv_obj_align(btn_reg, LV_ALIGN_BOTTOM_RIGHT, -410, -10);
-  lv_obj_add_event_cb(btn_reg, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_regulations);
-  lv_obj_t *lbl_reg = lv_label_create(btn_reg);
-  lv_label_set_text(lbl_reg, "Obligations");
-  lv_obj_center(lbl_reg);
-
-  lv_obj_t *btn_menu = lv_btn_create(screen_overview);
-  lv_obj_set_size(btn_menu, 180, 48);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_simulation_menu);
-  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu Simulation");
-  lv_obj_center(lbl_menu);
-
-  sleep_switch = lv_switch_create(screen_overview);
-  lv_obj_align(sleep_switch, LV_ALIGN_BOTTOM_RIGHT, -20, -80);
+  sleep_switch = lv_switch_create(metrics_card);
+  lv_obj_set_style_align_self(sleep_switch, LV_ALIGN_END, 0);
   if (sleep_is_enabled()) {
     lv_obj_add_state(sleep_switch, LV_STATE_CHECKED);
   }
   lv_obj_add_event_cb(sleep_switch, sleep_switch_event_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
-  lv_obj_t *lbl_sleep = lv_label_create(screen_overview);
+  lv_obj_t *lbl_sleep = lv_label_create(metrics_card);
+  ui_theme_apply_caption(lbl_sleep);
   lv_label_set_text(lbl_sleep, "Veille automatique");
-  lv_obj_align_to(lbl_sleep, sleep_switch, LV_ALIGN_OUT_LEFT_MID, -10, 0);
+
+  lv_obj_t *btn_detail = ui_theme_create_button(
+      screen_overview, "Détails terrarium", UI_THEME_BUTTON_PRIMARY,
+      nav_button_event_cb, screen_detail);
+  lv_obj_set_width(btn_detail, 200);
+  lv_obj_align(btn_detail, LV_ALIGN_BOTTOM_LEFT, 16, -18);
+
+  lv_obj_t *btn_economy = ui_theme_create_button(
+      screen_overview, "Économie", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_economy);
+  lv_obj_set_width(btn_economy, 180);
+  lv_obj_align(btn_economy, LV_ALIGN_BOTTOM_MID, 0, -18);
+
+  lv_obj_t *btn_save = ui_theme_create_button(screen_overview, "Sauvegardes",
+                                              UI_THEME_BUTTON_SECONDARY,
+                                              nav_button_event_cb, screen_save);
+  lv_obj_set_width(btn_save, 180);
+  lv_obj_align(btn_save, LV_ALIGN_BOTTOM_RIGHT, -220, -18);
+
+  lv_obj_t *btn_reg = ui_theme_create_button(
+      screen_overview, "Obligations", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_regulations);
+  lv_obj_set_width(btn_reg, 180);
+  lv_obj_align(btn_reg, LV_ALIGN_BOTTOM_RIGHT, -410, -18);
+
+  lv_obj_t *btn_menu = ui_theme_create_button(
+      screen_overview, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_simulation_menu);
+  lv_obj_set_width(btn_menu, 200);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_RIGHT, -16, -18);
 }
 
 static void build_detail_screen(void) {
   screen_detail = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_detail, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_detail);
+  lv_obj_set_style_pad_all(screen_detail, 16, 0);
 
   detail_title = lv_label_create(screen_detail);
-  lv_obj_add_style(detail_title, &style_title, 0);
+  ui_theme_apply_title(detail_title);
   lv_obj_align(detail_title, LV_ALIGN_TOP_LEFT, 10, 10);
 
   detail_env_table = lv_table_create(screen_detail);
@@ -498,21 +440,22 @@ static void build_detail_screen(void) {
   lv_obj_align(detail_env_table, LV_ALIGN_TOP_LEFT, 10, 60);
   lv_table_set_column_count(detail_env_table, 2);
   lv_table_set_row_count(detail_env_table, 12);
-  lv_obj_add_style(detail_env_table, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+  ui_theme_apply_table(detail_env_table, UI_THEME_TABLE_DEFAULT);
 
   detail_status_label = lv_label_create(screen_detail);
-  lv_obj_add_style(detail_status_label, &style_value, 0);
+  ui_theme_apply_body(detail_status_label);
   lv_obj_align(detail_status_label, LV_ALIGN_TOP_LEFT, 10, 330);
 
   detail_status_icon = lv_img_create(screen_detail);
-  lv_img_set_src(detail_status_icon, &gImage_terrarium_ok);
+  lv_img_set_src(detail_status_icon,
+                 ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
   lv_obj_align_to(detail_status_icon, detail_status_label,
                   LV_ALIGN_OUT_LEFT_MID, -10, 0);
 
   populate_species_options();
 
   dropdown_species = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_species);
   lv_obj_set_width(dropdown_species, 260);
   lv_obj_align(dropdown_species, LV_ALIGN_TOP_RIGHT, -10, 10);
   if (species_options_buffer[0] != '\0') {
@@ -523,68 +466,68 @@ static void build_detail_screen(void) {
                       LV_EVENT_VALUE_CHANGED, NULL);
 
   dropdown_substrate = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_substrate);
   lv_dropdown_set_options(dropdown_substrate, substrate_options);
   lv_obj_align(dropdown_substrate, LV_ALIGN_TOP_RIGHT, -10, 60);
   lv_obj_add_event_cb(dropdown_substrate, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_SUBSTRATE);
 
   dropdown_heating = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_heating);
   lv_dropdown_set_options(dropdown_heating, heating_options);
   lv_obj_align(dropdown_heating, LV_ALIGN_TOP_RIGHT, -10, 120);
   lv_obj_add_event_cb(dropdown_heating, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_HEATING);
 
   dropdown_decor = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_decor);
   lv_dropdown_set_options(dropdown_decor, decor_options);
   lv_obj_align(dropdown_decor, LV_ALIGN_TOP_RIGHT, -10, 180);
   lv_obj_add_event_cb(dropdown_decor, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_DECOR);
 
   dropdown_uv = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_uv);
   lv_dropdown_set_options(dropdown_uv, uv_options);
   lv_obj_align(dropdown_uv, LV_ALIGN_TOP_RIGHT, -10, 240);
   lv_obj_add_event_cb(dropdown_uv, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_UV);
 
   dropdown_size = lv_dropdown_create(screen_detail);
+  ui_theme_apply_dropdown(dropdown_size);
   lv_dropdown_set_options(dropdown_size, size_options);
   lv_obj_align(dropdown_size, LV_ALIGN_TOP_RIGHT, -10, 300);
   lv_obj_add_event_cb(dropdown_size, config_dropdown_event_cb,
                       LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_SIZE);
 
-  lv_obj_t *btn_add_cert = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_add_cert, 220, 44);
+  lv_obj_t *btn_add_cert = ui_theme_create_button(
+      screen_detail, "Ajouter certificat", UI_THEME_BUTTON_PRIMARY,
+      add_certificate_event_cb, NULL);
+  lv_obj_set_width(btn_add_cert, 220);
   lv_obj_align(btn_add_cert, LV_ALIGN_TOP_RIGHT, -10, 360);
-  lv_obj_add_event_cb(btn_add_cert, add_certificate_event_cb, LV_EVENT_CLICKED,
-                      NULL);
-  lv_obj_t *lbl_cert = lv_label_create(btn_add_cert);
-  lv_label_set_text(lbl_cert, "Ajouter certificat");
-  lv_obj_center(lbl_cert);
 
   education_switch_detail = lv_switch_create(screen_detail);
   lv_obj_align(education_switch_detail, LV_ALIGN_TOP_RIGHT, -10, 420);
   lv_obj_add_event_cb(education_switch_detail, education_switch_event_cb,
                       LV_EVENT_VALUE_CHANGED, NULL);
   lv_obj_t *edu_label = lv_label_create(screen_detail);
+  ui_theme_apply_caption(edu_label);
   lv_label_set_text(edu_label, "Affichage pédagogique");
   lv_obj_align_to(edu_label, education_switch_detail, LV_ALIGN_OUT_LEFT_MID, -10,
                   0);
 
   detail_register_label = lv_label_create(screen_detail);
-  lv_obj_add_style(detail_register_label, &style_value, 0);
+  ui_theme_apply_body(detail_register_label);
   lv_obj_align(detail_register_label, LV_ALIGN_TOP_LEFT, 10, 360);
 
-  register_button = lv_btn_create(screen_detail);
-  lv_obj_set_size(register_button, 220, 44);
+  register_button = ui_theme_create_button(
+      screen_detail, "Consigner la cession", UI_THEME_BUTTON_PRIMARY,
+      register_button_event_cb, NULL);
+  lv_obj_set_width(register_button, 240);
   lv_obj_align(register_button, LV_ALIGN_TOP_LEFT, 10, 400);
-  lv_obj_add_event_cb(register_button, register_button_event_cb,
-                      LV_EVENT_CLICKED, NULL);
-  lv_obj_t *register_label = lv_label_create(register_button);
-  lv_label_set_text(register_label, "Consigner la cession");
-  lv_obj_center(register_label);
 
   detail_compliance_label = lv_label_create(screen_detail);
-  lv_obj_add_style(detail_compliance_label, &style_value, 0);
+  ui_theme_apply_body(detail_compliance_label);
   lv_obj_align(detail_compliance_label, LV_ALIGN_TOP_LEFT, 10, 440);
 
   detail_cert_table = lv_table_create(screen_detail);
@@ -592,80 +535,59 @@ static void build_detail_screen(void) {
   lv_obj_align(detail_cert_table, LV_ALIGN_BOTTOM_LEFT, 10, -150);
   lv_table_set_column_count(detail_cert_table, 2);
   lv_table_set_row_count(detail_cert_table, 6);
-  lv_obj_add_style(detail_cert_table, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+  ui_theme_apply_table(detail_cert_table, UI_THEME_TABLE_DEFAULT);
 
-  lv_obj_t *btn_feed_stock = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_feed_stock, 180, 44);
+  lv_obj_t *btn_feed_stock = ui_theme_create_button(
+      screen_detail, "+10 proies", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_FEED);
+  lv_obj_set_width(btn_feed_stock, 200);
   lv_obj_align(btn_feed_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -180);
-  lv_obj_add_event_cb(btn_feed_stock, inventory_button_event_cb,
-                      LV_EVENT_CLICKED, (void *)(uintptr_t)INVENTORY_ADD_FEED);
-  lv_obj_t *lbl_feed_stock = lv_label_create(btn_feed_stock);
-  lv_label_set_text(lbl_feed_stock, "+10 proies");
-  lv_obj_center(lbl_feed_stock);
 
-  lv_obj_t *btn_water_stock = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_water_stock, 180, 44);
+  lv_obj_t *btn_water_stock = ui_theme_create_button(
+      screen_detail, "+20 L eau", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_WATER);
+  lv_obj_set_width(btn_water_stock, 200);
   lv_obj_align(btn_water_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -130);
-  lv_obj_add_event_cb(btn_water_stock, inventory_button_event_cb,
-                      LV_EVENT_CLICKED, (void *)(uintptr_t)INVENTORY_ADD_WATER);
-  lv_obj_t *lbl_water_stock = lv_label_create(btn_water_stock);
-  lv_label_set_text(lbl_water_stock, "+20 L eau");
-  lv_obj_center(lbl_water_stock);
 
-  lv_obj_t *btn_substrate_stock = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_substrate_stock, 180, 44);
+  lv_obj_t *btn_substrate_stock = ui_theme_create_button(
+      screen_detail, "+2 substrats", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb,
+      (void *)(uintptr_t)INVENTORY_ADD_SUBSTRATE);
+  lv_obj_set_width(btn_substrate_stock, 200);
   lv_obj_align(btn_substrate_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -80);
-  lv_obj_add_event_cb(btn_substrate_stock, inventory_button_event_cb,
-                      LV_EVENT_CLICKED,
-                      (void *)(uintptr_t)INVENTORY_ADD_SUBSTRATE);
-  lv_obj_t *lbl_substrate = lv_label_create(btn_substrate_stock);
-  lv_label_set_text(lbl_substrate, "+2 substrats");
-  lv_obj_center(lbl_substrate);
 
-  lv_obj_t *btn_uv_stock = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_uv_stock, 180, 44);
+  lv_obj_t *btn_uv_stock = ui_theme_create_button(
+      screen_detail, "+1 UV", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_UV);
+  lv_obj_set_width(btn_uv_stock, 200);
   lv_obj_align(btn_uv_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -30);
-  lv_obj_add_event_cb(btn_uv_stock, inventory_button_event_cb, LV_EVENT_CLICKED,
-                      (void *)(uintptr_t)INVENTORY_ADD_UV);
-  lv_obj_t *lbl_uv = lv_label_create(btn_uv_stock);
-  lv_label_set_text(lbl_uv, "+1 UV");
-  lv_obj_center(lbl_uv);
 
-  lv_obj_t *btn_decor_stock = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_decor_stock, 180, 44);
-  lv_obj_align(btn_decor_stock, LV_ALIGN_BOTTOM_RIGHT, -200, -30);
-  lv_obj_add_event_cb(btn_decor_stock, inventory_button_event_cb,
-                      LV_EVENT_CLICKED, (void *)(uintptr_t)INVENTORY_ADD_DECOR);
-  lv_obj_t *lbl_decor = lv_label_create(btn_decor_stock);
-  lv_label_set_text(lbl_decor, "+1 décor");
-  lv_obj_center(lbl_decor);
+  lv_obj_t *btn_decor_stock = ui_theme_create_button(
+      screen_detail, "+1 décor", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_DECOR);
+  lv_obj_set_width(btn_decor_stock, 200);
+  lv_obj_align(btn_decor_stock, LV_ALIGN_BOTTOM_RIGHT, -220, -30);
 
-  lv_obj_t *btn_back = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_back, 160, 44);
+  lv_obj_t *btn_back = ui_theme_create_button(
+      screen_detail, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_overview);
+  lv_obj_set_width(btn_back, 180);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-  lv_obj_add_event_cb(btn_back, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_overview);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
-  lv_label_set_text(lbl_back, "Retour");
-  lv_obj_center(lbl_back);
 
-  lv_obj_t *btn_menu = lv_btn_create(screen_detail);
-  lv_obj_set_size(btn_menu, 180, 44);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 190, -10);
-  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_simulation_menu);
-  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu Simulation");
-  lv_obj_center(lbl_menu);
+  lv_obj_t *btn_menu = ui_theme_create_button(
+      screen_detail, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_simulation_menu);
+  lv_obj_set_width(btn_menu, 200);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 210, -10);
 }
 
 static void build_economy_screen(void) {
   screen_economy = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_economy, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_economy);
+  lv_obj_set_style_pad_all(screen_economy, 16, 0);
 
   lv_obj_t *title = lv_label_create(screen_economy);
-  lv_obj_add_style(title, &style_title, 0);
+  ui_theme_apply_title(title);
   lv_label_set_text(title, "Synthèse économique");
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
 
@@ -692,103 +614,84 @@ static void build_economy_screen(void) {
   lv_obj_align(economy_table, LV_ALIGN_BOTTOM_LEFT, 10, -70);
   lv_table_set_column_count(economy_table, 4);
   lv_table_set_row_count(economy_table, 6);
-  lv_obj_add_style(economy_table, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+  ui_theme_apply_table(economy_table, UI_THEME_TABLE_DEFAULT);
 
   economy_summary_label = lv_label_create(screen_economy);
-  lv_obj_add_style(economy_summary_label, &style_value, 0);
+  ui_theme_apply_body(economy_summary_label);
   lv_obj_align(economy_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -10);
 
-  lv_obj_t *btn_menu = lv_btn_create(screen_economy);
-  lv_obj_set_size(btn_menu, 180, 44);
+  lv_obj_t *btn_menu = ui_theme_create_button(
+      screen_economy, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_simulation_menu);
+  lv_obj_set_width(btn_menu, 200);
   lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -60);
-  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_simulation_menu);
-  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu Simulation");
-  lv_obj_center(lbl_menu);
 
-  lv_obj_t *btn_back = lv_btn_create(screen_economy);
-  lv_obj_set_size(btn_back, 160, 44);
+  lv_obj_t *btn_back = ui_theme_create_button(
+      screen_economy, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_overview);
+  lv_obj_set_width(btn_back, 180);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-  lv_obj_add_event_cb(btn_back, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_overview);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
-  lv_label_set_text(lbl_back, "Retour");
-  lv_obj_center(lbl_back);
 }
 
 static void build_save_screen(void) {
   screen_save = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_save, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_save);
+  lv_obj_set_style_pad_all(screen_save, 16, 0);
 
   lv_obj_t *title = lv_label_create(screen_save);
-  lv_obj_add_style(title, &style_title, 0);
+  ui_theme_apply_title(title);
   lv_label_set_text(title, "Gestion des sauvegardes");
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
 
   save_slot_dropdown = lv_dropdown_create(screen_save);
   lv_dropdown_set_options(save_slot_dropdown, slot_options);
+  ui_theme_apply_dropdown(save_slot_dropdown);
   lv_obj_align(save_slot_dropdown, LV_ALIGN_TOP_LEFT, 10, 60);
   lv_obj_add_event_cb(save_slot_dropdown, save_slot_event_cb,
                       LV_EVENT_VALUE_CHANGED, NULL);
 
   save_status_label = lv_label_create(screen_save);
-  lv_obj_add_style(save_status_label, &style_value, 0);
+  ui_theme_apply_body(save_status_label);
   lv_obj_align(save_status_label, LV_ALIGN_TOP_LEFT, 10, 110);
 
-  lv_obj_t *btn_save = lv_btn_create(screen_save);
-  lv_obj_set_size(btn_save, 200, 48);
+  lv_obj_t *btn_save = ui_theme_create_button(
+      screen_save, "Sauvegarder maintenant", UI_THEME_BUTTON_PRIMARY,
+      save_action_event_cb, (void *)(uintptr_t)SAVE_ACTION_SAVE);
+  lv_obj_set_width(btn_save, 240);
   lv_obj_align(btn_save, LV_ALIGN_TOP_LEFT, 10, 160);
-  lv_obj_add_event_cb(btn_save, save_action_event_cb, LV_EVENT_CLICKED,
-                      (void *)(uintptr_t)SAVE_ACTION_SAVE);
-  lv_obj_t *lbl_save = lv_label_create(btn_save);
-  lv_label_set_text(lbl_save, "Sauvegarder maintenant");
-  lv_obj_center(lbl_save);
 
-  lv_obj_t *btn_load = lv_btn_create(screen_save);
-  lv_obj_set_size(btn_load, 200, 48);
+  lv_obj_t *btn_load = ui_theme_create_button(
+      screen_save, "Charger le slot", UI_THEME_BUTTON_SECONDARY,
+      save_action_event_cb, (void *)(uintptr_t)SAVE_ACTION_LOAD);
+  lv_obj_set_width(btn_load, 240);
   lv_obj_align(btn_load, LV_ALIGN_TOP_LEFT, 10, 220);
-  lv_obj_add_event_cb(btn_load, save_action_event_cb, LV_EVENT_CLICKED,
-                      (void *)(uintptr_t)SAVE_ACTION_LOAD);
-  lv_obj_t *lbl_load = lv_label_create(btn_load);
-  lv_label_set_text(lbl_load, "Charger le slot");
-  lv_obj_center(lbl_load);
 
-  lv_obj_t *btn_reset = lv_btn_create(screen_save);
-  lv_obj_set_size(btn_reset, 220, 48);
+  lv_obj_t *btn_reset = ui_theme_create_button(
+      screen_save, "Réinitialiser les compteurs", UI_THEME_BUTTON_SECONDARY,
+      save_action_event_cb, (void *)(uintptr_t)SAVE_ACTION_RESET_STATS);
+  lv_obj_set_width(btn_reset, 260);
   lv_obj_align(btn_reset, LV_ALIGN_TOP_LEFT, 10, 280);
-  lv_obj_add_event_cb(btn_reset, save_action_event_cb, LV_EVENT_CLICKED,
-                      (void *)(uintptr_t)SAVE_ACTION_RESET_STATS);
-  lv_obj_t *lbl_reset = lv_label_create(btn_reset);
-  lv_label_set_text(lbl_reset, "Réinitialiser les compteurs");
-  lv_obj_center(lbl_reset);
 
-  lv_obj_t *btn_menu = lv_btn_create(screen_save);
-  lv_obj_set_size(btn_menu, 180, 48);
+  lv_obj_t *btn_menu = ui_theme_create_button(
+      screen_save, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_simulation_menu);
+  lv_obj_set_width(btn_menu, 200);
   lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_simulation_menu);
-  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu Simulation");
-  lv_obj_center(lbl_menu);
 
-  lv_obj_t *btn_back = lv_btn_create(screen_save);
-  lv_obj_set_size(btn_back, 160, 48);
+  lv_obj_t *btn_back = ui_theme_create_button(
+      screen_save, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_overview);
+  lv_obj_set_width(btn_back, 180);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-  lv_obj_add_event_cb(btn_back, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_overview);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
-  lv_label_set_text(lbl_back, "Retour");
-  lv_obj_center(lbl_back);
 }
 
 static void build_regulation_screen(void) {
   screen_regulations = lv_obj_create(NULL);
-  lv_obj_clear_flag(screen_regulations, LV_OBJ_FLAG_SCROLLABLE);
+  ui_theme_apply_screen(screen_regulations);
+  lv_obj_set_style_pad_all(screen_regulations, 16, 0);
 
   lv_obj_t *title = lv_label_create(screen_regulations);
-  lv_obj_add_style(title, &style_title, 0);
+  ui_theme_apply_title(title);
   lv_label_set_text(title, "Référentiel réglementaire");
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
 
@@ -797,51 +700,41 @@ static void build_regulation_screen(void) {
   lv_obj_align(regulations_table, LV_ALIGN_TOP_LEFT, 10, 60);
   lv_table_set_column_count(regulations_table, 4);
   lv_table_set_row_count(regulations_table, 1);
-  lv_obj_add_style(regulations_table, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+  ui_theme_apply_table(regulations_table, UI_THEME_TABLE_DEFAULT);
 
   regulations_alert_table = lv_table_create(screen_regulations);
   lv_obj_set_size(regulations_alert_table, 700, 160);
   lv_obj_align(regulations_alert_table, LV_ALIGN_TOP_LEFT, 10, 300);
   lv_table_set_column_count(regulations_alert_table, 3);
   lv_table_set_row_count(regulations_alert_table, 1);
-  lv_obj_add_style(regulations_alert_table, &style_table_header,
-                   LV_PART_ITEMS | LV_STATE_DEFAULT);
+  ui_theme_apply_table(regulations_alert_table, UI_THEME_TABLE_DEFAULT);
 
   regulations_summary_label = lv_label_create(screen_regulations);
-  lv_obj_add_style(regulations_summary_label, &style_value, 0);
+  ui_theme_apply_body(regulations_summary_label);
   lv_obj_align(regulations_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -80);
 
-  lv_obj_t *btn_export = lv_btn_create(screen_regulations);
-  lv_obj_set_size(btn_export, 240, 48);
-  lv_obj_align(btn_export, LV_ALIGN_BOTTOM_LEFT, 10, -30);
-  lv_obj_add_event_cb(btn_export, export_report_event_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_t *lbl_export = lv_label_create(btn_export);
-  lv_label_set_text(lbl_export, "Exporter rapport microSD");
-  lv_obj_center(lbl_export);
-
   regulations_export_label = lv_label_create(screen_regulations);
-  lv_obj_add_style(regulations_export_label, &style_value, 0);
+  ui_theme_apply_body(regulations_export_label);
   lv_label_set_text(regulations_export_label, "Aucun export réalisé");
   lv_obj_align(regulations_export_label, LV_ALIGN_BOTTOM_LEFT, 260, -30);
 
-  lv_obj_t *btn_menu = lv_btn_create(screen_regulations);
-  lv_obj_set_size(btn_menu, 180, 48);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-  lv_obj_add_event_cb(btn_menu, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_simulation_menu);
-  lv_obj_t *lbl_menu = lv_label_create(btn_menu);
-  lv_label_set_text(lbl_menu, "Menu Simulation");
-  lv_obj_center(lbl_menu);
+  lv_obj_t *btn_export = ui_theme_create_button(
+      screen_regulations, "Exporter rapport microSD",
+      UI_THEME_BUTTON_PRIMARY, export_report_event_cb, NULL);
+  lv_obj_set_width(btn_export, 260);
+  lv_obj_align(btn_export, LV_ALIGN_BOTTOM_LEFT, 10, -30);
 
-  lv_obj_t *btn_back = lv_btn_create(screen_regulations);
-  lv_obj_set_size(btn_back, 160, 48);
+  lv_obj_t *btn_menu = ui_theme_create_button(
+      screen_regulations, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_simulation_menu);
+  lv_obj_set_width(btn_menu, 200);
+  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+
+  lv_obj_t *btn_back = ui_theme_create_button(
+      screen_regulations, "Retour", UI_THEME_BUTTON_SECONDARY,
+      nav_button_event_cb, screen_overview);
+  lv_obj_set_width(btn_back, 180);
   lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-  lv_obj_add_event_cb(btn_back, nav_button_event_cb, LV_EVENT_CLICKED,
-                      screen_overview);
-  lv_obj_t *lbl_back = lv_label_create(btn_back);
-  lv_label_set_text(lbl_back, "Retour");
-  lv_obj_center(lbl_back);
 }
 
 void reptile_game_start(esp_lcd_panel_handle_t panel,
@@ -849,7 +742,6 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   (void)panel;
   (void)touch;
   s_game_active = true;
-  init_styles();
 
   build_simulation_menu_screen();
 
@@ -896,7 +788,6 @@ void reptile_game_stop(void) {
     lv_obj_del(screen_regulations);
     screen_regulations = NULL;
   }
-  destroy_styles();
 }
 
 void reptile_tick(lv_timer_t *timer) { facility_timer_cb(timer); }
@@ -1051,9 +942,10 @@ static void update_overview_screen(void) {
                         g_facility.alerts_active, g_facility.pathology_active,
                         g_facility.compliance_alerts);
   if (overview_status_icon) {
-    lv_img_set_src(overview_status_icon, g_facility.alerts_active
-                                            ? &gImage_terrarium_alert
-                                            : &gImage_terrarium_ok);
+    lv_img_set_src(overview_status_icon,
+                   ui_theme_get_icon(g_facility.alerts_active
+                                         ? UI_THEME_ICON_TERRARIUM_ALERT
+                                         : UI_THEME_ICON_TERRARIUM_OK));
   }
   lv_label_set_text_fmt(
       label_inventory,
@@ -1109,7 +1001,8 @@ static void update_detail_screen(void) {
     lv_label_set_text(detail_status_label,
                       "Attribuer une espèce pour configurer ce terrarium");
     if (detail_status_icon) {
-      lv_img_set_src(detail_status_icon, &gImage_terrarium_ok);
+    lv_img_set_src(detail_status_icon,
+                   ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
     }
     if (detail_env_table) {
       static const char *kLabels[12] = {
@@ -1223,7 +1116,8 @@ static void update_detail_screen(void) {
     bool warn = terrarium->pathology != REPTILE_PATHOLOGY_NONE ||
                 terrarium->incident != REPTILE_INCIDENT_NONE;
     lv_img_set_src(detail_status_icon,
-                   warn ? &gImage_terrarium_alert : &gImage_terrarium_ok);
+                   ui_theme_get_icon(warn ? UI_THEME_ICON_TERRARIUM_ALERT
+                                         : UI_THEME_ICON_TERRARIUM_OK));
   }
 
   load_dropdown_value(dropdown_substrate, substrate_options,

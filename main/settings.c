@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include "ui_theme.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,6 +63,7 @@ extern lv_obj_t *menu_screen;
 static lv_obj_t *create_label(lv_obj_t *parent, const char *txt)
 {
     lv_obj_t *label = lv_label_create(parent);
+    ui_theme_apply_body(label);
     lv_label_set_text(label, txt);
     return label;
 }
@@ -424,10 +426,11 @@ static void save_btn_cb(lv_event_t *e)
 void settings_screen_show(void)
 {
     screen = lv_obj_create(NULL);
+    ui_theme_apply_screen(screen);
     lv_obj_set_size(screen, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(screen, 10, 0);
-    lv_obj_set_style_pad_gap(screen, 12, 0);
+    lv_obj_set_style_pad_all(screen, 16, 0);
+    lv_obj_set_style_pad_gap(screen, 16, 0);
 
     lv_obj_t *tv = lv_tabview_create(screen);
     lv_tabview_set_tab_bar_position(tv, LV_DIR_TOP);
@@ -462,6 +465,7 @@ void settings_screen_show(void)
 
     create_label(tab_general, "Niveau log");
     dd_log = lv_dropdown_create(tab_general);
+    ui_theme_apply_dropdown(dd_log);
     lv_dropdown_set_options_static(dd_log,
                                    "NONE\nERROR\nWARN\nINFO\nDEBUG\nVERBOSE");
     lv_dropdown_set_selected(dd_log, g_settings.log_level);
@@ -486,13 +490,11 @@ void settings_screen_show(void)
 
     settings_ui_throttle();
 
-    lv_obj_t *btn = lv_btn_create(screen);
-    lv_obj_set_size(btn, 200, 50);
-    lv_obj_add_event_cb(btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *btn = ui_theme_create_button(screen, "Sauver",
+                                           UI_THEME_BUTTON_PRIMARY, save_btn_cb,
+                                           NULL);
+    lv_obj_set_width(btn, 220);
     lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, "Sauver");
-    lv_obj_center(label);
 
     lv_scr_load(screen);
 }
