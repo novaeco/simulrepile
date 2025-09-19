@@ -29,6 +29,7 @@
 
 LV_FONT_DECLARE(lv_font_montserrat_24);
 LV_FONT_DECLARE(lv_font_montserrat_20);
+LV_FONT_DECLARE(lv_font_montserrat_16);
 
 #define TERRARIUM_GRID_SIZE 5U
 #define FACILITY_UPDATE_PERIOD_MS 1000U
@@ -105,6 +106,7 @@ static lv_style_t style_title;
 static lv_style_t style_table_header;
 static lv_style_t style_cell_selected;
 static lv_style_t style_value;
+static lv_style_t style_overview_cell;
 
 static lv_timer_t *facility_timer;
 static uint32_t last_tick_ms;
@@ -226,6 +228,12 @@ static void init_styles(void) {
 
   lv_style_init(&style_value);
   lv_style_set_text_font(&style_value, &lv_font_montserrat_20);
+
+  lv_style_init(&style_overview_cell);
+  lv_style_set_text_font(&style_overview_cell, &lv_font_montserrat_16);
+  lv_style_set_pad_all(&style_overview_cell, 4);
+  lv_style_set_text_line_space(&style_overview_cell, 2);
+  lv_style_set_text_align(&style_overview_cell, LV_TEXT_ALIGN_CENTER);
 }
 
 static void destroy_styles(void) {
@@ -233,6 +241,7 @@ static void destroy_styles(void) {
   lv_style_reset(&style_table_header);
   lv_style_reset(&style_cell_selected);
   lv_style_reset(&style_value);
+  lv_style_reset(&style_overview_cell);
 }
 
 static void simulation_set_status(const char *fmt, ...) {
@@ -383,10 +392,16 @@ static void build_overview_screen(void) {
   lv_table_set_row_count(table_terrariums, TERRARIUM_GRID_SIZE);
   lv_obj_add_style(table_terrariums, &style_table_header,
                    LV_PART_ITEMS | LV_STATE_DEFAULT);
+  lv_obj_add_style(table_terrariums, &style_overview_cell,
+                   LV_PART_ITEMS | LV_STATE_DEFAULT);
   lv_obj_add_style(table_terrariums, &style_cell_selected,
                    LV_PART_ITEMS | LV_STATE_USER_1);
   lv_obj_add_event_cb(table_terrariums, table_event_cb, LV_EVENT_VALUE_CHANGED,
                       NULL);
+
+  for (uint32_t col = 0; col < TERRARIUM_GRID_SIZE; ++col) {
+    lv_table_set_col_width(table_terrariums, col, 120);
+  }
 
   lv_obj_t *icon = lv_img_create(screen_overview);
   lv_img_set_src(icon, icon_currency);
@@ -954,16 +969,16 @@ static void publish_can_frame(void) {
 static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
   char buffer[96];
   if (index >= g_facility.terrarium_count) {
-    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n--",
-             (uint32_t)(index + 1U));
+    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n--\n--\n%s",
+             (uint32_t)(index + 1U), LV_SYMBOL_MINUS);
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility, (uint8_t)index);
   if (!terrarium || !terrarium->occupied) {
-    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\nDisponible",
-             (uint32_t)(index + 1U));
+    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\nDisponible\nLibre\n%s",
+             (uint32_t)(index + 1U), LV_SYMBOL_MINUS);
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
@@ -974,8 +989,8 @@ static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
        terrarium->incident != REPTILE_INCIDENT_NONE)
           ? LV_SYMBOL_WARNING
           : LV_SYMBOL_OK;
-  snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n%s\n%s",
-           (uint32_t)(index + 1U), terrarium->species.name, alert);
+  snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n%s\n%s\n%s",
+           (uint32_t)(index + 1U), terrarium->species.name, stage, alert);
   lv_table_set_cell_value(table_terrariums, row, col, buffer);
 }
 
