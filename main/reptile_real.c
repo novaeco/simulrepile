@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include "settings.h"
 #include "logging.h"
+#include "ui_theme.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -86,13 +87,9 @@ static void feed_task(void *arg)
 
 static lv_obj_t *create_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb, void *user_data, lv_obj_t **label_out)
 {
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, text);
-    lv_obj_center(label);
+    lv_obj_t *btn = ui_theme_create_button(parent, text, UI_THEME_BUTTON_SECONDARY, cb, user_data);
     if (label_out) {
-        *label_out = label;
+        *label_out = lv_obj_get_child(btn, 0);
     }
     return btn;
 }
@@ -127,15 +124,16 @@ static void init_terrarium_ui(size_t index,
 {
     memset(ui, 0, sizeof(*ui));
     ui->index = index;
-    ui->card = lv_obj_create(parent);
+    ui->card = ui_theme_create_card(parent);
     lv_obj_set_width(ui->card, LV_PCT(100));
-    lv_obj_set_style_pad_all(ui->card, 12, 0);
-    lv_obj_set_style_pad_gap(ui->card, 8, 0);
+    lv_obj_set_style_pad_all(ui->card, 20, 0);
+    lv_obj_set_style_pad_gap(ui->card, 12, 0);
     lv_obj_set_flex_flow(ui->card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(ui->card, LV_SCROLLBAR_MODE_OFF);
 
     ui->title = lv_label_create(ui->card);
     lv_label_set_text(ui->title, cfg->name[0] ? cfg->name : "Terrarium");
+    ui_theme_apply_title(ui->title);
 
     lv_obj_t *row = lv_obj_create(ui->card);
     lv_obj_set_width(row, LV_PCT(100));
@@ -164,15 +162,19 @@ static void init_terrarium_ui(size_t index,
     ui->btn_uv = create_button(row, "UV", uv_btn_cb, ui, &ui->btn_uv_label);
 
     ui->uv_state_label = lv_label_create(ui->card);
+    ui_theme_apply_caption(ui->uv_state_label);
     lv_label_set_text(ui->uv_state_label, "UV: auto");
 
     ui->status_label = lv_label_create(ui->card);
+    ui_theme_apply_body(ui->status_label);
     lv_label_set_text(ui->status_label, "");
 
     ui->energy_label = lv_label_create(ui->card);
+    ui_theme_apply_body(ui->energy_label);
     lv_label_set_text(ui->energy_label, "");
 
     ui->alarm_label = lv_label_create(ui->card);
+    ui_theme_apply_body(ui->alarm_label);
     lv_label_set_text(ui->alarm_label, "");
 
     ui->chart = lv_chart_create(ui->card);
@@ -441,19 +443,21 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
     }
 
     screen = lv_obj_create(NULL);
+    ui_theme_apply_screen(screen);
     lv_obj_set_size(screen, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(screen, 10, 0);
-    lv_obj_set_style_pad_gap(screen, 12, 0);
+    lv_obj_set_style_pad_all(screen, 16, 0);
+    lv_obj_set_style_pad_gap(screen, 14, 0);
 
-    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_t *header = ui_theme_create_card(screen);
     lv_obj_set_width(header, LV_PCT(100));
-    lv_obj_set_style_pad_all(header, 8, 0);
+    lv_obj_set_style_pad_all(header, 16, 0);
     lv_obj_set_style_pad_gap(header, 12, 0);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
     lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
 
     lv_obj_t *title = lv_label_create(header);
+    ui_theme_apply_title(title);
     lv_label_set_text(title, "Mode réel");
 
     lv_obj_t *spacer = lv_obj_create(header);
@@ -463,9 +467,13 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
     create_button(header, "Menu", menu_btn_cb, NULL, NULL);
 
     feed_status_label = lv_label_create(screen);
+    ui_theme_apply_body(feed_status_label);
     update_feed_status();
 
-    create_button(screen, "Nourrir", feed_btn_cb, NULL, NULL);
+    lv_obj_t *feed_btn = ui_theme_create_button(screen, "Nourrir",
+                                                UI_THEME_BUTTON_PRIMARY,
+                                                feed_btn_cb, NULL);
+    lv_obj_set_width(feed_btn, 200);
 
     const reptile_env_config_t *cfg = &g_settings.env_config;
     s_ui_count = cfg->terrarium_count;

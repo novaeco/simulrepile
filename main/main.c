@@ -38,6 +38,7 @@
 #include "settings.h"     // Application settings
 #include "game_mode.h"
 #include "sdkconfig.h"
+#include "ui_theme.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -478,6 +479,7 @@ void app_main() {
 
   // Initialize LVGL with the panel and touch handles
   ESP_ERROR_CHECK(lvgl_port_init(panel_handle, tp_handle));
+  ui_theme_init();
 
   // Initialize SD card (retry until available)
   wait_for_sd_card();
@@ -488,31 +490,35 @@ void app_main() {
   if (lvgl_port_lock(-1)) {
     // Create main menu screen
     menu_screen = lv_obj_create(NULL);
+    ui_theme_apply_screen(menu_screen);
+    lv_obj_set_style_pad_all(menu_screen, 32, 0);
 
-    lv_obj_t *btn_game = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_game, 200, 50);
-    lv_obj_align(btn_game, LV_ALIGN_CENTER, 0, -60);
-    lv_obj_add_event_cb(btn_game, menu_btn_game_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *label = lv_label_create(btn_game);
-    lv_label_set_text(label, "Mode Jeu");
-    lv_obj_center(label);
+    lv_obj_t *menu_card = ui_theme_create_card(menu_screen);
+    lv_obj_set_width(menu_card, 360);
+    lv_obj_align(menu_card, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_flex_flow(menu_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(menu_card, 20, 0);
 
-    lv_obj_t *btn_real = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_real, 200, 50);
-    lv_obj_align(btn_real, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_event_cb(btn_real, menu_btn_real_cb, LV_EVENT_CLICKED, NULL);
-    label = lv_label_create(btn_real);
-    lv_label_set_text(label, "Mode R\u00e9el");
-    lv_obj_center(label);
+    lv_obj_t *title = lv_label_create(menu_card);
+    ui_theme_apply_title(title);
+    lv_obj_set_width(title, LV_PCT(100));
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(title, "Sélection du mode");
 
-    lv_obj_t *btn_settings = lv_btn_create(menu_screen);
-    lv_obj_set_size(btn_settings, 200, 50);
-    lv_obj_align(btn_settings, LV_ALIGN_CENTER, 0, 60);
-    lv_obj_add_event_cb(btn_settings, menu_btn_settings_cb, LV_EVENT_CLICKED,
-                        NULL);
-    label = lv_label_create(btn_settings);
-    lv_label_set_text(label, "Param\u00e8tres");
-    lv_obj_center(label);
+    lv_obj_t *btn_game =
+        ui_theme_create_button(menu_card, "Mode Jeu", UI_THEME_BUTTON_PRIMARY,
+                               menu_btn_game_cb, NULL);
+    lv_obj_set_width(btn_game, LV_PCT(100));
+
+    lv_obj_t *btn_real =
+        ui_theme_create_button(menu_card, "Mode Réel", UI_THEME_BUTTON_PRIMARY,
+                               menu_btn_real_cb, NULL);
+    lv_obj_set_width(btn_real, LV_PCT(100));
+
+    lv_obj_t *btn_settings = ui_theme_create_button(
+        menu_card, "Paramètres", UI_THEME_BUTTON_SECONDARY,
+        menu_btn_settings_cb, NULL);
+    lv_obj_set_width(btn_settings, LV_PCT(100));
 
     uint8_t last_mode = APP_MODE_MENU_OVERRIDE;
     bool has_persisted_mode = false;
@@ -554,6 +560,7 @@ void app_main() {
       }
 
       lv_obj_t *hint_label = lv_label_create(menu_screen);
+      ui_theme_apply_body(hint_label);
       lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
       lv_obj_set_width(hint_label, 300);
       lv_label_set_text_fmt(hint_label,

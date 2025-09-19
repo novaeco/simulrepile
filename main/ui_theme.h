@@ -1,0 +1,46 @@
+#pragma once
+
+#include "lvgl.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+  UI_THEME_ICON_TERRARIUM_OK = 0,
+  UI_THEME_ICON_TERRARIUM_ALERT,
+  UI_THEME_ICON_CURRENCY,
+} ui_theme_icon_t;
+
+typedef enum {
+  UI_THEME_BUTTON_PRIMARY = 0,
+  UI_THEME_BUTTON_SECONDARY,
+} ui_theme_button_kind_t;
+
+typedef enum {
+  UI_THEME_TABLE_DEFAULT = 0,
+  UI_THEME_TABLE_DENSE,
+} ui_theme_table_mode_t;
+
+void ui_theme_init(void);
+void ui_theme_apply_screen(lv_obj_t *screen);
+
+lv_obj_t *ui_theme_create_card(lv_obj_t *parent);
+
+void ui_theme_apply_title(lv_obj_t *label);
+void ui_theme_apply_body(lv_obj_t *label);
+void ui_theme_apply_caption(lv_obj_t *label);
+
+lv_obj_t *ui_theme_create_button(lv_obj_t *parent, const char *text,
+                                 ui_theme_button_kind_t kind,
+                                 lv_event_cb_t event_cb, void *user_data);
+
+void ui_theme_apply_table(lv_obj_t *table, ui_theme_table_mode_t mode);
+void ui_theme_apply_dropdown(lv_obj_t *dd);
+
+const lv_image_dsc_t *ui_theme_get_icon(ui_theme_icon_t icon);
+
+#ifdef __cplusplus
+}
+#endif
+

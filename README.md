@@ -32,6 +32,36 @@ contrôleur tactile capacitif GT911 gère l'interaction utilisateur.
 Les profils d'espèces paramétriques utilisés par le moteur sont décrits dans
 `assets/species_profiles.json`.
 
+## Thème LVGL « Verdant Terrarium »
+
+L'interface graphique s'appuie désormais sur un thème mutualisé accessible via
+`main/ui_theme.c`. Le thème applique un fond dégradé (`0xF3EFE2 → 0xE2F1E5`)
+évoquant la canopée, une palette primaire turquoise (`#2A9D8F`), des accents
+forester (`#3A7D60`) et des teintes sable pour les arrière-plans de cartes.
+Les typos utilisées sont `lv_font_montserrat_24/20/16` :
+
+| Style | API | Usage | Caractéristiques |
+|-------|-----|-------|------------------|
+| Titre | `ui_theme_apply_title()` | entêtes d'écran, montants financiers | Montserrat 24, `#204D3B`. |
+| Texte principal | `ui_theme_apply_body()` | libellés, données tabulaires | Montserrat 20, `#2F4F43`, interligne 4 px. |
+| Légende | `ui_theme_apply_caption()` | statuts, info bulles | Montserrat 16, `#4C6F52`. |
+| Cartes | `ui_theme_create_card()` | panneaux, en-têtes, widgets terrariums | Rayon 18 px, ombre douce, fond crème dégradé |
+| Boutons primaires | `ui_theme_create_button(..., UI_THEME_BUTTON_PRIMARY, …)` | actions critiques (Sauvegarder, Nourrir…) | Dégradé turquoise, texte blanc, ombre 8 px |
+| Boutons secondaires | `ui_theme_create_button(..., UI_THEME_BUTTON_SECONDARY, …)` | navigation, toggles | Fond clair, bord vert `#3A7D60`, texte `#2F4F43` |
+| Tableaux | `ui_theme_apply_table()` | listes, tableaux réglementaires | En-tête vert pastel, cellules denses, surbrillance accent |
+| Menus déroulants | `ui_theme_apply_dropdown()` | sélecteurs de slot, configuration terrarium | Rayon 12 px, bord `#8FBC8F` |
+
+Les icônes terrarium (OK/alerte) et monnaie sont centralisées par
+`ui_theme_get_icon(UI_THEME_ICON_*)`, garantissant une cohérence d'usage.
+Toutes les scènes (`menu`, écrans Simulation/Économie/Réglementation, mode réel,
+paramètres) appliquent le style de fond via `ui_theme_apply_screen()` et les
+composants utilisent les helpers (`ui_theme_create_card`, `ui_theme_create_button`).
+
+Un script d'accompagnement pour LVGL Theme Designer est fourni dans
+`tools/ui_theme_designer.lua`. Il instancie les styles principaux (fond, cartes,
+boutons, tableaux) et permet de tester l'esthétique dans l'outil officiel via
+`dofile("ui_theme_designer.lua")(lvgl)`.
+
 ## Logique d'élevage
 
 La logique métier est regroupée dans `components/reptile_logic/` :
