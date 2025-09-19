@@ -966,19 +966,33 @@ static void publish_can_frame(void) {
   }
 }
 
+static void format_overview_cell(char *buffer, size_t size, uint32_t index,
+                                 const char *line2, const char *line3,
+                                 const char *line4) {
+  if (!line2)
+    line2 = "";
+  if (!line3)
+    line3 = "";
+  if (!line4)
+    line4 = "";
+  snprintf(buffer, size,
+           "T%02" PRIu32 "\n%s\n%s\n%s",
+           (uint32_t)(index + 1U), line2, line3, line4);
+}
+
 static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
   char buffer[96];
   if (index >= g_facility.terrarium_count) {
-    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n--\n--\n%s",
-             (uint32_t)(index + 1U), LV_SYMBOL_MINUS);
+    format_overview_cell(buffer, sizeof(buffer), index, "--", "--",
+                         LV_SYMBOL_MINUS);
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility, (uint8_t)index);
   if (!terrarium || !terrarium->occupied) {
-    snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\nDisponible\nLibre\n%s",
-             (uint32_t)(index + 1U), LV_SYMBOL_MINUS);
+    format_overview_cell(buffer, sizeof(buffer), index, "Disponible", "Libre",
+                         LV_SYMBOL_MINUS);
     lv_table_set_cell_value(table_terrariums, row, col, buffer);
     return;
   }
@@ -989,8 +1003,8 @@ static void update_table_cell(uint32_t index, uint32_t row, uint32_t col) {
        terrarium->incident != REPTILE_INCIDENT_NONE)
           ? LV_SYMBOL_WARNING
           : LV_SYMBOL_OK;
-  snprintf(buffer, sizeof(buffer), "T%02" PRIu32 "\n%s\n%s\n%s",
-           (uint32_t)(index + 1U), terrarium->species.name, stage, alert);
+  format_overview_cell(buffer, sizeof(buffer), index, terrarium->species.name,
+                       stage, alert);
   lv_table_set_cell_value(table_terrariums, row, col, buffer);
 }
 
@@ -1108,14 +1122,7 @@ static void update_detail_screen(void) {
         lv_table_set_cell_value(detail_env_table, row, 1, "-");
       }
     }
-    if (detail_cert_table) {
-      lv_table_set_row_count(detail_cert_table, 2);
-      lv_table_set_cell_value(detail_cert_table, 0, 0, "Identifiant");
-      lv_table_set_cell_value(detail_cert_table, 0, 1, "Échéance");
-      lv_table_set_cell_value(detail_cert_table, 1, 0, "-");
-      lv_table_set_cell_value(detail_cert_table, 1, 1,
-                              "Aucun certificat enregistré");
-    }
+    update_certificate_table();
     if (detail_compliance_label) {
       lv_label_set_text(detail_compliance_label,
                         "Aucune conformité requise sans espèce");
@@ -1276,42 +1283,46 @@ static void update_certificate_table(void) {
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility,
                                            (uint8_t)selected_terrarium);
-  if (!terrarium || !terrarium->occupied) {
-    return;
+
+  uint32_t row_count = 2U;
+  if (terrarium && terrarium->occupied &&
+      terrarium->certificate_count + 1U > row_count) {
+    row_count = terrarium->certificate_count + 1U;
   }
-  lv_table_set_row_count(
-      detail_cert_table, MAX(2U, terrarium->certificate_count + 1U));
+  lv_table_set_row_count(detail_cert_table, row_count);
   lv_table_set_cell_value(detail_cert_table, 0, 0, "Identifiant");
   lv_table_set_cell_value(detail_cert_table, 0, 1, "Échéance");
-  if (terrarium->certificate_count == 0U) {
+
+  if (!terrarium || !terrarium->occupied ||
+      terrarium->certificate_count == 0U) {
     lv_table_set_cell_value(detail_cert_table, 1, 0,
                             "Aucun certificat enregistré");
     lv_table_set_cell_value(detail_cert_table, 1, 1, "–");
-  } else {
-    for (uint32_t i = 0; i < terrarium->certificate_count; ++i) {
-      const reptile_certificate_t *cert = &terrarium->certificates[i];
-      lv_table_set_cell_value(detail_cert_table, i + 1U, 0, cert->id);
-      if (cert->expiry_date == 0) {
-        lv_table_set_cell_value(detail_cert_table, i + 1U, 1, "Illimitée");
-      } else {
-        struct tm tm_buf;
-        localtime_r(&cert->expiry_date, &tm_buf);
-        char buf[32];
-        strftime(buf, sizeof(buf), "%d/%m/%Y", &tm_buf);
-        lv_table_set_cell_value(detail_cert_table, i + 1U, 1, buf);
-      }
+    for (uint32_t row = 2U; row < row_count; ++row) {
+      lv_table_set_cell_value(detail_cert_table, row, 0, "");
+      lv_table_set_cell_value(detail_cert_table, row, 1, "");
+    }
+    return;
+  }
+
+  for (uint32_t i = 0; i < terrarium->certificate_count; ++i) {
+    const reptile_certificate_t *cert = &terrarium->certificates[i];
+    lv_table_set_cell_value(detail_cert_table, i + 1U, 0, cert->id);
+    if (cert->expiry_date == 0) {
+      lv_table_set_cell_value(detail_cert_table, i + 1U, 1, "Illimitée");
+    } else {
+      struct tm tm_buf;
+      localtime_r(&cert->expiry_date, &tm_buf);
+      char buf[32];
+      strftime(buf, sizeof(buf), "%d/%m/%Y", &tm_buf);
+      lv_table_set_cell_value(detail_cert_table, i + 1U, 1, buf);
     }
   }
 
-  uint32_t row_cnt = lv_table_get_row_cnt(detail_cert_table);
-  uint32_t col_cnt = lv_table_get_col_cnt(detail_cert_table);
-  uint32_t first_unused_row =
-      (terrarium->certificate_count == 0U) ? 2U
-                                           : terrarium->certificate_count + 1U;
-  for (uint32_t row = first_unused_row; row < row_cnt; ++row) {
-    for (uint32_t col = 0; col < col_cnt; ++col) {
-      lv_table_set_cell_value(detail_cert_table, row, col, "");
-    }
+  for (uint32_t row = terrarium->certificate_count + 1U; row < row_count;
+       ++row) {
+    lv_table_set_cell_value(detail_cert_table, row, 0, "");
+    lv_table_set_cell_value(detail_cert_table, row, 1, "");
   }
 }
 
