@@ -1279,21 +1279,38 @@ static void update_certificate_table(void) {
   if (!terrarium || !terrarium->occupied) {
     return;
   }
-  lv_table_set_row_count(detail_cert_table,
-                       MAX(2U, terrarium->certificate_count + 1U));
+  lv_table_set_row_count(
+      detail_cert_table, MAX(2U, terrarium->certificate_count + 1U));
   lv_table_set_cell_value(detail_cert_table, 0, 0, "Identifiant");
   lv_table_set_cell_value(detail_cert_table, 0, 1, "Échéance");
-  for (uint32_t i = 0; i < terrarium->certificate_count; ++i) {
-    const reptile_certificate_t *cert = &terrarium->certificates[i];
-    lv_table_set_cell_value(detail_cert_table, i + 1U, 0, cert->id);
-    if (cert->expiry_date == 0) {
-      lv_table_set_cell_value(detail_cert_table, i + 1U, 1, "Illimitée");
-    } else {
-      struct tm tm_buf;
-      localtime_r(&cert->expiry_date, &tm_buf);
-      char buf[32];
-      strftime(buf, sizeof(buf), "%d/%m/%Y", &tm_buf);
-      lv_table_set_cell_value(detail_cert_table, i + 1U, 1, buf);
+  if (terrarium->certificate_count == 0U) {
+    lv_table_set_cell_value(detail_cert_table, 1, 0,
+                            "Aucun certificat enregistré");
+    lv_table_set_cell_value(detail_cert_table, 1, 1, "–");
+  } else {
+    for (uint32_t i = 0; i < terrarium->certificate_count; ++i) {
+      const reptile_certificate_t *cert = &terrarium->certificates[i];
+      lv_table_set_cell_value(detail_cert_table, i + 1U, 0, cert->id);
+      if (cert->expiry_date == 0) {
+        lv_table_set_cell_value(detail_cert_table, i + 1U, 1, "Illimitée");
+      } else {
+        struct tm tm_buf;
+        localtime_r(&cert->expiry_date, &tm_buf);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%d/%m/%Y", &tm_buf);
+        lv_table_set_cell_value(detail_cert_table, i + 1U, 1, buf);
+      }
+    }
+  }
+
+  uint32_t row_cnt = lv_table_get_row_cnt(detail_cert_table);
+  uint32_t col_cnt = lv_table_get_col_cnt(detail_cert_table);
+  uint32_t first_unused_row =
+      (terrarium->certificate_count == 0U) ? 2U
+                                           : terrarium->certificate_count + 1U;
+  for (uint32_t row = first_unused_row; row < row_cnt; ++row) {
+    for (uint32_t col = 0; col < col_cnt; ++col) {
+      lv_table_set_cell_value(detail_cert_table, row, col, "");
     }
   }
 }
