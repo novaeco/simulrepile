@@ -130,11 +130,17 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 
 ### Fallback CS microSD
 
-Par défaut, le projet active un fil de secours reliant la broche **GPIO34** de
+Par défaut, le projet active un fil de secours reliant la broche **GPIO15** de
 l'ESP32‑S3 directement à l'entrée **CS** du lecteur microSD. Cette modification
 matérielle contourne totalement le CH422G en cas de défaillance du bus I²C.
 
-1. Câbler GPIO34 (disponible sur le connecteur d'extension Waveshare) vers la
+> ⚠️ **Important** : lorsque la PSRAM octale est activée (configuration par
+> défaut de ce projet), les broches **GPIO26 à GPIO37** sont monopolisées par le
+> bus mémoire. Les utiliser pour la CS microSD déconnecte la PSRAM et provoque
+> des redémarrages en boucle par le watchdog. Sélectionnez impérativement une
+> broche hors de cette plage (ex. GPIO15).
+
+1. Câbler GPIO15 (disponible sur le connecteur d'extension Waveshare) vers la
    ligne **CS** du convertisseur de niveau du lecteur microSD.
 2. Conserver le retour de masse commun et l'alimentation 3V3.
 3. Laisser INT0/INT1 du CH422G en l'air : l'expandeur peut continuer à piloter
@@ -143,7 +149,7 @@ matérielle contourne totalement le CH422G en cas de défaillance du bus I²C.
 Au démarrage, le firmware signale dans les logs la mise en service du fallback :
 
 ```
-I (XXX) sd: Direct SD CS fallback active on GPIO34
+I (XXX) sd: Direct SD CS fallback active on GPIO15
 ```
 
 Si le CH422G redevient fonctionnel, il suffit de repasser `CONFIG_STORAGE_SD_USE_GPIO_CS` à `n` pour revenir au câblage d'origine.

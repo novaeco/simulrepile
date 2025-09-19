@@ -252,6 +252,22 @@ static void sd_cs_selftest(void) {
     ESP_LOGE(TAG,
              "Bus I2C instable : lecture NACK pendant la configuration de la "
              "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
+  } else if (s_sd_cs_last_err == ESP_ERR_NOT_SUPPORTED) {
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
+    ESP_LOGE(TAG,
+             "La broche GPIO%d est réservée par la PSRAM octale : CS direct "
+             "inutilisable. Sélectionnez un GPIO libre via "
+             "CONFIG_STORAGE_SD_GPIO_CS_NUM ou désactivez le fallback.",
+             CONFIG_STORAGE_SD_GPIO_CS_NUM);
+    set_boot_error_message(
+        "GPIO%d indisponible pour la CS microSD\nChoisir un GPIO hors plage 26-37 ou "
+        "désactiver CONFIG_STORAGE_SD_USE_GPIO_CS",
+        CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#else
+    ESP_LOGE(TAG,
+             "CS SD direct non supporté : %s",
+             esp_err_to_name(s_sd_cs_last_err));
+#endif
   }
 
 #if !CONFIG_STORAGE_SD_USE_GPIO_CS
@@ -259,8 +275,14 @@ static void sd_cs_selftest(void) {
            "Le firmware continuera sans carte SD tant que le bus CH422G ne "
            "répond pas ou qu'un fallback GPIO n'est pas configuré.");
 #else
-  ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
-           CONFIG_STORAGE_SD_GPIO_CS_NUM);
+  if (s_sd_cs_last_err == ESP_ERR_NOT_SUPPORTED) {
+    ESP_LOGW(TAG,
+             "Sélectionner une broche de CS hors plage GPIO26–GPIO37 pour "
+             "éviter les conflits avec la PSRAM octale.");
+  } else {
+    ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
+             CONFIG_STORAGE_SD_GPIO_CS_NUM);
+  }
 #endif
 }
 
