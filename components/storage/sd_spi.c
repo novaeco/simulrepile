@@ -45,6 +45,21 @@ static bool s_bus_ready = false;
 
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
 static bool s_direct_cs_configured = false;
+
+#if CONFIG_SPIRAM_MODE_OCT || CONFIG_SPIRAM_MODE_OPI
+static bool sd_direct_cs_conflicts_with_psram(int gpio_num)
+{
+    /*
+     * On ESP32-S3, enabling octal PSRAM reserves GPIO26-37 for the SPI RAM bus
+     * (data lines 26-33 plus control lines 34-37). Attempting to reconfigure
+     * any of these pads as GPIO will corrupt the PSRAM interface and the CPU
+     * eventually stalls, tripping the watchdog. Reject such pins up-front so
+     * the firmware can continue running and report a configuration error
+     * instead of resetting in a loop.
+     */
+    return (gpio_num >= 26) && (gpio_num <= 37);
+}
+#endif
 #endif
 
 static esp_err_t sd_bus_ensure(void)
@@ -84,6 +99,17 @@ static esp_err_t sd_configure_direct_cs(void)
     if (s_direct_cs_configured) {
         return ESP_OK;
     }
+
+#if CONFIG_SPIRAM_MODE_OCT || CONFIG_SPIRAM_MODE_OPI
+    if (sd_direct_cs_conflicts_with_psram(STORAGE_SD_GPIO_CS)) {
+        ESP_LOGE(TAG,
+                 "GPIO%d réservé au bus PSRAM octal : impossible de l'utiliser comme CS SPI."
+                 " Choisir une autre broche via CONFIG_STORAGE_SD_GPIO_CS_NUM ou désactiver"
+                 " CONFIG_STORAGE_SD_USE_GPIO_CS.",
+                 STORAGE_SD_GPIO_CS);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
 
     gpio_config_t cfg = {
         .pin_bit_mask = 1ULL << STORAGE_SD_GPIO_CS,
