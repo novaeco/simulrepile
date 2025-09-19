@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lvgl.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +28,13 @@ typedef enum {
   UI_THEME_TABLE_DENSE,
 } ui_theme_table_mode_t;
 
+typedef enum {
+  UI_THEME_BADGE_INFO = 0,
+  UI_THEME_BADGE_SUCCESS,
+  UI_THEME_BADGE_WARNING,
+  UI_THEME_BADGE_CRITICAL,
+} ui_theme_badge_kind_t;
+
 void ui_theme_init(void);
 void ui_theme_apply_screen(lv_obj_t *screen);
 
@@ -39,6 +47,11 @@ void ui_theme_apply_caption(lv_obj_t *label);
 lv_obj_t *ui_theme_create_button(lv_obj_t *parent, const char *text,
                                  ui_theme_button_kind_t kind,
                                  lv_event_cb_t event_cb, void *user_data);
+
+lv_obj_t *ui_theme_create_badge(lv_obj_t *parent, ui_theme_badge_kind_t kind,
+                                const char *text);
+void ui_theme_badge_set_kind(lv_obj_t *badge, ui_theme_badge_kind_t kind);
+void ui_theme_set_card_selected(lv_obj_t *card, bool selected);
 
 lv_obj_t *ui_theme_create_nav_card(lv_obj_t *parent, const char *title,
                                    const char *subtitle,
