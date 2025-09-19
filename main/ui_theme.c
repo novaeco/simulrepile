@@ -24,6 +24,9 @@ typedef struct {
   lv_style_t button_secondary;
   lv_style_t button_secondary_pressed;
   lv_style_t dropdown_main;
+  lv_style_t nav_card;
+  lv_style_t nav_card_pressed;
+  lv_style_t nav_card_icon;
 } ui_theme_styles_t;
 
 static ui_theme_styles_t s_styles;
@@ -157,6 +160,29 @@ static void ui_theme_init_styles(void) {
   lv_style_set_pad_ver(&s_styles.dropdown_main, 10);
   lv_style_set_text_font(&s_styles.dropdown_main, &lv_font_montserrat_20);
   lv_style_set_text_color(&s_styles.dropdown_main, lv_color_hex(0x2F4F43));
+
+  lv_style_init(&s_styles.nav_card);
+  lv_style_set_bg_color(&s_styles.nav_card, lv_color_hex(0xFFFFFF));
+  lv_style_set_bg_grad_color(&s_styles.nav_card, lv_color_hex(0xECF6F1));
+  lv_style_set_bg_grad_dir(&s_styles.nav_card, LV_GRAD_DIR_VER);
+  lv_style_set_border_color(&s_styles.nav_card, lv_color_hex(0x7BBF9D));
+  lv_style_set_border_width(&s_styles.nav_card, 1);
+  lv_style_set_radius(&s_styles.nav_card, 18);
+  lv_style_set_shadow_width(&s_styles.nav_card, 16);
+  lv_style_set_shadow_ofs_y(&s_styles.nav_card, 5);
+  lv_style_set_shadow_color(&s_styles.nav_card, lv_color_hex(0xA8D5B6));
+  lv_style_set_pad_all(&s_styles.nav_card, 24);
+  lv_style_set_pad_gap(&s_styles.nav_card, 16);
+
+  lv_style_init(&s_styles.nav_card_pressed);
+  lv_style_set_bg_color(&s_styles.nav_card_pressed, lv_color_hex(0xD7EEDF));
+  lv_style_set_bg_grad_color(&s_styles.nav_card_pressed, lv_color_hex(0xC1E4D0));
+  lv_style_set_shadow_ofs_y(&s_styles.nav_card_pressed, 2);
+  lv_style_set_shadow_width(&s_styles.nav_card_pressed, 10);
+
+  lv_style_init(&s_styles.nav_card_icon);
+  lv_style_set_text_font(&s_styles.nav_card_icon, &lv_font_montserrat_24);
+  lv_style_set_text_color(&s_styles.nav_card_icon, lv_color_hex(0x2A9D8F));
 }
 
 void ui_theme_init(void) { ui_theme_init_styles(); }
@@ -235,6 +261,61 @@ lv_obj_t *ui_theme_create_button(lv_obj_t *parent, const char *text,
   }
   lv_obj_center(label);
   return btn;
+}
+
+lv_obj_t *ui_theme_create_nav_card(lv_obj_t *parent, const char *title,
+                                   const char *subtitle,
+                                   const void *icon_src,
+                                   ui_theme_nav_icon_kind_t icon_kind,
+                                   lv_event_cb_t event_cb,
+                                   void *user_data) {
+  ui_theme_init_styles();
+  lv_obj_t *card = lv_obj_create(parent);
+  lv_obj_remove_style_all(card);
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_style(card, &s_styles.nav_card, LV_PART_MAIN);
+  lv_obj_add_style(card, &s_styles.nav_card_pressed,
+                   LV_PART_MAIN | LV_STATE_PRESSED);
+  lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_START);
+  lv_obj_set_style_pad_gap(card, 16, LV_PART_MAIN);
+  lv_obj_set_style_min_width(card, 240, LV_PART_MAIN);
+  lv_obj_set_style_max_width(card, 360, LV_PART_MAIN);
+  lv_obj_set_flex_grow(card, 1);
+
+  if (event_cb) {
+    lv_obj_add_event_cb(card, event_cb, LV_EVENT_CLICKED, user_data);
+  }
+
+  lv_obj_t *icon = NULL;
+  if (icon_kind == UI_THEME_NAV_ICON_IMAGE && icon_src) {
+    icon = lv_img_create(card);
+    lv_img_set_src(icon, icon_src);
+    lv_obj_set_style_align_self(icon, LV_ALIGN_CENTER, 0);
+  } else if (icon_kind == UI_THEME_NAV_ICON_SYMBOL && icon_src) {
+    icon = lv_label_create(card);
+    lv_obj_add_style(icon, &s_styles.nav_card_icon, 0);
+    lv_label_set_text(icon, (const char *)icon_src);
+    lv_obj_set_style_align_self(icon, LV_ALIGN_CENTER, 0);
+  }
+
+  if (title) {
+    lv_obj_t *title_label = lv_label_create(card);
+    ui_theme_apply_title(title_label);
+    lv_label_set_text(title_label, title);
+    lv_obj_set_width(title_label, LV_PCT(100));
+  }
+
+  if (subtitle) {
+    lv_obj_t *subtitle_label = lv_label_create(card);
+    ui_theme_apply_caption(subtitle_label);
+    lv_label_set_long_mode(subtitle_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(subtitle_label, subtitle);
+    lv_obj_set_width(subtitle_label, LV_PCT(100));
+  }
+
+  return card;
 }
 
 void ui_theme_apply_table(lv_obj_t *table, ui_theme_table_mode_t mode) {

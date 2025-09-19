@@ -64,7 +64,11 @@ static lv_obj_t *screen_economy;
 static lv_obj_t *screen_save;
 static lv_obj_t *screen_regulations;
 static lv_obj_t *menu_slot_dropdown;
-static lv_obj_t *menu_status_label;
+static lv_obj_t *menu_summary_card;
+static lv_obj_t *menu_summary_slot_label;
+static lv_obj_t *menu_summary_sd_label;
+static lv_obj_t *menu_summary_event_label;
+static lv_obj_t *menu_summary_event_icon;
 static lv_obj_t *table_terrariums;
 static lv_obj_t *label_cash;
 static lv_obj_t *label_cycle;
@@ -180,6 +184,10 @@ static void update_chart_series(int64_t income_cents, int64_t expense_cents);
 static int find_size_option(float length_cm, float width_cm, float height_cm);
 static void populate_species_options(void);
 static int find_species_option_index(reptile_species_id_t id);
+static void simulation_summary_update_slot(const char *slot);
+static void simulation_summary_update_sd(void);
+static void simulation_summary_update_event(const char *text);
+static bool simulation_message_is_error(const char *text);
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -199,15 +207,66 @@ void reptile_game_init(void) {
 
 const reptile_facility_t *reptile_get_state(void) { return &g_facility; }
 
-static void simulation_set_status(const char *fmt, ...) {
-  if (!menu_status_label || !fmt)
+static void simulation_summary_update_slot(const char *slot) {
+  if (!menu_summary_slot_label)
     return;
-  char buffer[128];
+  const char *active = (slot && slot[0] != '\0') ? slot : "--";
+  lv_label_set_text_fmt(menu_summary_slot_label, "Slot actif : %s", active);
+}
+
+static void simulation_summary_update_sd(void) {
+  if (!menu_summary_sd_label)
+    return;
+  bool mounted = sd_is_mounted();
+  const char *text = mounted ? "microSD prête" : "microSD indisponible";
+  lv_color_t color = mounted ? lv_color_hex(0x2F4F43)
+                             : lv_color_hex(0xB54B3A);
+  lv_label_set_text(menu_summary_sd_label, text);
+  lv_obj_set_style_text_color(menu_summary_sd_label, color, 0);
+}
+
+static bool simulation_message_is_error(const char *text) {
+  if (!text)
+    return false;
+  static const char *keywords[] = {"échoué",   "échec",    "impossible",
+                                   "Erreur",  "erreur",   "Échec",
+                                   "Échoué",  "critique", NULL};
+  for (const char **kw = keywords; *kw; ++kw) {
+    if (strstr(text, *kw)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void simulation_summary_update_event(const char *text) {
+  if (!menu_summary_event_label || !text)
+    return;
+  bool is_error = simulation_message_is_error(text);
+  lv_color_t color = is_error ? lv_color_hex(0xB54B3A)
+                              : lv_color_hex(0x2F4F43);
+  lv_label_set_text(menu_summary_event_label, text);
+  lv_obj_set_style_text_color(menu_summary_event_label, color, 0);
+  if (menu_summary_event_icon) {
+    lv_label_set_text(menu_summary_event_icon,
+                      is_error ? LV_SYMBOL_WARNING : LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(menu_summary_event_icon,
+                                is_error ? lv_color_hex(0xB54B3A)
+                                         : lv_color_hex(0x3A7D60),
+                                0);
+  }
+}
+
+static void simulation_set_status(const char *fmt, ...) {
+  if (!fmt)
+    return;
+  char buffer[160];
   va_list args;
   va_start(args, fmt);
   vsnprintf(buffer, sizeof(buffer), fmt, args);
   va_end(args);
-  lv_label_set_text(menu_status_label, buffer);
+  simulation_summary_update_event(buffer);
+  simulation_summary_update_sd();
 }
 
 static void simulation_apply_active_slot(const char *slot) {
@@ -215,6 +274,7 @@ static void simulation_apply_active_slot(const char *slot) {
   snprintf(g_facility.slot, sizeof(g_facility.slot), "%s", effective);
   snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
   simulation_sync_slot_dropdowns();
+  simulation_summary_update_slot(g_facility.slot);
 }
 
 static void simulation_get_selected_slot(char *slot, size_t len) {
@@ -240,6 +300,7 @@ static void simulation_sync_slot_dropdowns(void) {
     lv_dropdown_set_options(save_slot_dropdown, slot_options);
     load_dropdown_value(save_slot_dropdown, slot_options, g_facility.slot);
   }
+  simulation_summary_update_slot(g_facility.slot);
 }
 
 static void ensure_game_screens(void) {
@@ -320,11 +381,64 @@ static void build_simulation_menu_screen(void) {
   lv_obj_set_width(btn_main_menu, 220);
   lv_obj_align(btn_main_menu, LV_ALIGN_BOTTOM_LEFT, 24, -20);
 
-  menu_status_label = lv_label_create(screen_simulation_menu);
-  ui_theme_apply_body(menu_status_label);
-  lv_obj_align(menu_status_label, LV_ALIGN_BOTTOM_RIGHT, -24, -20);
+  menu_summary_card = ui_theme_create_card(screen_simulation_menu);
+  lv_obj_set_width(menu_summary_card, 360);
+  lv_obj_align(menu_summary_card, LV_ALIGN_BOTTOM_RIGHT, -24, -20);
+  lv_obj_set_flex_flow(menu_summary_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(menu_summary_card, 12, 0);
+
+  lv_obj_t *summary_title = lv_label_create(menu_summary_card);
+  ui_theme_apply_title(summary_title);
+  lv_label_set_text(summary_title, "Résumé session");
+
+  lv_obj_t *slot_row = lv_obj_create(menu_summary_card);
+  lv_obj_remove_style_all(slot_row);
+  lv_obj_set_flex_flow(slot_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(slot_row, 10, 0);
+  lv_obj_set_scrollbar_mode(slot_row, LV_SCROLLBAR_MODE_OFF);
+
+  lv_obj_t *slot_icon = lv_label_create(slot_row);
+  ui_theme_apply_caption(slot_icon);
+  lv_label_set_text(slot_icon, LV_SYMBOL_SAVE);
+
+  menu_summary_slot_label = lv_label_create(slot_row);
+  ui_theme_apply_body(menu_summary_slot_label);
+  lv_obj_set_width(menu_summary_slot_label, LV_PCT(100));
+  lv_label_set_long_mode(menu_summary_slot_label, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *sd_row = lv_obj_create(menu_summary_card);
+  lv_obj_remove_style_all(sd_row);
+  lv_obj_set_flex_flow(sd_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(sd_row, 10, 0);
+  lv_obj_set_scrollbar_mode(sd_row, LV_SCROLLBAR_MODE_OFF);
+
+  lv_obj_t *sd_icon = lv_label_create(sd_row);
+  ui_theme_apply_caption(sd_icon);
+  lv_label_set_text(sd_icon, LV_SYMBOL_SD_CARD);
+
+  menu_summary_sd_label = lv_label_create(sd_row);
+  ui_theme_apply_body(menu_summary_sd_label);
+  lv_obj_set_width(menu_summary_sd_label, LV_PCT(100));
+  lv_label_set_long_mode(menu_summary_sd_label, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *event_row = lv_obj_create(menu_summary_card);
+  lv_obj_remove_style_all(event_row);
+  lv_obj_set_flex_flow(event_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(event_row, 10, 0);
+  lv_obj_set_scrollbar_mode(event_row, LV_SCROLLBAR_MODE_OFF);
+
+  menu_summary_event_icon = lv_label_create(event_row);
+  ui_theme_apply_caption(menu_summary_event_icon);
+  lv_label_set_text(menu_summary_event_icon, LV_SYMBOL_OK);
+
+  menu_summary_event_label = lv_label_create(event_row);
+  ui_theme_apply_body(menu_summary_event_label);
+  lv_obj_set_width(menu_summary_event_label, LV_PCT(100));
+  lv_label_set_long_mode(menu_summary_event_label, LV_LABEL_LONG_WRAP);
 
   simulation_sync_slot_dropdowns();
+  simulation_summary_update_slot(g_facility.slot);
+  simulation_summary_update_sd();
   simulation_set_status("Slot actif: %s", g_facility.slot);
 }
 
@@ -767,7 +881,11 @@ void reptile_game_stop(void) {
     screen_simulation_menu = NULL;
   }
   menu_slot_dropdown = NULL;
-  menu_status_label = NULL;
+  menu_summary_card = NULL;
+  menu_summary_slot_label = NULL;
+  menu_summary_sd_label = NULL;
+  menu_summary_event_label = NULL;
+  menu_summary_event_icon = NULL;
   if (screen_overview) {
     lv_obj_del(screen_overview);
     screen_overview = NULL;

@@ -157,16 +157,28 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
   CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
 
 ## Menu de démarrage et modes d'exécution
-Au reset, le firmware affiche un menu minimaliste permettant de choisir entre deux modes :
+Au reset, le firmware présente un tableau de bord structuré : en-tête flex affichant le logo, l'heure
+RTC, l'état de la microSD et de la veille automatique, grille de cartes de navigation (`ui_theme_create_nav_card`)
+et bouton dédié « Quitter veille » pour désarmer l'économie d'énergie sans passer par les écrans
+secondaires.
 
-- **Simulation** : emploi des pilotes `sensors_sim` et `gpio_sim`. Ces implémentations génèrent
-  des valeurs factices ou celles injectées par l'API de simulation et *n'accèdent jamais au
-  matériel*.
-- **Réel** : activation des pilotes `sensors_real` et `gpio_real` qui dialoguent directement avec
-  les capteurs I²C et les broches GPIO.
+![Menu principal LVGL remanié](docs/screenshots/menu_refonte.svg)
 
-La sélection est persistée pour la session suivante afin de relancer automatiquement le mode
-précédent.
+La capture vectorielle illustre la hiérarchie flex (en-tête, carte résumé, grille de cartes) telle qu'implémentée dans `main/main.c`, avec les icônes et sous-libellés injectés via `ui_theme_create_nav_card`.
+
+- **Mode Simulation** : carte avec symbole ▶ et sous-libellé rappelant la simulation multislot,
+  pointant vers `reptile_game_start`.
+- **Mode Réel** : carte illustrée par l'icône terrarium, activant les pilotes physiques `sensors_real`
+  et `gpio_real` puis `reptile_real_start`.
+- **Paramètres** : carte aux engrenages LVGL pour configurer terrariums, calendriers et calibrations
+  (`settings_screen_show`).
+- **Quitter veille** : bouton secondaire qui appelle `sleep_set_enabled(false)` et met en pause le
+  timer d'inactivité pour les sessions de démonstration.
+
+La sélection reste persistée pour la session suivante afin de relancer automatiquement le mode
+précédent. Le menu de simulation dispose en outre d'un widget « Résumé session » (slot actif,
+microSD, derniers événements) qui remplace l'ancien label unique et fournit un retour d'état
+immédiat lors des sauvegardes/chargements.
 
 ## Automatisation des terrariums réels
 Le contrôleur d'environnement (`components/env_control/`) pilote désormais jusqu'à quatre

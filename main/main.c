@@ -39,10 +39,12 @@
 #include "game_mode.h"
 #include "sdkconfig.h"
 #include "ui_theme.h"
+#include "image.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_timer.h"
 
@@ -56,6 +58,11 @@ static esp_lcd_touch_handle_t tp_handle = NULL;
 static lv_obj_t *error_screen;
 static lv_obj_t *prev_screen;
 lv_obj_t *menu_screen;
+static lv_timer_t *menu_header_timer;
+static lv_obj_t *menu_header_time_label;
+static lv_obj_t *menu_header_sd_label;
+static lv_obj_t *menu_header_sleep_label;
+static lv_obj_t *menu_quick_hint_label;
 
 static sdmmc_card_t *s_sd_card = NULL;
 static bool s_sd_cs_ready = false;
@@ -94,12 +101,15 @@ static void save_last_mode(uint8_t mode) {
 void reset_last_mode(void) { save_last_mode(APP_MODE_MENU_OVERRIDE); }
 
 static void sleep_timer_cb(lv_timer_t *timer);
+static void menu_header_timer_cb(lv_timer_t *timer);
+static void menu_header_update(void);
 
 static void sd_cs_selftest(void) {
   s_sd_cs_ready = false;
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
     s_sd_cs_ready = true;
+    menu_header_update();
     return;
   }
 
@@ -124,6 +134,7 @@ static void sd_cs_selftest(void) {
   ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
            CONFIG_STORAGE_SD_GPIO_CS_NUM);
 #endif
+  menu_header_update();
 }
 
 static void sd_write_selftest(void) {
@@ -149,17 +160,73 @@ static void sd_write_selftest(void) {
   ESP_LOGI(TAG, "SD selftest.txt written");
 }
 
+static void menu_header_update(void) {
+  if (menu_header_time_label) {
+    time_t now = time(NULL);
+    struct tm info;
+    char buffer[32];
+    if (now != (time_t)-1 && localtime_r(&now, &info)) {
+      if (strftime(buffer, sizeof(buffer), "%H:%M", &info) == 0) {
+        snprintf(buffer, sizeof(buffer), "--:--");
+      }
+    } else {
+      snprintf(buffer, sizeof(buffer), "--:--");
+    }
+    lv_label_set_text(menu_header_time_label, buffer);
+  }
+
+  if (menu_header_sd_label) {
+    char sd_text[96];
+    lv_color_t sd_color = lv_color_hex(0x2F4F43);
+    if (!s_sd_cs_ready) {
+      const char *err = (s_sd_cs_last_err != ESP_OK)
+                            ? esp_err_to_name(s_sd_cs_last_err)
+                            : "bus";
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_WARNING " microSD indisponible (%s)",
+               err);
+      sd_color = lv_color_hex(0xB54B3A);
+    } else if (sd_is_mounted()) {
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD prête");
+      sd_color = lv_color_hex(0x2F4F43);
+    } else {
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD en attente");
+      sd_color = lv_color_hex(0xA46A2D);
+    }
+    lv_label_set_text(menu_header_sd_label, sd_text);
+    lv_obj_set_style_text_color(menu_header_sd_label, sd_color, 0);
+  }
+
+  if (menu_header_sleep_label) {
+    bool enabled = sleep_is_enabled();
+    const char *text = enabled ? LV_SYMBOL_POWER " Veille auto: ON"
+                               : LV_SYMBOL_POWER " Veille auto: OFF";
+    lv_color_t color = enabled ? lv_color_hex(0x2F4F43)
+                               : lv_color_hex(0x1F7A70);
+    lv_label_set_text(menu_header_sleep_label, text);
+    lv_obj_set_style_text_color(menu_header_sleep_label, color, 0);
+  }
+}
+
+static void menu_header_timer_cb(lv_timer_t *timer) {
+  (void)timer;
+  menu_header_update();
+}
+
 void sleep_timer_arm(bool arm) {
-  if (!sleep_timer)
+  if (!sleep_timer) {
+    menu_header_update();
     return;
+  }
 
   if (!sleep_enabled || !arm || !reptile_game_is_active()) {
     lv_timer_pause(sleep_timer);
+    menu_header_update();
     return;
   }
 
   lv_timer_resume(sleep_timer);
   lv_timer_reset(sleep_timer);
+  menu_header_update();
 }
 
 static void start_game_mode(void) {
@@ -219,14 +286,36 @@ static void menu_btn_settings_cb(lv_event_t *e) {
   settings_screen_show();
 }
 
+static void menu_btn_wake_cb(lv_event_t *e) {
+  (void)e;
+  ESP_LOGI(TAG, "Désactivation manuelle de la veille automatique");
+  sleep_set_enabled(false);
+  sleep_timer_arm(false);
+  if (menu_quick_hint_label) {
+    const char *existing = lv_label_get_text(menu_quick_hint_label);
+    const char *message =
+        "Veille automatique désactivée pour cette session.";
+    if (existing && existing[0] != '\0') {
+      char buffer[256];
+      snprintf(buffer, sizeof(buffer), "%s\n%s", existing, message);
+      lv_label_set_text(menu_quick_hint_label, buffer);
+    } else {
+      lv_label_set_text(menu_quick_hint_label, message);
+    }
+    lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+  }
+  menu_header_update();
+}
+
 void sleep_set_enabled(bool enabled) {
   sleep_enabled = enabled;
-  if (!sleep_timer)
-    return;
-  if (enabled) {
-    lv_timer_set_period(sleep_timer, 120000);
+  if (sleep_timer) {
+    if (enabled) {
+      lv_timer_set_period(sleep_timer, 120000);
+    }
+    sleep_timer_arm(enabled);
   }
-  sleep_timer_arm(enabled);
+  menu_header_update();
 }
 
 bool sleep_is_enabled(void) { return sleep_enabled; }
@@ -298,12 +387,14 @@ static void wait_for_sd_card(void) {
                    esp_err_to_name(del_ret));
         }
       }
+      menu_header_update();
       return;
     }
 
     s_sd_card = NULL;
     ESP_LOGE(TAG, "Carte SD absente ou illisible (%s)", esp_err_to_name(err));
     show_error_screen("Insérer une carte SD valide");
+    menu_header_update();
     vTaskDelay(pdMS_TO_TICKS(500));
     if (++attempts >= max_attempts) {
       show_error_screen("Carte SD absente - redémarrage");
@@ -383,6 +474,7 @@ static void sleep_timer_cb(lv_timer_t *timer) {
     }
     s_sd_card = NULL;
   }
+  menu_header_update();
   // Use ANY_LOW to ensure compatibility with ESP32-S3 and avoid deprecated
   // ALL_LOW
   esp_sleep_enable_ext1_wakeup((1ULL << GPIO_NUM_4), ESP_EXT1_WAKEUP_ANY_LOW);
@@ -492,33 +584,101 @@ void app_main() {
     menu_screen = lv_obj_create(NULL);
     ui_theme_apply_screen(menu_screen);
     lv_obj_set_style_pad_all(menu_screen, 32, 0);
+    lv_obj_set_style_pad_gap(menu_screen, 24, 0);
+    lv_obj_set_flex_flow(menu_screen, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(menu_screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_START);
 
-    lv_obj_t *menu_card = ui_theme_create_card(menu_screen);
-    lv_obj_set_width(menu_card, 360);
-    lv_obj_align(menu_card, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_flex_flow(menu_card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_gap(menu_card, 20, 0);
+    lv_obj_t *header = ui_theme_create_card(menu_screen);
+    lv_obj_set_width(header, LV_PCT(100));
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(header, 24, LV_PART_MAIN);
+    lv_obj_set_style_pad_gap(header, 20, LV_PART_MAIN);
 
-    lv_obj_t *title = lv_label_create(menu_card);
-    ui_theme_apply_title(title);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(title, "Sélection du mode");
+    lv_obj_t *brand_box = lv_obj_create(header);
+    lv_obj_remove_style_all(brand_box);
+    lv_obj_set_flex_flow(brand_box, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_gap(brand_box, 20, 0);
+    lv_obj_set_scrollbar_mode(brand_box, LV_SCROLLBAR_MODE_OFF);
 
-    lv_obj_t *btn_game =
-        ui_theme_create_button(menu_card, "Mode Jeu", UI_THEME_BUTTON_PRIMARY,
-                               menu_btn_game_cb, NULL);
-    lv_obj_set_width(btn_game, LV_PCT(100));
+    lv_obj_t *logo = lv_img_create(brand_box);
+    lv_img_set_src(logo, &gImage_reptile_happy);
+    lv_img_set_zoom(logo, 160);
 
-    lv_obj_t *btn_real =
-        ui_theme_create_button(menu_card, "Mode Réel", UI_THEME_BUTTON_PRIMARY,
-                               menu_btn_real_cb, NULL);
-    lv_obj_set_width(btn_real, LV_PCT(100));
+    lv_obj_t *brand_text = lv_obj_create(brand_box);
+    lv_obj_remove_style_all(brand_text);
+    lv_obj_set_flex_flow(brand_text, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(brand_text, 6, 0);
+    lv_obj_set_scrollbar_mode(brand_text, LV_SCROLLBAR_MODE_OFF);
 
-    lv_obj_t *btn_settings = ui_theme_create_button(
-        menu_card, "Paramètres", UI_THEME_BUTTON_SECONDARY,
-        menu_btn_settings_cb, NULL);
-    lv_obj_set_width(btn_settings, LV_PCT(100));
+    lv_obj_t *brand_title = lv_label_create(brand_text);
+    ui_theme_apply_title(brand_title);
+    lv_label_set_text(brand_title, "SimulRepile Control");
+
+    lv_obj_t *brand_caption = lv_label_create(brand_text);
+    ui_theme_apply_caption(brand_caption);
+    lv_label_set_text(brand_caption,
+                      "Gestion multi-terrariums & conformité CITES");
+
+    lv_obj_t *status_box = lv_obj_create(header);
+    lv_obj_remove_style_all(status_box);
+    lv_obj_set_flex_flow(status_box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(status_box, 6, 0);
+    lv_obj_set_scrollbar_mode(status_box, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_align_self(status_box, LV_ALIGN_END, 0);
+
+    menu_header_time_label = lv_label_create(status_box);
+    ui_theme_apply_title(menu_header_time_label);
+    lv_obj_set_style_text_align(menu_header_time_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(menu_header_time_label, "--:--");
+
+    menu_header_sd_label = lv_label_create(status_box);
+    ui_theme_apply_body(menu_header_sd_label);
+    lv_obj_set_style_text_align(menu_header_sd_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    menu_header_sleep_label = lv_label_create(status_box);
+    ui_theme_apply_caption(menu_header_sleep_label);
+    lv_obj_set_style_text_align(menu_header_sleep_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    lv_obj_t *nav_grid = lv_obj_create(menu_screen);
+    lv_obj_remove_style_all(nav_grid);
+    lv_obj_set_width(nav_grid, LV_PCT(100));
+    lv_obj_set_flex_flow(nav_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_gap(nav_grid, 24, 0);
+    lv_obj_set_style_pad_all(nav_grid, 4, 0);
+    lv_obj_set_scrollbar_mode(nav_grid, LV_SCROLLBAR_MODE_OFF);
+
+    ui_theme_create_nav_card(nav_grid, "Mode Jeu",
+                             "Simulation avancée, IA et sauvegardes multislot",
+                             LV_SYMBOL_PLAY, UI_THEME_NAV_ICON_SYMBOL,
+                             menu_btn_game_cb, NULL);
+
+    const lv_image_dsc_t *real_icon =
+        ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK);
+    ui_theme_create_nav_card(nav_grid, "Mode Réel",
+                             "Capteurs physiques, automation CH422G et microSD",
+                             real_icon, UI_THEME_NAV_ICON_IMAGE, menu_btn_real_cb,
+                             NULL);
+
+    ui_theme_create_nav_card(nav_grid, "Paramètres",
+                             "Profils terrariums, calendriers et calibrations",
+                             LV_SYMBOL_SETTINGS, UI_THEME_NAV_ICON_SYMBOL,
+                             menu_btn_settings_cb, NULL);
+
+    menu_quick_hint_label = lv_label_create(menu_screen);
+    ui_theme_apply_caption(menu_quick_hint_label);
+    lv_label_set_long_mode(menu_quick_hint_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(menu_quick_hint_label, LV_PCT(100));
+    lv_obj_set_style_text_align(menu_quick_hint_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *wake_btn = ui_theme_create_button(
+        menu_screen, "Quitter veille", UI_THEME_BUTTON_SECONDARY,
+        menu_btn_wake_cb, NULL);
+    lv_obj_set_width(wake_btn, 260);
+    lv_obj_set_style_align_self(wake_btn, LV_ALIGN_CENTER, 0);
 
     uint8_t last_mode = APP_MODE_MENU_OVERRIDE;
     bool has_persisted_mode = false;
@@ -542,38 +702,40 @@ void app_main() {
 
     bool quick_start_requested = (gpio_get_level(QUICK_START_BTN) == 0);
 
-    if (has_persisted_mode) {
+    if (has_persisted_mode && menu_quick_hint_label) {
       const char *last_mode_text = NULL;
       switch (last_mode) {
       case APP_MODE_GAME:
         last_mode_text = "Mode Jeu";
         break;
       case APP_MODE_REAL:
-        last_mode_text = "Mode R\u00e9el";
+        last_mode_text = "Mode Réel";
         break;
       case APP_MODE_SETTINGS:
-        last_mode_text = "Param\u00e8tres";
+        last_mode_text = "Paramètres";
         break;
       default:
         last_mode_text = "Menu";
         break;
       }
 
-      lv_obj_t *hint_label = lv_label_create(menu_screen);
-      ui_theme_apply_body(hint_label);
-      lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
-      lv_obj_set_width(hint_label, 300);
-      lv_label_set_text_fmt(hint_label,
-                            "Dernier mode s\u00e9lectionn\u00e9 : %s\n"
-                            "(maintenir le bouton physique au d\u00e9marrage pour relancer)",
-                            last_mode_text);
-      lv_obj_align(hint_label, LV_ALIGN_CENTER, 0, 140);
+      lv_label_set_text_fmt(
+          menu_quick_hint_label,
+          "Dernier mode sélectionné : %s\n"
+          "(maintenir le bouton physique au démarrage pour relancer)",
+          last_mode_text);
+      lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    menu_header_update();
+    if (!menu_header_timer) {
+      menu_header_timer = lv_timer_create(menu_header_timer_cb, 1000, NULL);
     }
 
     lv_scr_load(menu_screen);
 
     if (quick_start_requested && has_persisted_mode) {
-      ESP_LOGI(TAG, "D\u00e9marrage rapide demand\u00e9");
+      ESP_LOGI(TAG, "Démarrage rapide demandé");
       switch (last_mode) {
       case APP_MODE_GAME:
         start_game_mode();
@@ -592,7 +754,7 @@ void app_main() {
       }
     } else if (quick_start_requested && !has_persisted_mode) {
       ESP_LOGW(TAG,
-               "Bouton de d\u00e9marrage rapide actif mais aucun mode persistant valide");
+               "Bouton de démarrage rapide actif mais aucun mode persistant valide");
     }
 
     lvgl_port_unlock();
