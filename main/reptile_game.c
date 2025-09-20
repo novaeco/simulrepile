@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -3046,6 +3047,101 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
   lv_draw_rect(layer, &rect_dsc, &inner_area);
 }
 
+static size_t append_text_to_buffer(char *dst, size_t dst_size, size_t offset,
+                                    const char *src, size_t src_len) {
+  if (!dst || dst_size == 0U || offset >= dst_size) {
+    return offset;
+  }
+
+  if (!src || src_len == 0U) {
+    dst[offset] = '\0';
+    return offset;
+  }
+
+  size_t available = dst_size - offset - 1U;
+  if (available == 0U) {
+    dst[dst_size - 1U] = '\0';
+    return offset;
+  }
+
+  size_t to_copy = MIN(src_len, available);
+  if (to_copy > 0U) {
+    memcpy(dst + offset, src, to_copy);
+    offset += to_copy;
+  }
+
+  dst[offset] = '\0';
+  return offset;
+}
+
+static void format_regulations_export_label(char *dst, size_t dst_size,
+                                            const char *time_buf,
+                                            const char *path) {
+  static const char prefix[] = "Dernier export: ";
+  static const char open_paren[] = " (";
+  static const char close_paren[] = ")";
+  static const char ellipsis[] = "...";
+  const size_t ellipsis_len = sizeof(ellipsis) - 1U;
+
+  if (!dst || dst_size == 0U) {
+    return;
+  }
+
+  dst[0] = '\0';
+
+  size_t len = 0U;
+  len = append_text_to_buffer(dst, dst_size, len, prefix, sizeof(prefix) - 1U);
+  if (time_buf) {
+    len = append_text_to_buffer(dst, dst_size, len, time_buf,
+                                strnlen(time_buf, dst_size));
+  }
+
+  if (!path || path[0] == '\0') {
+    return;
+  }
+
+  len = append_text_to_buffer(dst, dst_size, len, open_paren,
+                              sizeof(open_paren) - 1U);
+  if (len >= dst_size - 1U) {
+    return;
+  }
+
+  size_t available = (len + 1U < dst_size) ? (dst_size - len - 1U) : 0U;
+  size_t allowed_path = (available > 0U) ? (available - 1U) : 0U;
+  bool truncated = false;
+  size_t path_len = 0U;
+
+  if (allowed_path > 0U) {
+    path_len = strnlen(path, allowed_path + 1U);
+    if (path_len > allowed_path) {
+      truncated = true;
+      if (allowed_path > ellipsis_len) {
+        path_len = allowed_path - ellipsis_len;
+      } else {
+        path_len = 0U;
+      }
+    }
+
+    if (path_len > 0U) {
+      len = append_text_to_buffer(dst, dst_size, len, path, path_len);
+    }
+  } else if (path[0] != '\0') {
+    truncated = true;
+  }
+
+  if (truncated && allowed_path >= ellipsis_len) {
+    size_t ellipsis_space = (len + 2U < dst_size) ? (dst_size - len - 2U) : 0U;
+    size_t ellipsis_to_copy = MIN(ellipsis_len, ellipsis_space);
+    if (ellipsis_to_copy > 0U) {
+      len = append_text_to_buffer(dst, dst_size, len, ellipsis,
+                                  ellipsis_to_copy);
+    }
+  }
+
+  append_text_to_buffer(dst, dst_size, len, close_paren,
+                        sizeof(close_paren) - 1U);
+}
+
 static void update_regulation_screen(void) {
   if (!regulations_table || !lv_obj_is_valid(regulations_table))
     return;
@@ -3314,12 +3410,8 @@ static void update_regulation_screen(void) {
         struct tm tm_info;
         localtime_r(&regulations_last_export_time, &tm_info);
         strftime(time_buf, sizeof(time_buf), "%d/%m %H:%M", &tm_info);
-        if (regulations_last_export_path[0] != '\0') {
-          snprintf(text, sizeof(text), "Dernier export: %s (%s)", time_buf,
-                   regulations_last_export_path);
-        } else {
-          snprintf(text, sizeof(text), "Dernier export: %s", time_buf);
-        }
+        format_regulations_export_label(text, sizeof(text), time_buf,
+                                        regulations_last_export_path);
       }
       lv_label_set_text(regulations_export_label, text);
       strncpy(regulations_export_text_cache, text,
