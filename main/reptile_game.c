@@ -155,12 +155,14 @@ static time_t regulations_last_export_time;
 static char regulations_last_export_path[128];
 
 static lv_timer_t *facility_timer;
+static lv_timer_t *screen_build_timer;
 static uint32_t last_tick_ms;
 static uint32_t autosave_ms;
 static int64_t prev_income_snapshot;
 static int64_t prev_expense_snapshot;
 static uint32_t selected_terrarium;
 static bool s_game_active;
+static screen_request_t pending_screen_request = SCREEN_REQUEST_NONE;
 
 typedef struct {
   uint32_t index;
@@ -191,6 +193,12 @@ typedef enum {
   TERRARIUM_CONTEXT_ACTION_HISTORY = 0x02U,
   TERRARIUM_CONTEXT_ACTION_CLOSE = 0xFFU,
 } terrarium_context_action_t;
+
+typedef enum {
+  SCREEN_REQUEST_NONE = 0,
+  SCREEN_REQUEST_OVERVIEW,
+  SCREEN_REQUEST_DETAIL,
+} screen_request_t;
 
 static char
     species_options_buffer[REPTILE_SPECIES_COUNT * (REPTILE_NAME_MAX_LEN + 1U)];
@@ -224,7 +232,10 @@ static void build_detail_screen(void);
 static void build_economy_screen(void);
 static void build_save_screen(void);
 static void build_regulation_screen(void);
-static void ensure_game_screens(void);
+static bool are_game_screens_ready(void);
+static bool ensure_game_screens(screen_request_t request);
+static void screen_build_timer_cb(lv_timer_t *timer);
+static void simulation_show_overview(void);
 static void simulation_enter_overview(void);
 static void simulation_apply_active_slot(const char *slot);
 static void simulation_get_selected_slot(char *slot, size_t len);
@@ -413,26 +424,69 @@ static void simulation_sync_slot_dropdowns(void) {
   simulation_summary_update_slot(g_facility.slot);
 }
 
-static void ensure_game_screens(void) {
+static bool are_game_screens_ready(void) {
+  return screen_detail && screen_economy && screen_save && screen_regulations &&
+         screen_overview;
+}
+
+static bool ensure_game_screens(screen_request_t request) {
+  if (are_game_screens_ready()) {
+    return true;
+  }
+
+  if (request != SCREEN_REQUEST_NONE) {
+    pending_screen_request = request;
+  }
+
+  if (!screen_build_timer) {
+    screen_build_timer = lv_timer_create(screen_build_timer_cb, 5, NULL);
+  }
+
+  return false;
+}
+
+static void screen_build_timer_cb(lv_timer_t *timer) {
   if (!screen_detail) {
     build_detail_screen();
+    return;
   }
   if (!screen_economy) {
     build_economy_screen();
+    return;
   }
   if (!screen_save) {
     build_save_screen();
+    return;
   }
   if (!screen_regulations) {
     build_regulation_screen();
+    return;
   }
   if (!screen_overview) {
     build_overview_screen();
+    return;
+  }
+
+  lv_timer_del(timer);
+  screen_build_timer = NULL;
+
+  screen_request_t request = pending_screen_request;
+  pending_screen_request = SCREEN_REQUEST_NONE;
+
+  if (request == SCREEN_REQUEST_DETAIL) {
+    update_overview_screen();
+    update_detail_screen();
+    update_economy_screen();
+    update_regulation_screen();
+    if (screen_detail) {
+      lv_scr_load(screen_detail);
+    }
+  } else if (request == SCREEN_REQUEST_OVERVIEW) {
+    simulation_show_overview();
   }
 }
 
-static void simulation_enter_overview(void) {
-  ensure_game_screens();
+static void simulation_show_overview(void) {
   simulation_sync_slot_dropdowns();
   if (save_status_label) {
     lv_label_set_text_fmt(save_status_label, "Slot actif: %s", g_facility.slot);
@@ -441,7 +495,17 @@ static void simulation_enter_overview(void) {
   update_detail_screen();
   update_economy_screen();
   update_regulation_screen();
-  lv_scr_load(screen_overview);
+  if (screen_overview) {
+    lv_scr_load(screen_overview);
+  }
+}
+
+static void simulation_enter_overview(void) {
+  if (!ensure_game_screens(SCREEN_REQUEST_OVERVIEW)) {
+    simulation_set_status("Préparation de l'interface de simulation…");
+    return;
+  }
+  simulation_show_overview();
 }
 
 static void build_simulation_menu_screen(void) {
@@ -1834,6 +1898,9 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   prev_income_snapshot = g_facility.economy.daily_income_cents;
   prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
 
+  pending_screen_request = SCREEN_REQUEST_NONE;
+  ensure_game_screens(SCREEN_REQUEST_NONE);
+
   lv_scr_load(screen_simulation_menu);
 }
 
@@ -1844,6 +1911,11 @@ void reptile_game_stop(void) {
     lv_timer_del(facility_timer);
     facility_timer = NULL;
   }
+  if (screen_build_timer) {
+    lv_timer_del(screen_build_timer);
+    screen_build_timer = NULL;
+  }
+  pending_screen_request = SCREEN_REQUEST_NONE;
   if (screen_simulation_menu) {
     lv_obj_del(screen_simulation_menu);
     screen_simulation_menu = NULL;
@@ -3281,12 +3353,16 @@ static void terrarium_card_event_cb(lv_event_t *e) {
       close_terrarium_context_menu();
       return;
     }
-    if (selected_terrarium != index) {
-      selected_terrarium = index;
-      update_overview_screen();
-      update_detail_screen();
+    selected_terrarium = index;
+    if (!ensure_game_screens(SCREEN_REQUEST_DETAIL)) {
+      simulation_set_status("Préparation de l'écran détail…");
+      close_terrarium_context_menu();
+      return;
     }
-    ensure_game_screens();
+    update_overview_screen();
+    update_detail_screen();
+    update_economy_screen();
+    update_regulation_screen();
     if (screen_detail) {
       lv_scr_load(screen_detail);
     }
@@ -3316,9 +3392,15 @@ static void terrarium_context_button_event_cb(lv_event_t *e) {
   case TERRARIUM_CONTEXT_ACTION_DETAIL:
     if (index < g_facility.terrarium_count) {
       selected_terrarium = index;
-      ensure_game_screens();
+      if (!ensure_game_screens(SCREEN_REQUEST_DETAIL)) {
+        simulation_set_status("Préparation de l'écran détail…");
+        close_terrarium_context_menu();
+        return;
+      }
       update_overview_screen();
       update_detail_screen();
+      update_economy_screen();
+      update_regulation_screen();
       if (screen_detail) {
         lv_scr_load(screen_detail);
       }
