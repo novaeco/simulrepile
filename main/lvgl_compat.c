@@ -27,6 +27,7 @@ static void tooltip_hide(void);
 static void tooltip_timer_cb(lv_timer_t *timer);
 static void tooltip_show(compat_tooltip_entry_t *entry, lv_event_t *e);
 static void tooltip_update_position(const lv_point_t *point, lv_obj_t *target);
+static const lv_point_t *tooltip_acquire_point(lv_event_t *e, lv_point_t *buffer);
 
 struct lvgl_compat_meter_scale {
     struct lvgl_compat_meter_scale *next;
@@ -362,6 +363,56 @@ static void tooltip_detach_entry(compat_tooltip_entry_t *entry, bool remove_even
     lv_free(entry);
 }
 
+static const lv_point_t *tooltip_acquire_point(lv_event_t *e, lv_point_t *buffer)
+{
+    if (!e || !buffer) {
+        return NULL;
+    }
+
+#if LVGL_VERSION_MAJOR < 9
+    const lv_point_t *event_point = lv_event_get_point(e);
+    if (event_point) {
+        *buffer = *event_point;
+        return buffer;
+    }
+#else
+    void *param = lv_event_get_param(e);
+    if (param) {
+        switch (lv_event_get_code(e)) {
+            case LV_EVENT_PRESSING:
+            case LV_EVENT_PRESS_LOST:
+            case LV_EVENT_RELEASED:
+            case LV_EVENT_LONG_PRESSED:
+            case LV_EVENT_LONG_PRESSED_REPEAT:
+            case LV_EVENT_GESTURE:
+            case LV_EVENT_LEAVE: {
+                const lv_point_t *event_point = (const lv_point_t *)param;
+                *buffer = *event_point;
+                return buffer;
+            }
+            default:
+                break;
+        }
+    }
+#endif
+
+#if LVGL_VERSION_MAJOR < 9
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) {
+        indev = lv_indev_get_act();
+    }
+#else
+    lv_indev_t *indev = lv_indev_get_act();
+#endif
+
+    if (indev) {
+        lv_indev_get_point(indev, buffer);
+        return buffer;
+    }
+
+    return NULL;
+}
+
 static void tooltip_event_cb(lv_event_t *e)
 {
     compat_tooltip_entry_t *entry = lv_event_get_user_data(e);
@@ -381,15 +432,8 @@ static void tooltip_event_cb(lv_event_t *e)
         case LV_EVENT_LONG_PRESSED_REPEAT:
         case LV_EVENT_PRESSING:
             if (tooltip_active_entry == entry) {
-                const lv_point_t *point = lv_event_get_point(e);
                 lv_point_t buf;
-                if (!point) {
-                    lv_indev_t *indev = lv_indev_get_act();
-                    if (indev) {
-                        lv_indev_get_point(indev, &buf);
-                        point = &buf;
-                    }
-                }
+                const lv_point_t *point = tooltip_acquire_point(e, &buf);
                 tooltip_update_position(point, entry->target);
                 if (tooltip_timer) {
                     lv_timer_reset(tooltip_timer);
@@ -477,15 +521,8 @@ static void tooltip_show(compat_tooltip_entry_t *entry, lv_event_t *e)
     tooltip_active_entry = entry;
     lv_label_set_text(tooltip_label, entry->text);
 
-    const lv_point_t *point = lv_event_get_point(e);
     lv_point_t buf;
-    if (!point) {
-        lv_indev_t *indev = lv_indev_get_act();
-        if (indev) {
-            lv_indev_get_point(indev, &buf);
-            point = &buf;
-        }
-    }
+    const lv_point_t *point = tooltip_acquire_point(e, &buf);
     tooltip_update_position(point, entry->target);
     lv_obj_clear_flag(tooltip_container, LV_OBJ_FLAG_HIDDEN);
 

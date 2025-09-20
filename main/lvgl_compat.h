@@ -16,6 +16,10 @@
 #define LV_ALIGN_END LV_ALIGN_RIGHT_MID
 #endif
 
+#ifndef LV_FLEX_ALIGN_STRETCH
+#define LV_FLEX_ALIGN_STRETCH LV_FLEX_ALIGN_START
+#endif
+
 static inline void lv_obj_set_style_align_self(lv_obj_t *obj, lv_align_t align, lv_style_selector_t selector) {
     lv_obj_set_style_align(obj, align, selector);
 }
