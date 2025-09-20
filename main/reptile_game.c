@@ -122,12 +122,26 @@ static lv_chart_series_t *series_income;
 static lv_chart_series_t *series_expenses;
 static lv_obj_t *economy_table;
 static lv_obj_t *economy_summary_label;
+static lv_obj_t *economy_distribution_chart;
+static lv_obj_t *economy_distribution_label;
+static lv_obj_t *economy_filter_deficit_btn;
+static lv_obj_t *economy_filter_pathology_btn;
+static lv_obj_t *economy_sort_toggle_btn;
+static float economy_distribution_income_value;
+static float economy_distribution_expense_value;
 static lv_obj_t *save_slot_dropdown;
 static lv_obj_t *save_status_label;
 static lv_obj_t *regulations_table;
-static lv_obj_t *regulations_alert_table;
 static lv_obj_t *regulations_summary_label;
 static lv_obj_t *regulations_export_label;
+static lv_obj_t *regulations_tabview;
+static lv_obj_t *regulations_incident_list;
+static lv_obj_t *regulations_export_icon_label;
+static lv_obj_t *regulations_export_confirm_dialog;
+static lv_obj_t *regulations_export_toast;
+static lv_timer_t *regulations_export_toast_timer;
+static time_t regulations_last_export_time;
+static char regulations_last_export_path[128];
 
 static lv_timer_t *facility_timer;
 static uint32_t last_tick_ms;
@@ -146,6 +160,17 @@ typedef struct {
   lv_obj_t *warning;
   lv_obj_t *badge;
 } terrarium_card_widgets_t;
+
+typedef struct {
+  uint32_t index;
+  const terrarium_t *terrarium;
+  float revenue_eur;
+  float cost_eur;
+  float net_eur;
+  bool has_pathology;
+  bool has_incident;
+  bool is_deficit;
+} economy_row_t;
 
 typedef struct {
   lv_obj_t *content;
@@ -258,6 +283,14 @@ static void simulation_summary_update_event(const char *text);
 static bool simulation_message_is_error(const char *text);
 static void close_terrarium_context_menu(void);
 static void show_terrarium_context_menu(uint32_t index);
+static void economy_filter_button_event_cb(lv_event_t *e);
+static void economy_pie_draw_event_cb(lv_event_t *e);
+static int economy_row_compare(const void *lhs, const void *rhs);
+static void regulations_show_toast(const char *text, bool success);
+static void regulations_export_toast_timer_cb(lv_timer_t *timer);
+static void export_confirm_button_event_cb(lv_event_t *e);
+static void export_confirm_dialog_event_cb(lv_event_t *e);
+static void perform_regulations_export(void);
 static void show_terrarium_history_dialog(uint32_t index);
 static void update_terrarium_card(uint32_t index, lv_coord_t card_width);
 static lv_coord_t determine_card_width(uint32_t terrarium_count);
@@ -1382,15 +1415,29 @@ static void build_economy_screen(void) {
   screen_economy = lv_obj_create(NULL);
   ui_theme_apply_screen(screen_economy);
   lv_obj_set_style_pad_all(screen_economy, 16, 0);
+  lv_obj_set_style_pad_gap(screen_economy, 18, 0);
+  lv_obj_set_flex_flow(screen_economy, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(screen_economy, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START);
 
   lv_obj_t *title = lv_label_create(screen_economy);
   ui_theme_apply_title(title);
   lv_label_set_text(title, "Synthèse économique");
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_width(title, LV_SIZE_CONTENT);
 
-  economy_chart = lv_chart_create(screen_economy);
-  lv_obj_set_size(economy_chart, 640, 200);
-  lv_obj_align(economy_chart, LV_ALIGN_TOP_LEFT, 10, 60);
+  lv_obj_t *charts_row = lv_obj_create(screen_economy);
+  lv_obj_remove_style_all(charts_row);
+  lv_obj_set_style_bg_opa(charts_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(charts_row, LV_PCT(100));
+  lv_obj_set_flex_flow(charts_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(charts_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(charts_row, 16, 0);
+
+  economy_chart = lv_chart_create(charts_row);
+  lv_obj_set_style_min_width(economy_chart, 360, 0);
+  lv_obj_set_height(economy_chart, 220);
+  lv_obj_set_flex_grow(economy_chart, 3);
   lv_chart_set_point_count(economy_chart, ECONOMY_CHART_POINTS);
   lv_chart_set_type(economy_chart, LV_CHART_TYPE_LINE);
   lv_chart_set_div_line_count(economy_chart, 5, 6);
@@ -1406,28 +1453,179 @@ static void build_economy_screen(void) {
     lv_chart_set_next_value(economy_chart, series_expenses, 0);
   }
 
-  economy_table = lv_table_create(screen_economy);
-  lv_obj_set_size(economy_table, 640, 220);
-  lv_obj_align(economy_table, LV_ALIGN_BOTTOM_LEFT, 10, -70);
+  lv_obj_t *distribution_card = ui_theme_create_card(charts_row);
+  lv_obj_set_style_pad_all(distribution_card, 16, 0);
+  lv_obj_set_style_pad_gap(distribution_card, 12, 0);
+  lv_obj_set_style_min_width(distribution_card, 220, 0);
+  lv_obj_set_flex_grow(distribution_card, 1);
+
+  lv_obj_t *distribution_title = lv_label_create(distribution_card);
+  ui_theme_apply_body(distribution_title);
+  lv_label_set_text(distribution_title, "Répartition charges / recettes");
+  lv_obj_set_width(distribution_title, LV_PCT(100));
+
+  economy_distribution_chart = lv_chart_create(distribution_card);
+  lv_obj_set_style_bg_opa(economy_distribution_chart, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(economy_distribution_chart, 0, 0);
+  lv_obj_set_style_pad_all(economy_distribution_chart, 0, LV_PART_MAIN);
+  lv_obj_set_style_min_width(economy_distribution_chart, 160, 0);
+  lv_obj_set_style_min_height(economy_distribution_chart, 160, 0);
+  lv_obj_set_size(economy_distribution_chart, 200, 200);
+  lv_chart_set_type(economy_distribution_chart, LV_CHART_TYPE_NONE);
+  lv_chart_set_div_line_count(economy_distribution_chart, 0, 0);
+  lv_obj_add_event_cb(economy_distribution_chart, economy_pie_draw_event_cb,
+                      LV_EVENT_DRAW_MAIN, NULL);
+
+  economy_distribution_label = lv_label_create(distribution_card);
+  ui_theme_apply_body(economy_distribution_label);
+  lv_obj_set_width(economy_distribution_label, LV_PCT(100));
+  lv_label_set_long_mode(economy_distribution_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(economy_distribution_label, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(economy_distribution_label,
+                    "Répartition non calculée (données insuffisantes)");
+
+  lv_obj_t *controls_row = lv_obj_create(screen_economy);
+  lv_obj_remove_style_all(controls_row);
+  lv_obj_set_style_bg_opa(controls_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(controls_row, LV_PCT(100));
+  lv_obj_set_flex_flow(controls_row, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(controls_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(controls_row, 14, 0);
+
+  lv_obj_t *filter_card = ui_theme_create_card(controls_row);
+  lv_obj_set_style_pad_all(filter_card, 14, 0);
+  lv_obj_set_style_pad_gap(filter_card, 10, 0);
+  lv_obj_set_style_min_width(filter_card, 340, 0);
+  lv_obj_set_flex_flow(filter_card, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *filter_title = lv_label_create(filter_card);
+  ui_theme_apply_body(filter_title);
+  lv_label_set_text(filter_title, "Filtres & tri");
+
+  lv_obj_t *filter_buttons = lv_obj_create(filter_card);
+  lv_obj_remove_style_all(filter_buttons);
+  lv_obj_set_style_bg_opa(filter_buttons, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(filter_buttons, LV_PCT(100));
+  lv_obj_set_flex_flow(filter_buttons, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_gap(filter_buttons, 10, 0);
+
+  economy_filter_deficit_btn =
+      ui_theme_create_button(filter_buttons, "Déficit",
+                             UI_THEME_BUTTON_SECONDARY, NULL, NULL);
+  lv_obj_add_flag(economy_filter_deficit_btn, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_add_event_cb(economy_filter_deficit_btn, economy_filter_button_event_cb,
+                      LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_set_style_bg_color(economy_filter_deficit_btn,
+                            lv_palette_main(LV_PALETTE_GREEN),
+                            LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_grad_color(economy_filter_deficit_btn,
+                                 lv_palette_darken(LV_PALETTE_GREEN, 2),
+                                 LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_border_color(economy_filter_deficit_btn,
+                                lv_palette_darken(LV_PALETTE_GREEN, 3),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_t *deficit_label = lv_obj_get_child(economy_filter_deficit_btn, 0);
+  if (deficit_label) {
+    lv_obj_set_style_text_color(deficit_label, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  }
+
+  economy_filter_pathology_btn =
+      ui_theme_create_button(filter_buttons, "Pathologie/Audit",
+                             UI_THEME_BUTTON_SECONDARY, NULL, NULL);
+  lv_obj_add_flag(economy_filter_pathology_btn, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_add_event_cb(economy_filter_pathology_btn,
+                      economy_filter_button_event_cb, LV_EVENT_VALUE_CHANGED,
+                      NULL);
+  lv_obj_set_style_bg_color(economy_filter_pathology_btn,
+                            lv_palette_main(LV_PALETTE_ORANGE),
+                            LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_grad_color(economy_filter_pathology_btn,
+                                 lv_palette_darken(LV_PALETTE_ORANGE, 2),
+                                 LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_border_color(economy_filter_pathology_btn,
+                                lv_palette_darken(LV_PALETTE_ORANGE, 3),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_t *pathology_label = lv_obj_get_child(economy_filter_pathology_btn, 0);
+  if (pathology_label) {
+    lv_obj_set_style_text_color(pathology_label, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  }
+
+  economy_sort_toggle_btn =
+      ui_theme_create_button(filter_buttons, "Tri déficit",
+                             UI_THEME_BUTTON_SECONDARY, NULL, NULL);
+  lv_obj_add_flag(economy_sort_toggle_btn, LV_OBJ_FLAG_CHECKABLE);
+  lv_obj_add_event_cb(economy_sort_toggle_btn, economy_filter_button_event_cb,
+                      LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_set_style_bg_color(economy_sort_toggle_btn,
+                            lv_palette_main(LV_PALETTE_BLUE),
+                            LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_bg_grad_color(economy_sort_toggle_btn,
+                                 lv_palette_darken(LV_PALETTE_BLUE, 2),
+                                 LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_set_style_border_color(economy_sort_toggle_btn,
+                                lv_palette_darken(LV_PALETTE_BLUE, 3),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  lv_obj_t *sort_label = lv_obj_get_child(economy_sort_toggle_btn, 0);
+  if (sort_label) {
+    lv_obj_set_style_text_color(sort_label, lv_color_hex(0xFFFFFF),
+                                LV_PART_MAIN | LV_STATE_CHECKED);
+  }
+
+  economy_summary_label = lv_label_create(controls_row);
+  ui_theme_apply_body(economy_summary_label);
+  lv_label_set_long_mode(economy_summary_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_flex_grow(economy_summary_label, 1);
+  lv_obj_set_width(economy_summary_label, LV_PCT(100));
+  lv_label_set_text(economy_summary_label,
+                    "Synthèse financière indisponible (en attente de données)");
+
+  lv_obj_t *table_card = ui_theme_create_card(screen_economy);
+  lv_obj_set_style_pad_all(table_card, 16, 0);
+  lv_obj_set_style_pad_gap(table_card, 12, 0);
+  lv_obj_set_width(table_card, LV_PCT(100));
+  lv_obj_set_flex_flow(table_card, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *table_title = lv_label_create(table_card);
+  ui_theme_apply_body(table_title);
+  lv_label_set_text(table_title, "Détails par terrarium");
+  lv_obj_set_width(table_title, LV_PCT(100));
+
+  economy_table = lv_table_create(table_card);
+  lv_obj_set_width(economy_table, LV_PCT(100));
+  lv_obj_set_style_max_height(economy_table, 260, LV_PART_MAIN);
+  lv_obj_set_scroll_dir(economy_table, LV_DIR_VER);
+  lv_obj_set_style_pad_row(economy_table, 10, LV_PART_ITEMS);
+  lv_obj_set_style_pad_column(economy_table, 16, LV_PART_ITEMS);
+  lv_obj_set_style_text_wrap(economy_table, LV_TEXT_WRAP_WORD, LV_PART_ITEMS);
   lv_table_set_column_count(economy_table, 4);
-  lv_table_set_row_count(economy_table, 6);
+  lv_table_set_row_count(economy_table, 1);
+  lv_table_set_col_width(economy_table, 0, 110);
+  lv_table_set_col_width(economy_table, 1, 150);
+  lv_table_set_col_width(economy_table, 2, 150);
+  lv_table_set_col_width(economy_table, 3, 180);
   ui_theme_apply_table(economy_table, UI_THEME_TABLE_DEFAULT);
 
-  economy_summary_label = lv_label_create(screen_economy);
-  ui_theme_apply_body(economy_summary_label);
-  lv_obj_align(economy_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+  lv_obj_t *footer = lv_obj_create(screen_economy);
+  lv_obj_remove_style_all(footer);
+  lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(footer, LV_PCT(100));
+  lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(footer, 12, 0);
 
   lv_obj_t *btn_menu = ui_theme_create_button(
-      screen_economy, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
-      nav_button_event_cb, screen_simulation_menu);
+      footer, "Menu Simulation", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_simulation_menu);
   lv_obj_set_width(btn_menu, 200);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -60);
 
   lv_obj_t *btn_back = ui_theme_create_button(
-      screen_economy, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      footer, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
       screen_overview);
   lv_obj_set_width(btn_back, 180);
-  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
 }
 
 static void build_save_screen(void) {
@@ -1486,52 +1684,136 @@ static void build_regulation_screen(void) {
   screen_regulations = lv_obj_create(NULL);
   ui_theme_apply_screen(screen_regulations);
   lv_obj_set_style_pad_all(screen_regulations, 16, 0);
+  lv_obj_set_style_pad_gap(screen_regulations, 18, 0);
+  lv_obj_set_flex_flow(screen_regulations, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(screen_regulations, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
   lv_obj_t *title = lv_label_create(screen_regulations);
   ui_theme_apply_title(title);
   lv_label_set_text(title, "Référentiel réglementaire");
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_set_width(title, LV_SIZE_CONTENT);
 
-  regulations_table = lv_table_create(screen_regulations);
-  lv_obj_set_size(regulations_table, 700, 220);
-  lv_obj_align(regulations_table, LV_ALIGN_TOP_LEFT, 10, 60);
-  lv_table_set_column_count(regulations_table, 4);
-  lv_table_set_row_count(regulations_table, 1);
-  ui_theme_apply_table(regulations_table, UI_THEME_TABLE_DEFAULT);
+  lv_obj_t *status_card = ui_theme_create_card(screen_regulations);
+  lv_obj_set_style_pad_all(status_card, 18, 0);
+  lv_obj_set_style_pad_gap(status_card, 12, 0);
+  lv_obj_set_width(status_card, LV_PCT(100));
+  lv_obj_set_flex_flow(status_card, LV_FLEX_FLOW_COLUMN);
 
-  regulations_alert_table = lv_table_create(screen_regulations);
-  lv_obj_set_size(regulations_alert_table, 700, 160);
-  lv_obj_align(regulations_alert_table, LV_ALIGN_TOP_LEFT, 10, 300);
-  lv_table_set_column_count(regulations_alert_table, 3);
-  lv_table_set_row_count(regulations_alert_table, 1);
-  ui_theme_apply_table(regulations_alert_table, UI_THEME_TABLE_DEFAULT);
-
-  regulations_summary_label = lv_label_create(screen_regulations);
+  regulations_summary_label = lv_label_create(status_card);
   ui_theme_apply_body(regulations_summary_label);
-  lv_obj_align(regulations_summary_label, LV_ALIGN_BOTTOM_LEFT, 10, -80);
+  lv_obj_set_width(regulations_summary_label, LV_PCT(100));
+  lv_label_set_long_mode(regulations_summary_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(regulations_summary_label,
+                    "Aucune infraction détectée pour le moment");
 
-  regulations_export_label = lv_label_create(screen_regulations);
+  lv_obj_t *export_row = lv_obj_create(status_card);
+  lv_obj_remove_style_all(export_row);
+  lv_obj_set_style_bg_opa(export_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(export_row, LV_PCT(100));
+  lv_obj_set_flex_flow(export_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(export_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(export_row, 8, 0);
+
+  regulations_export_icon_label = lv_label_create(export_row);
+  ui_theme_apply_caption(regulations_export_icon_label);
+  lv_label_set_text(regulations_export_icon_label, LV_SYMBOL_SD_CARD);
+  lv_obj_set_style_text_color(regulations_export_icon_label,
+                              lv_palette_main(LV_PALETTE_BLUE), 0);
+
+  regulations_export_label = lv_label_create(export_row);
   ui_theme_apply_body(regulations_export_label);
   lv_label_set_text(regulations_export_label, "Aucun export réalisé");
-  lv_obj_align(regulations_export_label, LV_ALIGN_BOTTOM_LEFT, 260, -30);
+  lv_label_set_long_mode(regulations_export_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(regulations_export_label, LV_PCT(100));
+
+  regulations_tabview = lv_tabview_create(screen_regulations, LV_DIR_TOP, 46);
+  lv_obj_set_width(regulations_tabview, LV_PCT(100));
+  lv_obj_set_flex_grow(regulations_tabview, 1);
+  lv_obj_set_style_min_height(regulations_tabview, 320, 0);
+
+  lv_obj_t *tab_reference = lv_tabview_add_tab(regulations_tabview, "Référentiel");
+  lv_obj_set_style_pad_all(tab_reference, 12, 0);
+  lv_obj_set_style_pad_gap(tab_reference, 12, 0);
+  lv_obj_set_flex_flow(tab_reference, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *reference_card = ui_theme_create_card(tab_reference);
+  lv_obj_set_style_pad_all(reference_card, 16, 0);
+  lv_obj_set_style_pad_gap(reference_card, 12, 0);
+  lv_obj_set_width(reference_card, LV_PCT(100));
+  lv_obj_set_flex_flow(reference_card, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *reference_title = lv_label_create(reference_card);
+  ui_theme_apply_body(reference_title);
+  lv_label_set_text(reference_title, "Exigences par espèce");
+  lv_obj_set_width(reference_title, LV_PCT(100));
+
+  regulations_table = lv_table_create(reference_card);
+  lv_obj_set_width(regulations_table, LV_PCT(100));
+  lv_obj_set_style_text_wrap(regulations_table, LV_TEXT_WRAP_WORD,
+                             LV_PART_ITEMS);
+  lv_obj_set_style_pad_row(regulations_table, 10, LV_PART_ITEMS);
+  lv_obj_set_style_pad_column(regulations_table, 14, LV_PART_ITEMS);
+  lv_obj_set_style_max_height(regulations_table, 260, LV_PART_MAIN);
+  lv_obj_set_scroll_dir(regulations_table, LV_DIR_VER);
+  lv_table_set_column_count(regulations_table, 4);
+  lv_table_set_row_count(regulations_table, 1);
+  lv_table_set_col_width(regulations_table, 0, 200);
+  lv_table_set_col_width(regulations_table, 1, 140);
+  lv_table_set_col_width(regulations_table, 2, 220);
+  lv_table_set_col_width(regulations_table, 3, 180);
+  ui_theme_apply_table(regulations_table, UI_THEME_TABLE_DEFAULT);
+
+  lv_obj_t *tab_incidents = lv_tabview_add_tab(regulations_tabview, "Incidents");
+  lv_obj_set_style_pad_all(tab_incidents, 12, 0);
+  lv_obj_set_style_pad_gap(tab_incidents, 12, 0);
+  lv_obj_set_flex_flow(tab_incidents, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *incident_card = ui_theme_create_card(tab_incidents);
+  lv_obj_set_style_pad_all(incident_card, 16, 0);
+  lv_obj_set_style_pad_gap(incident_card, 12, 0);
+  lv_obj_set_width(incident_card, LV_PCT(100));
+  lv_obj_set_flex_flow(incident_card, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *incident_title = lv_label_create(incident_card);
+  ui_theme_apply_body(incident_title);
+  lv_label_set_text(incident_title, "Infractions & incidents actifs");
+  lv_obj_set_width(incident_title, LV_PCT(100));
+
+  regulations_incident_list = lv_obj_create(incident_card);
+  lv_obj_remove_style_all(regulations_incident_list);
+  lv_obj_set_style_bg_opa(regulations_incident_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(regulations_incident_list, 0, 0);
+  lv_obj_set_style_pad_gap(regulations_incident_list, 12, 0);
+  lv_obj_set_width(regulations_incident_list, LV_PCT(100));
+  lv_obj_set_flex_flow(regulations_incident_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(regulations_incident_list, LV_DIR_VER);
+  lv_obj_set_style_max_height(regulations_incident_list, 320, LV_PART_MAIN);
+
+  lv_obj_t *footer = lv_obj_create(screen_regulations);
+  lv_obj_remove_style_all(footer);
+  lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(footer, LV_PCT(100));
+  lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_gap(footer, 12, 0);
 
   lv_obj_t *btn_export = ui_theme_create_button(
-      screen_regulations, "Exporter rapport microSD",
-      UI_THEME_BUTTON_PRIMARY, export_report_event_cb, NULL);
+      footer, "Exporter rapport microSD", UI_THEME_BUTTON_PRIMARY,
+      export_report_event_cb, NULL);
   lv_obj_set_width(btn_export, 260);
-  lv_obj_align(btn_export, LV_ALIGN_BOTTOM_LEFT, 10, -30);
 
   lv_obj_t *btn_menu = ui_theme_create_button(
-      screen_regulations, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
-      nav_button_event_cb, screen_simulation_menu);
+      footer, "Menu Simulation", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_simulation_menu);
   lv_obj_set_width(btn_menu, 200);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 10, -10);
 
   lv_obj_t *btn_back = ui_theme_create_button(
-      screen_regulations, "Retour", UI_THEME_BUTTON_SECONDARY,
-      nav_button_event_cb, screen_overview);
+      footer, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
+      screen_overview);
   lv_obj_set_width(btn_back, 180);
-  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
 }
 
 void reptile_game_start(esp_lcd_panel_handle_t panel,
@@ -2508,8 +2790,118 @@ static void update_certificate_table(void) {
   }
 }
 
+static int economy_row_compare(const void *lhs, const void *rhs) {
+  const economy_row_t *a = (const economy_row_t *)lhs;
+  const economy_row_t *b = (const economy_row_t *)rhs;
+  if (a->net_eur < b->net_eur)
+    return -1;
+  if (a->net_eur > b->net_eur)
+    return 1;
+  if (a->index < b->index)
+    return -1;
+  if (a->index > b->index)
+    return 1;
+  return 0;
+}
+
+static void economy_filter_button_event_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
+    return;
+  update_economy_screen();
+}
+
+static void economy_pie_draw_event_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_DRAW_MAIN)
+    return;
+
+  lv_draw_ctx_t *draw_ctx = lv_event_get_draw_ctx(e);
+  if (!draw_ctx)
+    return;
+
+  lv_obj_t *obj = lv_event_get_target(e);
+  lv_area_t coords;
+  lv_obj_get_content_coords(obj, &coords);
+  lv_coord_t w = lv_area_get_width(&coords);
+  lv_coord_t h = lv_area_get_height(&coords);
+  lv_coord_t radius = LV_MIN(w, h) / 2;
+  if (radius <= 0)
+    return;
+
+  lv_coord_t center_x = coords.x1 + w / 2;
+  lv_coord_t center_y = coords.y1 + h / 2;
+
+  float income = economy_distribution_income_value;
+  float expense = economy_distribution_expense_value;
+  if (income < 0.0f)
+    income = 0.0f;
+  if (expense < 0.0f)
+    expense = 0.0f;
+  float total = income + expense;
+
+  lv_draw_arc_dsc_t arc_dsc;
+  lv_draw_arc_dsc_init(&arc_dsc);
+  lv_coord_t thickness = radius - 14;
+  if (thickness < radius / 2)
+    thickness = LV_MAX(radius / 2, 12);
+  if (thickness > radius)
+    thickness = radius;
+  arc_dsc.width = thickness;
+  arc_dsc.rounded = 1;
+
+  lv_coord_t outer_radius = radius - 2;
+  lv_coord_t start_angle = -90;
+
+  if (total <= 0.01f) {
+    arc_dsc.color = lv_palette_lighten(LV_PALETTE_GREY, 2);
+    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, start_angle,
+                start_angle + 360);
+  } else {
+    float income_ratio = income / total;
+    if (income_ratio < 0.0f)
+      income_ratio = 0.0f;
+    if (income_ratio > 1.0f)
+      income_ratio = 1.0f;
+    lv_coord_t income_angle = (lv_coord_t)lrintf(income_ratio * 360.0f);
+    lv_coord_t income_end = start_angle + income_angle;
+    if (income_end < start_angle)
+      income_end = start_angle;
+    if (income_end > start_angle + 360)
+      income_end = start_angle + 360;
+
+    arc_dsc.color = lv_palette_main(LV_PALETTE_GREEN);
+    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, start_angle,
+                income_end);
+
+    arc_dsc.color = lv_palette_main(LV_PALETTE_RED);
+    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, income_end,
+                start_angle + 360);
+  }
+
+  lv_draw_rect_dsc_t rect_dsc;
+  lv_draw_rect_dsc_init(&rect_dsc);
+  rect_dsc.bg_opa = LV_OPA_COVER;
+  lv_color_t inner_color =
+      lv_obj_get_style_bg_color(lv_obj_get_parent(obj), LV_PART_MAIN);
+  if (inner_color.full == 0)
+    inner_color = lv_color_hex(0xFFFFFF);
+  rect_dsc.bg_color = inner_color;
+  rect_dsc.radius = LV_RADIUS_CIRCLE;
+
+  lv_coord_t inner_radius = outer_radius - thickness;
+  if (inner_radius < 12)
+    inner_radius = LV_MIN(outer_radius - 4, 12);
+  if (inner_radius < 4)
+    inner_radius = 4;
+
+  lv_area_t inner_area = {.x1 = center_x - inner_radius,
+                          .y1 = center_y - inner_radius,
+                          .x2 = center_x + inner_radius,
+                          .y2 = center_y + inner_radius};
+  lv_draw_rect(draw_ctx, &rect_dsc, &inner_area);
+}
+
 static void update_regulation_screen(void) {
-  if (!regulations_table || !regulations_alert_table)
+  if (!regulations_table || !lv_obj_is_valid(regulations_table))
     return;
 
   const regulation_rule_t *rules = NULL;
@@ -2534,23 +2926,25 @@ static void update_regulation_screen(void) {
     lv_table_set_cell_value(regulations_table, i + 1U, 3, dim_buf);
   }
 
-  lv_table_set_row_count(regulations_alert_table, 1);
-  lv_table_set_cell_value(regulations_alert_table, 0, 0, "Terrarium");
-  lv_table_set_cell_value(regulations_alert_table, 0, 1, "Incident");
-  lv_table_set_cell_value(regulations_alert_table, 0, 2, "Message");
+  uint32_t compliance_issues = 0;
+  uint32_t pathology_flags = 0;
 
-  uint32_t row = 1;
+  if (regulations_incident_list && lv_obj_is_valid(regulations_incident_list)) {
+    lv_obj_clean(regulations_incident_list);
+  }
+
   for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
     const terrarium_t *terrarium =
         reptile_facility_get_terrarium_const(&g_facility, (uint8_t)i);
-    if (!terrarium || !terrarium->occupied) {
+    if (!terrarium || !terrarium->occupied)
       continue;
-    }
+
     const regulation_rule_t *rule =
         regulations_get_rule((int)terrarium->species.id);
-    bool expired = (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED);
+    bool expired = terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED;
     bool cert_ok = terrarium->certificate_count > 0 && !expired &&
                    terrarium->incident != REPTILE_INCIDENT_CERTIFICATE_MISSING;
+
     regulations_compliance_input_t input = {
         .length_cm = terrarium->config.length_cm,
         .width_cm = terrarium->config.width_cm,
@@ -2575,83 +2969,283 @@ static void update_regulation_screen(void) {
     } else {
       compliance_issue = terrarium->incident != REPTILE_INCIDENT_NONE;
     }
-    if (!compliance_issue && terrarium->incident == REPTILE_INCIDENT_NONE) {
+
+    bool has_incident = terrarium->incident != REPTILE_INCIDENT_NONE;
+    bool has_pathology = terrarium->pathology != REPTILE_PATHOLOGY_NONE;
+
+    if (!compliance_issue && !has_incident && !has_pathology)
       continue;
+
+    compliance_issues++;
+    if (has_pathology)
+      pathology_flags++;
+
+    if (!regulations_incident_list ||
+        !lv_obj_is_valid(regulations_incident_list))
+      continue;
+
+    lv_obj_t *card = ui_theme_create_card(regulations_incident_list);
+    lv_obj_set_style_pad_all(card, 16, 0);
+    lv_obj_set_style_pad_gap(card, 10, 0);
+    lv_obj_set_width(card, LV_PCT(100));
+
+    lv_obj_t *header = lv_obj_create(card);
+    lv_obj_remove_style_all(header);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_width(header, LV_PCT(100));
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(header, 12, 0);
+
+    lv_obj_t *title = lv_label_create(header);
+    ui_theme_apply_body(title);
+    const char *species_name =
+        (terrarium->nickname[0] != '\0') ? terrarium->nickname
+                                          : terrarium->species.name;
+    lv_label_set_text_fmt(title, "T%02" PRIu32 " • %s", (uint32_t)(i + 1U),
+                          species_name);
+
+    ui_theme_badge_kind_t badge_kind = UI_THEME_BADGE_WARNING;
+    const char *badge_text = "Surveillance";
+    if (has_incident) {
+      badge_kind = UI_THEME_BADGE_CRITICAL;
+      badge_text = incident_to_string(terrarium->incident);
+    } else if (has_pathology) {
+      badge_kind = UI_THEME_BADGE_WARNING;
+      badge_text = pathology_to_string(terrarium->pathology);
     }
-    lv_table_set_row_count(regulations_alert_table, row + 1U);
-    char terrarium_id[8];
-    snprintf(terrarium_id, sizeof(terrarium_id), "T%02" PRIu32,
-             (uint32_t)(i + 1U));
-    lv_table_set_cell_value(regulations_alert_table, row, 0, terrarium_id);
-    lv_table_set_cell_value(regulations_alert_table, row, 1,
+    lv_obj_t *badge = ui_theme_create_badge(header, badge_kind, badge_text);
+    lv_obj_set_width(badge, LV_SIZE_CONTENT);
+
+    lv_obj_t *message = lv_label_create(card);
+    ui_theme_apply_body(message);
+    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(message, LV_PCT(100));
+    if (terrarium->compliance_message[0] != '\0') {
+      lv_label_set_text(message, terrarium->compliance_message);
+    } else if (has_incident) {
+      lv_label_set_text_fmt(message, "Incident: %s",
                             incident_to_string(terrarium->incident));
-    lv_table_set_cell_value(regulations_alert_table, row, 2,
-                            terrarium->compliance_message);
-    row++;
-  }
-  if (row == 1U) {
-    lv_table_set_row_count(regulations_alert_table, 2);
-    lv_table_set_cell_value(regulations_alert_table, 1, 0, "-");
-    lv_table_set_cell_value(regulations_alert_table, 1, 1, "Aucun");
-    lv_table_set_cell_value(regulations_alert_table, 1, 2,
-                            "Tous les terrariums sont conformes");
+    } else if (has_pathology) {
+      lv_label_set_text_fmt(message, "Pathologie: %s",
+                            pathology_to_string(terrarium->pathology));
+    } else {
+      lv_label_set_text(message, "Suivi de conformité en cours");
+    }
+
+    lv_obj_t *meta = lv_obj_create(card);
+    lv_obj_remove_style_all(meta);
+    lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
+    lv_obj_set_width(meta, LV_PCT(100));
+    lv_obj_set_flex_flow(meta, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_gap(meta, 10, 0);
+
+    lv_obj_t *economy_label = lv_label_create(meta);
+    ui_theme_apply_caption(economy_label);
+    lv_label_set_text_fmt(
+        economy_label, "Économie: %.2f €/j vs %.2f €/j",
+        (double)terrarium->revenue_cents_per_day / 100.0,
+        (double)terrarium->operating_cost_cents_per_day / 100.0);
+
+    lv_obj_t *timer_label = lv_label_create(meta);
+    ui_theme_apply_caption(timer_label);
+    lv_label_set_text_fmt(timer_label, "Suivi conformité: %.1f h",
+                          (double)terrarium->compliance_timer_h);
   }
 
-  if (regulations_summary_label) {
+  if (regulations_incident_list && lv_obj_is_valid(regulations_incident_list) &&
+      lv_obj_get_child_cnt(regulations_incident_list) == 0) {
+    lv_obj_t *empty_card = ui_theme_create_card(regulations_incident_list);
+    lv_obj_set_style_pad_all(empty_card, 16, 0);
+    lv_obj_set_width(empty_card, LV_PCT(100));
+    lv_obj_t *label = lv_label_create(empty_card);
+    ui_theme_apply_body(label);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(label, "Aucune infraction ou incident actif");
+  }
+
+  if (regulations_summary_label &&
+      lv_obj_is_valid(regulations_summary_label)) {
     lv_label_set_text_fmt(
         regulations_summary_label,
-        "Alertes conformité: %" PRIu32 " | Incidents actifs: %" PRIu32,
-        g_facility.compliance_alerts, g_facility.alerts_active);
+        "Infractions listées: %" PRIu32 " • Alertes conformité: %" PRIu32
+        " • Pathologies suivies: %" PRIu32 " • Incidents actifs: %" PRIu32,
+        compliance_issues, g_facility.compliance_alerts, pathology_flags,
+        g_facility.alerts_active);
+  }
+
+  if (regulations_export_label && lv_obj_is_valid(regulations_export_label)) {
+    if (regulations_last_export_time == 0) {
+      lv_label_set_text(regulations_export_label, "Aucun export réalisé");
+    } else {
+      char time_buf[32];
+      struct tm tm_info;
+      localtime_r(&regulations_last_export_time, &tm_info);
+      strftime(time_buf, sizeof(time_buf), "%d/%m %H:%M", &tm_info);
+      if (regulations_last_export_path[0] != '\0') {
+        lv_label_set_text_fmt(regulations_export_label,
+                              "Dernier export: %s (%s)", time_buf,
+                              regulations_last_export_path);
+      } else {
+        lv_label_set_text_fmt(regulations_export_label,
+                              "Dernier export: %s", time_buf);
+      }
+    }
   }
 }
 
 static void update_economy_screen(void) {
-  if (!economy_table)
+  if (!economy_table || !lv_obj_is_valid(economy_table))
     return;
+
+  bool filter_deficit = economy_filter_deficit_btn &&
+                        lv_obj_is_valid(economy_filter_deficit_btn) &&
+                        lv_obj_has_state(economy_filter_deficit_btn,
+                                         LV_STATE_CHECKED);
+  bool filter_alert = economy_filter_pathology_btn &&
+                      lv_obj_is_valid(economy_filter_pathology_btn) &&
+                      lv_obj_has_state(economy_filter_pathology_btn,
+                                       LV_STATE_CHECKED);
+  bool sort_deficit = economy_sort_toggle_btn &&
+                      lv_obj_is_valid(economy_sort_toggle_btn) &&
+                      lv_obj_has_state(economy_sort_toggle_btn, LV_STATE_CHECKED);
+
+  economy_row_t rows[REPTILE_MAX_TERRARIUMS];
+  size_t row_count = 0;
+  uint32_t occupied_count = 0;
+  uint32_t visible_count = 0;
+  uint32_t deficit_count = 0;
+  uint32_t alert_count = 0;
+  float filtered_income = 0.0f;
+  float filtered_cost = 0.0f;
+
+  for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
+    const terrarium_t *terrarium =
+        reptile_facility_get_terrarium_const(&g_facility, (uint8_t)i);
+    if (!terrarium || !terrarium->occupied)
+      continue;
+
+    occupied_count++;
+
+    float revenue = (float)terrarium->revenue_cents_per_day / 100.0f;
+    float cost = (float)terrarium->operating_cost_cents_per_day / 100.0f;
+    float net = revenue - cost;
+    bool has_pathology = terrarium->pathology != REPTILE_PATHOLOGY_NONE;
+    bool has_incident = terrarium->incident != REPTILE_INCIDENT_NONE;
+    bool is_deficit = net < -0.005f;
+
+    if (filter_deficit && !is_deficit)
+      continue;
+    if (filter_alert && !(has_pathology || has_incident))
+      continue;
+
+    economy_row_t *row = &rows[row_count++];
+    row->index = i;
+    row->terrarium = terrarium;
+    row->revenue_eur = revenue;
+    row->cost_eur = cost;
+    row->net_eur = net;
+    row->has_pathology = has_pathology;
+    row->has_incident = has_incident;
+    row->is_deficit = is_deficit;
+
+    visible_count++;
+    if (is_deficit)
+      deficit_count++;
+    if (has_pathology || has_incident)
+      alert_count++;
+    filtered_income += revenue;
+    filtered_cost += cost;
+  }
+
+  if (sort_deficit && row_count > 1) {
+    qsort(rows, row_count, sizeof(rows[0]), economy_row_compare);
+  }
+
+  uint32_t header_rows = 1U;
+  uint32_t table_rows = (uint32_t)row_count + header_rows;
+  if (table_rows == header_rows + 0U)
+    table_rows = header_rows + 1U;
+  lv_table_set_row_count(economy_table, table_rows);
   lv_table_set_cell_value(economy_table, 0, 0, "Terrarium");
   lv_table_set_cell_value(economy_table, 0, 1, "Recettes €/j");
   lv_table_set_cell_value(economy_table, 0, 2, "Coûts €/j");
   lv_table_set_cell_value(economy_table, 0, 3, "Statut");
 
-  uint32_t row = 1;
-  for (uint32_t i = 0; i < g_facility.terrarium_count && row < 6U; ++i) {
-    const terrarium_t *terrarium =
-        reptile_facility_get_terrarium_const(&g_facility, (uint8_t)i);
-    if (!terrarium || !terrarium->occupied) {
-      continue;
+  if (row_count == 0) {
+    const char *message =
+        (filter_deficit || filter_alert)
+            ? "Aucun terrarium ne correspond aux filtres"
+            : "Aucun terrarium actif";
+    lv_table_set_cell_value(economy_table, 1, 0, message);
+    lv_table_set_cell_value(economy_table, 1, 1, "");
+    lv_table_set_cell_value(economy_table, 1, 2, "");
+    lv_table_set_cell_value(economy_table, 1, 3, "");
+  } else {
+    for (uint32_t r = 0; r < row_count; ++r) {
+      const economy_row_t *row = &rows[r];
+      uint32_t table_row = r + 1U;
+      lv_table_set_cell_value_fmt(economy_table, table_row, 0, "T%02" PRIu32,
+                                  (uint32_t)(row->index + 1U));
+      lv_table_set_cell_value_fmt(economy_table, table_row, 1, "%.2f",
+                                  row->revenue_eur);
+      lv_table_set_cell_value_fmt(economy_table, table_row, 2, "%.2f",
+                                  row->cost_eur);
+      const char *status = "OK";
+      if (row->has_pathology) {
+        status = "Pathologie";
+      } else if (row->has_incident) {
+        status = "Audit";
+      } else if (row->is_deficit) {
+        status = "Déficit";
+      }
+      lv_table_set_cell_value(economy_table, table_row, 3, status);
     }
-    lv_table_set_cell_value_fmt(economy_table, row, 0, "T%02" PRIu32,
-                                (uint32_t)(i + 1U));
-    lv_table_set_cell_value_fmt(economy_table, row, 1, "%.2f",
-                                terrarium->revenue_cents_per_day / 100.0f);
-    lv_table_set_cell_value_fmt(economy_table, row, 2, "%.2f",
-                                terrarium->operating_cost_cents_per_day /
-                                    100.0f);
-    const char *status =
-        (terrarium->pathology != REPTILE_PATHOLOGY_NONE)
-            ? "Soins"
-            : ((terrarium->incident != REPTILE_INCIDENT_NONE) ? "Audit" :
-                                                             "OK");
-    lv_table_set_cell_value(economy_table, row, 3, status);
-    row++;
-  }
-  for (; row < 6U; ++row) {
-    lv_table_set_cell_value(economy_table, row, 0, "");
-    lv_table_set_cell_value(economy_table, row, 1, "");
-    lv_table_set_cell_value(economy_table, row, 2, "");
-    lv_table_set_cell_value(economy_table, row, 3, "");
   }
 
-  lv_label_set_text_fmt(
-      economy_summary_label,
-      "Jour %" PRIu32
-      " | Revenu hebdo: %.2f € | Revenu d'exploitation: %.2f € | Dépenses: %.2f € |"
-      " Amendes cumulées: %.2f €",
-      g_facility.economy.days_elapsed,
-      g_facility.economy.weekly_subsidy_cents / 100.0,
-      g_facility.economy.daily_income_cents / 100.0,
-      g_facility.economy.daily_expenses_cents / 100.0,
-      g_facility.economy.fines_cents / 100.0);
+  float chart_income = filtered_income;
+  float chart_cost = filtered_cost;
+  if (row_count == 0) {
+    chart_income = (float)g_facility.economy.daily_income_cents / 100.0f;
+    chart_cost = (float)g_facility.economy.daily_expenses_cents / 100.0f;
+  }
+  economy_distribution_income_value = chart_income;
+  economy_distribution_expense_value = chart_cost;
+
+  if (economy_distribution_label &&
+      lv_obj_is_valid(economy_distribution_label)) {
+    float total = chart_income + chart_cost;
+    if (total <= 0.01f) {
+      lv_label_set_text(economy_distribution_label,
+                        "Pas de flux financiers mesurés");
+    } else {
+      float income_pct = (chart_income / total) * 100.0f;
+      float expense_pct = (chart_cost / total) * 100.0f;
+      lv_label_set_text_fmt(economy_distribution_label,
+                            "Recettes %.1f%% • Charges %.1f%%", income_pct,
+                            expense_pct);
+    }
+  }
+  if (economy_distribution_chart &&
+      lv_obj_is_valid(economy_distribution_chart)) {
+    lv_obj_invalidate(economy_distribution_chart);
+  }
+
+  if (economy_summary_label && lv_obj_is_valid(economy_summary_label)) {
+    lv_label_set_text_fmt(
+        economy_summary_label,
+        "Jour %" PRIu32 " • Terrariums visibles: %" PRIu32 "/%" PRIu32
+        " (occupés: %" PRIu32 ", déficit: %" PRIu32 ", alertes: %" PRIu32 ")\n"
+        "Revenu hebdo: %.2f € • Recettes jour: %.2f € • Charges jour: %.2f €\n"
+        "Amendes cumulées: %.2f €",
+        g_facility.economy.days_elapsed, visible_count,
+        g_facility.terrarium_count, occupied_count, deficit_count, alert_count,
+        g_facility.economy.weekly_subsidy_cents / 100.0,
+        g_facility.economy.daily_income_cents / 100.0,
+        g_facility.economy.daily_expenses_cents / 100.0,
+        g_facility.economy.fines_cents / 100.0);
+  }
 }
 
 static void update_chart_series(int64_t income_cents, int64_t expense_cents) {
@@ -2928,8 +3522,62 @@ static void register_button_event_cb(lv_event_t *e) {
   update_regulation_screen();
 }
 
-static void export_report_event_cb(lv_event_t *e) {
-  (void)e;
+static void regulations_show_toast(const char *text, bool success) {
+  if (regulations_export_toast_timer) {
+    lv_timer_del(regulations_export_toast_timer);
+    regulations_export_toast_timer = NULL;
+  }
+  if (regulations_export_toast && lv_obj_is_valid(regulations_export_toast)) {
+    lv_obj_del(regulations_export_toast);
+    regulations_export_toast = NULL;
+  }
+
+  regulations_export_toast = ui_theme_create_card(lv_layer_top());
+  lv_obj_set_style_pad_all(regulations_export_toast, 18, 0);
+  lv_obj_set_style_pad_gap(regulations_export_toast, 8, 0);
+  lv_obj_set_style_min_width(regulations_export_toast, 260, 0);
+  lv_obj_set_style_bg_color(regulations_export_toast,
+                            success ? lv_color_hex(0xE1F6EA)
+                                    : lv_color_hex(0xF9E3E3),
+                            0);
+  lv_obj_set_style_shadow_width(regulations_export_toast, 14, 0);
+  lv_obj_set_style_shadow_color(regulations_export_toast,
+                                lv_color_hex(0x9ECDAF), 0);
+  lv_obj_align(regulations_export_toast, LV_ALIGN_BOTTOM_MID, 0, -28);
+
+  lv_obj_t *label = lv_label_create(regulations_export_toast);
+  ui_theme_apply_body(label);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label, LV_PCT(100));
+  lv_label_set_text(label, text);
+  lv_obj_set_style_text_color(label,
+                              success ? lv_color_hex(0x1F4F39)
+                                      : lv_color_hex(0x7A1C1C),
+                              0);
+
+  regulations_export_toast_timer =
+      lv_timer_create(regulations_export_toast_timer_cb, 3200, NULL);
+}
+
+static void regulations_export_toast_timer_cb(lv_timer_t *timer) {
+  (void)timer;
+  if (regulations_export_toast && lv_obj_is_valid(regulations_export_toast)) {
+    lv_obj_del(regulations_export_toast);
+  }
+  regulations_export_toast = NULL;
+  if (regulations_export_toast_timer) {
+    lv_timer_del(timer);
+  }
+  regulations_export_toast_timer = NULL;
+}
+
+static void export_confirm_dialog_event_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) == LV_EVENT_DELETE) {
+    regulations_export_confirm_dialog = NULL;
+  }
+}
+
+static void perform_regulations_export(void) {
   char filename[64];
   time_t now = time(NULL);
   struct tm tm_info;
@@ -2937,16 +3585,57 @@ static void export_report_event_cb(lv_event_t *e) {
   strftime(filename, sizeof(filename), "rapport_%Y%m%d_%H%M%S.csv", &tm_info);
   esp_err_t err =
       reptile_facility_export_regulation_report(&g_facility, filename);
-  if (regulations_export_label) {
-    if (err == ESP_OK) {
-      char path[160];
-      snprintf(path, sizeof(path), "%s/reports/%s", MOUNT_POINT, filename);
-      lv_label_set_text_fmt(regulations_export_label, "Exporté: %s", path);
-    } else {
-      lv_label_set_text(regulations_export_label,
-                        "Échec export (microSD indisponible)");
-    }
+  if (err == ESP_OK) {
+    regulations_last_export_time = now;
+    snprintf(regulations_last_export_path, sizeof(regulations_last_export_path),
+             "reports/%s", filename);
+    char toast_msg[160];
+    snprintf(toast_msg, sizeof(toast_msg), "Rapport exporté: %s",
+             regulations_last_export_path);
+    regulations_show_toast(toast_msg, true);
+  } else {
+    regulations_show_toast(
+        "Échec de l'export CSV (vérifier la carte microSD)", false);
   }
+  update_regulation_screen();
+}
+
+static void export_confirm_button_event_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    return;
+
+  bool confirm = lv_event_get_user_data(e) != NULL;
+  if (regulations_export_confirm_dialog &&
+      lv_obj_is_valid(regulations_export_confirm_dialog)) {
+    lv_msgbox_close(regulations_export_confirm_dialog);
+  }
+  if (confirm) {
+    perform_regulations_export();
+  }
+}
+
+static void export_report_event_cb(lv_event_t *e) {
+  (void)e;
+  if (regulations_export_confirm_dialog &&
+      lv_obj_is_valid(regulations_export_confirm_dialog)) {
+    return;
+  }
+  regulations_export_confirm_dialog = lv_msgbox_create(NULL);
+  lv_obj_add_event_cb(regulations_export_confirm_dialog,
+                      export_confirm_dialog_event_cb, LV_EVENT_DELETE, NULL);
+  lv_msgbox_add_title(regulations_export_confirm_dialog,
+                      "Exporter le référentiel");
+  lv_msgbox_add_text(regulations_export_confirm_dialog,
+                     "Confirmer l'écriture du rapport CSV sur la microSD ?");
+  lv_obj_t *btn_cancel =
+      lv_msgbox_add_footer_button(regulations_export_confirm_dialog, "Annuler");
+  lv_obj_add_event_cb(btn_cancel, export_confirm_button_event_cb,
+                      LV_EVENT_CLICKED, NULL);
+  lv_obj_t *btn_ok = lv_msgbox_add_footer_button(
+      regulations_export_confirm_dialog, "Confirmer");
+  lv_obj_add_event_cb(btn_ok, export_confirm_button_event_cb, LV_EVENT_CLICKED,
+                      (void *)1);
+  lv_obj_center(regulations_export_confirm_dialog);
 }
 
 static void save_slot_event_cb(lv_event_t *e) {
