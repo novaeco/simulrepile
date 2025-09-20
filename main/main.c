@@ -3,7 +3,7 @@
  * | Author     :   Waveshare team
  * | Function   :   Main function
  * | Info       :
- * |                Ported LVGL 8.3.9 and display the official demo interface
+ * |                Ported LVGL 9.x demos with compatibility wrappers
  *----------------
  * | Version    :   V1.0
  * | Date       :   2024-12-06
