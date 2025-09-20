@@ -111,7 +111,14 @@ L'état complet est persisté sur microSD via `reptile_facility_save` et
 ## Prérequis
 ### Logiciel
 - **ESP-IDF 5.5** installé et initialisé (`. ./export.sh`).
-- **LVGL 8.3.9** via le gestionnaire de composants (`idf_component.yml`).
+- **LVGL 9.x** via le gestionnaire de composants (`idf_component.yml`). Synchronisez la dépendance avec `idf.py add-dependency lvgl/lvgl^9` puis `idf.py reconfigure` ; l'abstraction entre les API LVGL 8/9 est centralisée dans `main/lvgl_compat.*`.
+
+#### Initialisation de la dépendance LVGL 9.x
+```sh
+idf.py add-dependency lvgl/lvgl^9
+idf.py reconfigure
+```
+Ces commandes assurent l'installation de LVGL 9.x dans `managed_components/` selon la version déclarée dans `idf_component.yml`.
 
 ### Matériel
 - Carte de développement ESP32‑S3.
