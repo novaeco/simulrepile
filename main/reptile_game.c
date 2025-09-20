@@ -57,6 +57,16 @@ typedef enum {
   SAVE_ACTION_RESET_STATS,
 } save_action_t;
 
+typedef struct {
+  lv_obj_t *card;
+  lv_obj_t *icon;
+  lv_obj_t *title;
+  lv_obj_t *name;
+  lv_obj_t *stage;
+  lv_obj_t *warning;
+  lv_obj_t *badge;
+} terrarium_card_widgets_t;
+
 static reptile_facility_t g_facility;
 static char s_active_slot[sizeof(g_facility.slot)] = "slot_a";
 static lv_obj_t *screen_simulation_menu;
@@ -151,16 +161,6 @@ static int64_t prev_income_snapshot;
 static int64_t prev_expense_snapshot;
 static uint32_t selected_terrarium;
 static bool s_game_active;
-
-typedef struct {
-  lv_obj_t *card;
-  lv_obj_t *icon;
-  lv_obj_t *title;
-  lv_obj_t *name;
-  lv_obj_t *stage;
-  lv_obj_t *warning;
-  lv_obj_t *badge;
-} terrarium_card_widgets_t;
 
 typedef struct {
   uint32_t index;
@@ -2273,7 +2273,7 @@ static void update_overview_screen(void) {
   if (occupancy_badge) {
     lv_label_set_text_fmt(occupancy_badge,
                           "Occupés %" PRIu32 "/%" PRIu32 " • Mat.%" PRIu32,
-                          metrics.occupied, g_facility.terrarium_count,
+                          metrics.occupied, (uint32_t)g_facility.terrarium_count,
                           metrics.mature);
     if (metrics.free_slots == 0U && g_facility.terrarium_count > 0U) {
       ui_theme_badge_set_kind(occupancy_badge, UI_THEME_BADGE_WARNING);
@@ -3248,7 +3248,8 @@ static void update_economy_screen(void) {
         "Revenu hebdo: %.2f € • Recettes jour: %.2f € • Charges jour: %.2f €\n"
         "Amendes cumulées: %.2f €",
         g_facility.economy.days_elapsed, visible_count,
-        g_facility.terrarium_count, occupied_count, deficit_count, alert_count,
+        (uint32_t)g_facility.terrarium_count, occupied_count, deficit_count,
+        alert_count,
         g_facility.economy.weekly_subsidy_cents / 100.0,
         g_facility.economy.daily_income_cents / 100.0,
         g_facility.economy.daily_expenses_cents / 100.0,
