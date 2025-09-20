@@ -162,9 +162,7 @@ static void update_alarm_flags(terrarium_ctrl_t *terr)
 
 static void apply_uv_gpio(size_t index, bool on)
 {
-    if (index == 0) {
-        reptile_uv_gpio(on);
-    }
+    reptile_uv_gpio_channel(index, on);
 }
 
 static esp_err_t start_heat_cycle_locked(terrarium_ctrl_t *terr, bool manual)
@@ -317,11 +315,7 @@ static void heat_task(void *ctx)
     size_t idx = terr->index;
     notify_state(idx);
     time_t start = time(NULL);
-    if (idx == 0) {
-        reptile_heat_gpio();
-    } else {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-    }
+    reptile_heat_gpio_channel(idx);
     time_t end = time(NULL);
     double duration = difftime(end, start);
     if (duration < 0) {
@@ -344,11 +338,7 @@ static void pump_task(void *ctx)
     size_t idx = terr->index;
     notify_state(idx);
     time_t start = time(NULL);
-    if (idx == 0) {
-        reptile_water_gpio();
-    } else {
-        vTaskDelay(pdMS_TO_TICKS(1500));
-    }
+    reptile_water_gpio_channel(idx);
     time_t end = time(NULL);
     double duration = difftime(end, start);
     if (duration < 0) {
