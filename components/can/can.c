@@ -14,6 +14,11 @@
  *
  ******************************************************************************/
 
+#include <inttypes.h>
+#include <stddef.h>
+#include <stdio.h>
+
+#include "esp_log.h"
 #include "can.h"  // Include header file for CAN driver functions
 
 static bool can_active = false;
@@ -158,14 +163,26 @@ esp_err_t can_write_Byte(can_message_t message)
 /**
  * @brief Receives a CAN message.
  *
- * This function reads and logs received messages from the CAN interface.
+ * This function attempts to read a single CAN frame and only copies the
+ * content to @p out_message when a frame has effectively been received. When
+ * no frame is available the provided buffer remains untouched, preventing
+ * callers from observing indeterminate data.
  *
- * @return The received CAN message.
+ * @param[out] out_message Storage for the received CAN message.
+ *
+ * @return ESP_OK when a frame has been retrieved and copied into
+ *         @p out_message, an error code returned by @c twai_receive otherwise.
  */
-can_message_t can_read_Byte()
+esp_err_t can_read_Byte(can_message_t *out_message)
 {
-    can_message_t message; // Variable to hold received message
-    while (twai_receive(&message, 0) == ESP_OK)
+    if (out_message == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    can_message_t message = {0}; // Ensure deterministic contents even on failure paths
+    esp_err_t ret = twai_receive(&message, 0);
+    if (ret == ESP_OK)
     {
         if (message.extd)
         {
@@ -176,7 +193,7 @@ can_message_t can_read_Byte()
             ESP_LOGI(CAN_TAG, "Message is in Standard Format");
         }
 
-        printf("ID: %lx\nByte:", message.identifier);
+        printf("ID: %" PRIx32 "\nByte:", message.identifier);
         if (!message.rtr)
         {
             for (int i = 0; i < message.data_length_code; i++)
@@ -185,6 +202,9 @@ can_message_t can_read_Byte()
             }
             printf("\n");
         }
+
+        *out_message = message;
     }
-    return message;
+
+    return ret;
 }

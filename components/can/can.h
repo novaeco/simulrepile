@@ -64,11 +64,14 @@ uint32_t can_read_alerts();
 esp_err_t can_write_Byte(can_message_t message);
 
 /**
- * @brief Reads a single byte of data from the CAN interface.
+ * @brief Attempts to read a CAN frame from the interface.
  *
- * @return A CAN message containing the received data.
+ * @param[out] message Destination for the received CAN frame.
+ *
+ * @return ESP_OK when a frame has been copied into @p message, otherwise the
+ *         error code returned by the underlying TWAI driver.
  */
-can_message_t can_read_Byte();
+esp_err_t can_read_Byte(can_message_t *message);
 
 bool can_is_active(void);
 
