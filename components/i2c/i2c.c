@@ -12,11 +12,123 @@
  ******************************************************************************/
 
 #include "i2c.h"  // Include I2C driver header for I2C functions
+#include "esp_check.h"
+#include "esp_rom_sys.h"
 static const char *TAG = "i2c";  // Define a tag for logging
 
 // Global handle for the I2C master bus
 // i2c_master_bus_handle_t bus_handle = NULL;
 DEV_I2C_Port handle;
+
+#define I2C_MAX_REGISTERED_DEVICES 8
+static i2c_master_dev_handle_t *s_registered_handle_ptrs[I2C_MAX_REGISTERED_DEVICES];
+
+static void i2c_register_handle_slot(i2c_master_dev_handle_t *slot)
+{
+    if (slot == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < I2C_MAX_REGISTERED_DEVICES; ++i) {
+        if (s_registered_handle_ptrs[i] == slot) {
+            return;
+        }
+    }
+    for (size_t i = 0; i < I2C_MAX_REGISTERED_DEVICES; ++i) {
+        if (s_registered_handle_ptrs[i] == NULL) {
+            s_registered_handle_ptrs[i] = slot;
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "I2C handle registry full; recovery may leave stale pointers");
+}
+
+static void i2c_release_handles(void)
+{
+    if (handle.dev != NULL) {
+        esp_err_t ret = i2c_master_bus_rm_device(handle.dev);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to remove I2C device handle: %s", esp_err_to_name(ret));
+        }
+        handle.dev = NULL;
+    }
+    if (handle.bus != NULL) {
+        esp_err_t ret = i2c_del_master_bus(handle.bus);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to delete I2C master bus: %s", esp_err_to_name(ret));
+        }
+        handle.bus = NULL;
+    }
+    for (size_t i = 0; i < I2C_MAX_REGISTERED_DEVICES; ++i) {
+        if (s_registered_handle_ptrs[i] != NULL) {
+            *s_registered_handle_ptrs[i] = NULL;
+        }
+    }
+}
+
+static esp_err_t i2c_bus_drive_lines_idle(void)
+{
+    const uint64_t pin_mask = (1ULL << CONFIG_I2C_MASTER_SDA_GPIO) |
+                              (1ULL << CONFIG_I2C_MASTER_SCL_GPIO);
+
+    gpio_config_t od_cfg = {
+        .pin_bit_mask = pin_mask,
+        .mode = GPIO_MODE_OUTPUT_OD,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&od_cfg), TAG, "gpio_config recovery");
+
+    gpio_set_level(EXAMPLE_I2C_MASTER_SDA, 1);
+    gpio_set_level(EXAMPLE_I2C_MASTER_SCL, 1);
+    esp_rom_delay_us(5);
+
+    for (int i = 0; i < 9; ++i) {
+        gpio_set_level(EXAMPLE_I2C_MASTER_SCL, 0);
+        esp_rom_delay_us(5);
+        gpio_set_level(EXAMPLE_I2C_MASTER_SCL, 1);
+        esp_rom_delay_us(5);
+    }
+
+    // STOP condition to release any slave still holding SDA
+    gpio_set_level(EXAMPLE_I2C_MASTER_SDA, 0);
+    esp_rom_delay_us(5);
+    gpio_set_level(EXAMPLE_I2C_MASTER_SCL, 1);
+    esp_rom_delay_us(5);
+    gpio_set_level(EXAMPLE_I2C_MASTER_SDA, 1);
+    esp_rom_delay_us(5);
+
+    gpio_config_t input_cfg = {
+        .pin_bit_mask = pin_mask,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&input_cfg), TAG, "gpio_config release");
+
+#if CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS
+    gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SDA, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(EXAMPLE_I2C_MASTER_SCL, GPIO_PULLUP_ONLY);
+#endif
+
+    return ESP_OK;
+}
+
+esp_err_t DEV_I2C_Bus_Recover(void)
+{
+    ESP_LOGW(TAG,
+             "Attempting I2C bus recovery on SDA=%d SCL=%d",
+             CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+
+    i2c_release_handles();
+
+    esp_err_t ret = i2c_bus_drive_lines_idle();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus recovery failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
 /**
  * @brief Initialize the I2C master interface.
  *
@@ -52,11 +164,20 @@ DEV_I2C_Port DEV_I2C_Init()
     if (ret == ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "I2C bus already initialized");
     } else if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialise I2C bus on SDA=%d SCL=%d: %s",
+        ESP_LOGW(TAG,
+                 "Failed to initialise I2C bus on SDA=%d SCL=%d: %s. Attempting recovery.",
                  CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO,
                  esp_err_to_name(ret));
-        handle.bus = NULL;
-        return handle;
+        if (DEV_I2C_Bus_Recover() == ESP_OK) {
+            ret = i2c_new_master_bus(&i2c_bus_config, &handle.bus);
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialise I2C bus on SDA=%d SCL=%d: %s",
+                     CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO,
+                     esp_err_to_name(ret));
+            handle.bus = NULL;
+            return handle;
+        }
     }
 
     // No device is added here; handle.dev remains NULL until configured
@@ -79,14 +200,41 @@ esp_err_t DEV_I2C_Probe(uint8_t addr)
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t ret = i2c_master_probe(handle.bus, addr, 100);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG,
-                 "I2C device 0x%02X not found: %s. Verify VCC=3V3, pull-ups and"
-                 " wiring on SDA=%d / SCL=%d.",
-                 addr, esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO,
-                 CONFIG_I2C_MASTER_SCL_GPIO);
+    const int max_attempts = 2;
+    esp_err_t ret = ESP_FAIL;
+
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+        ret = i2c_master_probe(handle.bus, addr, 100);
+        if (ret == ESP_OK) {
+            if (attempt > 1) {
+                ESP_LOGI(TAG, "I2C bus recovered, device 0x%02X acknowledged", addr);
+            }
+            return ESP_OK;
+        }
+
+        bool recoverable = (ret == ESP_ERR_TIMEOUT) || (ret == ESP_ERR_INVALID_STATE);
+        if (!recoverable || attempt == max_attempts) {
+            break;
+        }
+
+        ESP_LOGW(TAG,
+                 "I2C probe 0x%02X attempt %d/%d failed (%s). Recovering bus.",
+                 addr, attempt, max_attempts, esp_err_to_name(ret));
+        esp_err_t recover_ret = DEV_I2C_Bus_Recover();
+        if (recover_ret != ESP_OK) {
+            ESP_LOGE(TAG, "I2C bus recovery failed: %s", esp_err_to_name(recover_ret));
+            return recover_ret;
+        }
+        DEV_I2C_Port port = DEV_I2C_Init();
+        if (port.bus == NULL) {
+            return ESP_ERR_INVALID_STATE;
+        }
     }
+
+    ESP_LOGE(TAG,
+             "I2C device 0x%02X not found: %s. Verify VCC=3V3, pull-ups and wiring on SDA=%d / SCL=%d.",
+             addr, esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO,
+             CONFIG_I2C_MASTER_SCL_GPIO);
     return ret;
 }
 
@@ -103,6 +251,8 @@ esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Ad
     if (dev_handle == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    i2c_register_handle_slot(dev_handle);
 
 
     if (*dev_handle != NULL) {

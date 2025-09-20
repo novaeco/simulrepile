@@ -162,6 +162,10 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
   l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD.
 - `CONFIG_STORAGE_SD_USE_GPIO_CS` + `CONFIG_STORAGE_SD_GPIO_CS_NUM` : bypass du
   CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
+- Le pilote I²C déclenche automatiquement une récupération matérielle lorsque SDA/SCL
+  restent bloquées (clock stretch infini, périphérique en erreur). Toutes les handles
+  enregistrées (CH422G, multiplexeur, GT911…) sont relâchées puis recréées pour que
+  le bus reparte proprement après réparation du câblage.
 
 ## Menu de démarrage et modes d'exécution
 Au reset, le firmware présente un tableau de bord structuré : en-tête flex affichant le logo, l'heure

@@ -61,6 +61,19 @@ typedef struct {
 DEV_I2C_Port DEV_I2C_Init();
 
 /**
+ * @brief Attempt to recover the I2C bus when SCL/SDA are held low.
+ *
+ * The routine releases any registered device handle, tears down the master bus
+ * if already instantiated, then toggles SCL manually to free slaves stuck in
+ * mid-transaction. Lines are left in input mode afterwards so the subsequent
+ * ::DEV_I2C_Init call can recreate the controller cleanly.
+ *
+ * @return esp_err_t ESP_OK when the recovery pulses have been generated,
+ *         or a propagated GPIO error.
+ */
+esp_err_t DEV_I2C_Bus_Recover(void);
+
+/**
  * @brief Probe an I2C address to verify device presence.
  *
  * @param addr 7-bit I2C address to probe.

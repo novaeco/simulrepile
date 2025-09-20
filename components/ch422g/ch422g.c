@@ -2,6 +2,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "i2c.h"
 
 #define TAG "ch422g"
@@ -30,7 +31,20 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
-    esp_err_t ret = DEV_I2C_Probe(CH422G_DEFAULT_ADDR);
+    esp_err_t ret = ESP_FAIL;
+    const int max_attempts = 3;
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+        ret = DEV_I2C_Probe(CH422G_DEFAULT_ADDR);
+        if (ret == ESP_OK) {
+            break;
+        }
+        if (attempt < max_attempts) {
+            ESP_LOGW(TAG,
+                     "CH422G probe attempt %d/%d failed (%s), retrying...",
+                     attempt, max_attempts, esp_err_to_name(ret));
+            esp_rom_delay_us(2000);
+        }
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
                  "No ACK from CH422G at 0x%02X: %s. Check 3V3 supply, SDA=%d,"
