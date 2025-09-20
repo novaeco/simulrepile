@@ -3076,6 +3076,7 @@ static size_t append_text_to_buffer(char *dst, size_t dst_size, size_t offset,
 
 static void format_regulations_export_label(char *dst, size_t dst_size,
                                             const char *time_buf,
+                                            size_t time_buf_size,
                                             const char *path) {
   static const char prefix[] = "Dernier export: ";
   static const char open_paren[] = " (";
@@ -3091,9 +3092,9 @@ static void format_regulations_export_label(char *dst, size_t dst_size,
 
   size_t len = 0U;
   len = append_text_to_buffer(dst, dst_size, len, prefix, sizeof(prefix) - 1U);
-  if (time_buf) {
-    len = append_text_to_buffer(dst, dst_size, len, time_buf,
-                                strnlen(time_buf, dst_size));
+  if (time_buf && time_buf_size > 0U) {
+    size_t time_len = strnlen(time_buf, time_buf_size);
+    len = append_text_to_buffer(dst, dst_size, len, time_buf, time_len);
   }
 
   if (!path || path[0] == '\0') {
@@ -3411,6 +3412,7 @@ static void update_regulation_screen(void) {
         localtime_r(&regulations_last_export_time, &tm_info);
         strftime(time_buf, sizeof(time_buf), "%d/%m %H:%M", &tm_info);
         format_regulations_export_label(text, sizeof(text), time_buf,
+                                        sizeof(time_buf),
                                         regulations_last_export_path);
       }
       lv_label_set_text(regulations_export_label, text);
