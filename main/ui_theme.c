@@ -1,4 +1,5 @@
 #include "ui_theme.h"
+#include "lvgl_compat.h"
 
 #include <stdbool.h>
 
