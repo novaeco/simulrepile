@@ -3,6 +3,7 @@
 #include "gpio.h"
 #include "sensors.h"
 #include "lvgl.h"
+#include "lvgl_compat.h"
 #include "lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,6 +12,7 @@
 #include "ui_theme.h"
 #include "esp_err.h"
 #include <ctype.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,41 +30,7 @@
 #define COLOR_STATUS_MANUAL lv_color_hex(0xFF8F00)
 #define COLOR_STATUS_ALARM lv_color_hex(0xC62828)
 
-static void feed_task(void *arg);
-static void env_state_cb(size_t index, const reptile_env_terrarium_state_t *state, void *ctx);
-static void pump_btn_cb(lv_event_t *e);
-static void heat_btn_cb(lv_event_t *e);
-static void uv_btn_cb(lv_event_t *e);
-static void feed_btn_cb(lv_event_t *e);
-static void menu_btn_cb(lv_event_t *e);
-static void emergency_stop_cb(lv_event_t *e);
-static void update_summary_panel(void);
-static void apply_actuator_button_style(lv_obj_t *btn, bool manual_active, bool alarm_active);
-static void refresh_status_header(terrarium_ui_t *ui, const reptile_env_terrarium_state_t *state);
-static void show_manual_action_feedback(const terrarium_ui_t *ui, const char *action, esp_err_t status);
-static void show_manual_action_toast(const char *text, bool success);
-static void manual_toast_timer_cb(lv_timer_t *timer);
-static void format_species_avatar_text(char *buffer, size_t len, size_t index, const char *name);
-static void fill_chart_buffers(lv_coord_t *temp_buffer,
-                               lv_coord_t *hum_buffer,
-                               size_t buffer_len,
-                               size_t start_index,
-                               size_t sample_count);
-
-static lv_obj_t *screen;
-static lv_obj_t *feed_status_label;
-static volatile bool feed_running;
-static TaskHandle_t feed_task_handle;
-static size_t s_ui_count;
-static lv_obj_t *summary_panel;
-static lv_obj_t *summary_energy_label;
-static lv_obj_t *summary_alarm_label;
-static lv_obj_t *emergency_button;
-static bool s_emergency_engaged;
-static lv_obj_t *manual_toast;
-static lv_timer_t *manual_toast_timer;
-
-typedef struct {
+typedef struct terrarium_ui {
     size_t index;
     lv_obj_t *card;
     lv_obj_t *header;
@@ -97,6 +65,40 @@ typedef struct {
     lv_coord_t temp_sparkline_points[SPARKLINE_POINT_COUNT];
     lv_coord_t hum_sparkline_points[SPARKLINE_POINT_COUNT];
 } terrarium_ui_t;
+
+static void feed_task(void *arg);
+static void env_state_cb(size_t index, const reptile_env_terrarium_state_t *state, void *ctx);
+static void pump_btn_cb(lv_event_t *e);
+static void heat_btn_cb(lv_event_t *e);
+static void uv_btn_cb(lv_event_t *e);
+static void feed_btn_cb(lv_event_t *e);
+static void menu_btn_cb(lv_event_t *e);
+static void emergency_stop_cb(lv_event_t *e);
+static void update_summary_panel(void);
+static void apply_actuator_button_style(lv_obj_t *btn, bool manual_active, bool alarm_active);
+static void refresh_status_header(terrarium_ui_t *ui, const reptile_env_terrarium_state_t *state);
+static void show_manual_action_feedback(const terrarium_ui_t *ui, const char *action, esp_err_t status);
+static void show_manual_action_toast(const char *text, bool success);
+static void manual_toast_timer_cb(lv_timer_t *timer);
+static void format_species_avatar_text(char *buffer, size_t len, size_t index, const char *name);
+static void fill_chart_buffers(lv_coord_t *temp_buffer,
+                               lv_coord_t *hum_buffer,
+                               size_t buffer_len,
+                               size_t start_index,
+                               size_t sample_count);
+
+static lv_obj_t *screen;
+static lv_obj_t *feed_status_label;
+static volatile bool feed_running;
+static TaskHandle_t feed_task_handle;
+static size_t s_ui_count;
+static lv_obj_t *summary_panel;
+static lv_obj_t *summary_energy_label;
+static lv_obj_t *summary_alarm_label;
+static lv_obj_t *emergency_button;
+static bool s_emergency_engaged;
+static lv_obj_t *manual_toast;
+static lv_timer_t *manual_toast_timer;
 
 static terrarium_ui_t s_ui[REPTILE_ENV_MAX_TERRARIUMS];
 static reptile_env_history_entry_t s_history_buf[REPTILE_ENV_HISTORY_LENGTH];
@@ -340,7 +342,11 @@ static void init_terrarium_ui(size_t index,
     ui->species_icon_label = lv_label_create(ui->species_avatar);
     lv_obj_center(ui->species_icon_label);
     char avatar_text[8];
-    format_species_avatar_text(avatar_text, sizeof(avatar_text), index, (cfg && cfg->name) ? cfg->name : NULL);
+    const char *display_name = NULL;
+    if (cfg && cfg->name[0] != '\0') {
+        display_name = cfg->name;
+    }
+    format_species_avatar_text(avatar_text, sizeof(avatar_text), index, display_name);
     lv_label_set_text(ui->species_icon_label, avatar_text);
     lv_obj_set_style_text_color(ui->species_icon_label, lv_color_white(), LV_PART_MAIN);
     lv_label_set_long_mode(ui->species_icon_label, LV_LABEL_LONG_CLIP);
@@ -464,9 +470,7 @@ static void init_terrarium_ui(size_t index,
     lv_obj_set_height(ui->sparkline_temp, 70);
     lv_obj_set_style_bg_opa(ui->sparkline_temp, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(ui->sparkline_temp, 0, LV_PART_MAIN);
-    lv_chart_set_axis_tick(ui->sparkline_temp, LV_CHART_AXIS_PRIMARY_X, 0, 0, 0, 0, true, 0);
-    lv_chart_set_axis_tick(ui->sparkline_temp, LV_CHART_AXIS_PRIMARY_Y, 0, 0, 0, 0, true, 0);
-    lv_chart_set_line_width(ui->sparkline_temp, 3);
+    lv_obj_set_style_line_width(ui->sparkline_temp, 3, LV_PART_ITEMS);
     ui->sparkline_temp_series = lv_chart_add_series(ui->sparkline_temp, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
     lv_chart_set_ext_y_array(ui->sparkline_temp, ui->sparkline_temp_series, ui->temp_sparkline_points);
 
@@ -490,9 +494,7 @@ static void init_terrarium_ui(size_t index,
     lv_obj_set_height(ui->sparkline_hum, 70);
     lv_obj_set_style_bg_opa(ui->sparkline_hum, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(ui->sparkline_hum, 0, LV_PART_MAIN);
-    lv_chart_set_axis_tick(ui->sparkline_hum, LV_CHART_AXIS_PRIMARY_X, 0, 0, 0, 0, true, 0);
-    lv_chart_set_axis_tick(ui->sparkline_hum, LV_CHART_AXIS_PRIMARY_Y, 0, 0, 0, 0, true, 0);
-    lv_chart_set_line_width(ui->sparkline_hum, 3);
+    lv_obj_set_style_line_width(ui->sparkline_hum, 3, LV_PART_ITEMS);
     ui->sparkline_hum_series = lv_chart_add_series(ui->sparkline_hum, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y);
     lv_chart_set_ext_y_array(ui->sparkline_hum, ui->sparkline_hum_series, ui->hum_sparkline_points);
 
@@ -734,7 +736,7 @@ static void update_summary_panel(void)
         lv_label_set_text(summary_alarm_label, alarm_count > 0 ? "Arrêt d'urgence ACTIF + alarmes" : "Arrêt d'urgence ACTIF");
         if (alarm_count > 0 && alarm_details[0] != '\0') {
             lv_label_set_text_fmt(summary_alarm_label,
-                                  "Arrêt d'urgence ACTIF\nAlarmes (%u): %s",
+                                  "Arrêt d'urgence ACTIF\nAlarmes (%" PRIu32 "): %s",
                                   alarm_count,
                                   alarm_details);
         }
@@ -760,12 +762,12 @@ static void update_summary_panel(void)
     } else {
         if (alarm_details[0] != '\0') {
             lv_label_set_text_fmt(summary_alarm_label,
-                                  "Alarmes (%u): %s",
+                                  "Alarmes (%" PRIu32 "): %s",
                                   alarm_count,
                                   alarm_details);
         } else {
             lv_label_set_text_fmt(summary_alarm_label,
-                                  "Alarmes actives: %u",
+                                  "Alarmes actives: %" PRIu32,
                                   alarm_count);
         }
         lv_obj_set_style_text_color(summary_alarm_label, COLOR_STATUS_ALARM, LV_PART_MAIN);

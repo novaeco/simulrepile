@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "env_control.h"
 #include "lvgl.h"
+#include "lvgl_compat.h"
 #include "nvs.h"
 #include "sleep.h"
 #include "esp_task_wdt.h"
@@ -99,6 +100,17 @@ static terrarium_widgets_t s_t_widgets[REPTILE_ENV_MAX_TERRARIUMS];
 static lv_obj_t *terrarium_tabs[REPTILE_ENV_MAX_TERRARIUMS];
 
 extern lv_obj_t *menu_screen;
+
+static lv_obj_t *create_spinbox_int(lv_obj_t *parent, int32_t min, int32_t max, int32_t step, int32_t value);
+static lv_obj_t *create_spinbox_1dp(lv_obj_t *parent, float min, float max, float step, float value);
+static void bind_spin_slider_pair(spin_slider_pair_t *pair, uint8_t terrarium_index,
+                                  lv_obj_t *spinbox, lv_obj_t *slider, int32_t scale,
+                                  int32_t step, const char *unit);
+static void bind_time_control(time_control_t *ctrl, uint8_t terrarium_index,
+                              lv_obj_t *slider, lv_obj_t *hour_sb, lv_obj_t *minute_sb,
+                              lv_obj_t *value_label, uint32_t step);
+static void update_general_nav_summary(void);
+static void settings_close_screen(bool force);
 
 static lv_obj_t *create_label(lv_obj_t *parent, const char *txt)
 {

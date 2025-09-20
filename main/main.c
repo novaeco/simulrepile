@@ -28,6 +28,7 @@
 #include "logging.h"
 #include "lv_demos.h" // LVGL demo headers
 #include "lvgl.h"
+#include "lvgl_compat.h"
 #include "lvgl_port.h"    // LVGL porting functions for integration
 #include "nvs.h"          // NVS key-value API
 #include "nvs_flash.h"    // NVS flash for persistent storage

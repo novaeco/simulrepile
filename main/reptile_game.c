@@ -1,4 +1,5 @@
 #include "reptile_game.h"
+#include "lvgl_compat.h"
 #include "can.h"
 #include "image.h"
 #include "lvgl_port.h"
@@ -1728,7 +1729,9 @@ static void build_regulation_screen(void) {
   lv_label_set_long_mode(regulations_export_label, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(regulations_export_label, LV_PCT(100));
 
-  regulations_tabview = lv_tabview_create(screen_regulations, LV_DIR_TOP, 46);
+  regulations_tabview = lv_tabview_create(screen_regulations);
+  lv_tabview_set_tab_bar_position(regulations_tabview, LV_DIR_TOP);
+  lv_tabview_set_tab_bar_size(regulations_tabview, 46);
   lv_obj_set_width(regulations_tabview, LV_PCT(100));
   lv_obj_set_flex_grow(regulations_tabview, 1);
   lv_obj_set_style_min_height(regulations_tabview, 320, 0);
@@ -2814,8 +2817,8 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_DRAW_MAIN)
     return;
 
-  lv_draw_ctx_t *draw_ctx = lv_event_get_draw_ctx(e);
-  if (!draw_ctx)
+  lv_layer_t *layer = lv_event_get_layer(e);
+  if (!layer)
     return;
 
   lv_obj_t *obj = lv_event_get_target(e);
@@ -2847,14 +2850,17 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
     thickness = radius;
   arc_dsc.width = thickness;
   arc_dsc.rounded = 1;
+  arc_dsc.center.x = center_x;
+  arc_dsc.center.y = center_y;
+  arc_dsc.radius = radius - 2;
 
-  lv_coord_t outer_radius = radius - 2;
-  lv_coord_t start_angle = -90;
+  const lv_coord_t start_angle = -90;
 
   if (total <= 0.01f) {
     arc_dsc.color = lv_palette_lighten(LV_PALETTE_GREY, 2);
-    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, start_angle,
-                start_angle + 360);
+    arc_dsc.start_angle = start_angle;
+    arc_dsc.end_angle = start_angle + 360;
+    lv_draw_arc(layer, &arc_dsc);
   } else {
     float income_ratio = income / total;
     if (income_ratio < 0.0f)
@@ -2869,12 +2875,14 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
       income_end = start_angle + 360;
 
     arc_dsc.color = lv_palette_main(LV_PALETTE_GREEN);
-    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, start_angle,
-                income_end);
+    arc_dsc.start_angle = start_angle;
+    arc_dsc.end_angle = income_end;
+    lv_draw_arc(layer, &arc_dsc);
 
     arc_dsc.color = lv_palette_main(LV_PALETTE_RED);
-    lv_draw_arc(draw_ctx, &arc_dsc, center_x, center_y, outer_radius, income_end,
-                start_angle + 360);
+    arc_dsc.start_angle = income_end;
+    arc_dsc.end_angle = start_angle + 360;
+    lv_draw_arc(layer, &arc_dsc);
   }
 
   lv_draw_rect_dsc_t rect_dsc;
@@ -2882,14 +2890,14 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
   rect_dsc.bg_opa = LV_OPA_COVER;
   lv_color_t inner_color =
       lv_obj_get_style_bg_color(lv_obj_get_parent(obj), LV_PART_MAIN);
-  if (inner_color.full == 0)
+  if (inner_color.red == 0 && inner_color.green == 0 && inner_color.blue == 0)
     inner_color = lv_color_hex(0xFFFFFF);
   rect_dsc.bg_color = inner_color;
   rect_dsc.radius = LV_RADIUS_CIRCLE;
 
-  lv_coord_t inner_radius = outer_radius - thickness;
+  lv_coord_t inner_radius = (arc_dsc.radius - thickness);
   if (inner_radius < 12)
-    inner_radius = LV_MIN(outer_radius - 4, 12);
+    inner_radius = LV_MIN(arc_dsc.radius - 4, 12);
   if (inner_radius < 4)
     inner_radius = 4;
 
@@ -2897,7 +2905,7 @@ static void economy_pie_draw_event_cb(lv_event_t *e) {
                           .y1 = center_y - inner_radius,
                           .x2 = center_x + inner_radius,
                           .y2 = center_y + inner_radius};
-  lv_draw_rect(draw_ctx, &rect_dsc, &inner_area);
+  lv_draw_rect(layer, &rect_dsc, &inner_area);
 }
 
 static void update_regulation_screen(void) {
