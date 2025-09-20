@@ -88,9 +88,19 @@ static lv_obj_t *sleep_switch;
 static lv_obj_t *overview_context_overlay;
 static lv_obj_t *overview_context_menu;
 static lv_obj_t *detail_title;
-static lv_obj_t *detail_env_table;
+static lv_obj_t *detail_alert_badge;
 static lv_obj_t *detail_status_label;
 static lv_obj_t *detail_status_icon;
+static lv_obj_t *detail_temp_label;
+static lv_obj_t *detail_humidity_label;
+static lv_obj_t *detail_growth_label;
+static lv_obj_t *detail_uv_label;
+static lv_obj_t *detail_satiety_label;
+static lv_obj_t *detail_hydration_label;
+static lv_obj_t *detail_weight_label;
+static lv_obj_t *detail_stage_badge;
+static lv_obj_t *detail_pathology_badge;
+static lv_obj_t *detail_incident_badge;
 static lv_obj_t *dropdown_species;
 static lv_obj_t *dropdown_substrate;
 static lv_obj_t *dropdown_heating;
@@ -102,6 +112,11 @@ static lv_obj_t *education_switch_detail;
 static lv_obj_t *detail_register_label;
 static lv_obj_t *detail_compliance_label;
 static lv_obj_t *register_button;
+static lv_obj_t *detail_humidity_arc;
+static lv_obj_t *detail_growth_bar;
+static lv_meter_indicator_t *detail_temp_indicator;
+static lv_meter_indicator_t *detail_temp_range_indicator;
+static lv_obj_t *detail_temp_meter;
 static lv_obj_t *economy_chart;
 static lv_chart_series_t *series_income;
 static lv_chart_series_t *series_expenses;
@@ -131,6 +146,19 @@ typedef struct {
   lv_obj_t *warning;
   lv_obj_t *badge;
 } terrarium_card_widgets_t;
+
+typedef struct {
+  lv_obj_t *content;
+  lv_obj_t *arrow;
+} detail_accordion_panel_t;
+
+typedef enum {
+  DETAIL_PANEL_SPECIES = 0,
+  DETAIL_PANEL_MATERIAL,
+  DETAIL_PANEL_COUNT,
+} detail_panel_id_t;
+
+static detail_accordion_panel_t detail_accordion_panels[DETAIL_PANEL_COUNT];
 
 typedef enum {
   TERRARIUM_CONTEXT_ACTION_DETAIL = 0x01U,
@@ -190,6 +218,7 @@ static void nav_button_event_cb(lv_event_t *e);
 static void species_dropdown_event_cb(lv_event_t *e);
 static void config_dropdown_event_cb(lv_event_t *e);
 static void add_certificate_event_cb(lv_event_t *e);
+static void scan_certificate_event_cb(lv_event_t *e);
 static void inventory_button_event_cb(lv_event_t *e);
 static void save_slot_event_cb(lv_event_t *e);
 static void save_action_event_cb(lv_event_t *e);
@@ -198,6 +227,16 @@ static void simulation_new_game_event_cb(lv_event_t *e);
 static void simulation_resume_event_cb(lv_event_t *e);
 static void simulation_settings_event_cb(lv_event_t *e);
 static void sleep_switch_event_cb(lv_event_t *e);
+static lv_obj_t *accordion_panel_create(lv_obj_t *parent, const char *title,
+                                        const char *icon, bool expanded,
+                                        detail_panel_id_t id);
+static void accordion_header_event_cb(lv_event_t *e);
+static lv_obj_t *ui_config_dropdown_create(lv_obj_t *list, const char *icon,
+                                           const char *title, const char *options,
+                                           lv_event_cb_t event_cb, void *user_data,
+                                           const char *tooltip);
+static ui_theme_badge_kind_t pathology_badge_kind(reptile_pathology_t pathology);
+static ui_theme_badge_kind_t incident_badge_kind(reptile_incident_t incident);
 static void education_switch_event_cb(lv_event_t *e);
 static void register_button_event_cb(lv_event_t *e);
 static void export_report_event_cb(lv_event_t *e);
@@ -708,159 +747,635 @@ static void build_overview_screen(void) {
   lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_RIGHT, -16, -18);
 }
 
+static ui_theme_badge_kind_t pathology_badge_kind(reptile_pathology_t pathology) {
+  switch (pathology) {
+  case REPTILE_PATHOLOGY_NONE:
+    return UI_THEME_BADGE_SUCCESS;
+  case REPTILE_PATHOLOGY_RESPIRATORY:
+  case REPTILE_PATHOLOGY_PARASITIC:
+    return UI_THEME_BADGE_WARNING;
+  case REPTILE_PATHOLOGY_METABOLIC:
+    return UI_THEME_BADGE_CRITICAL;
+  default:
+    return UI_THEME_BADGE_INFO;
+  }
+}
+
+static ui_theme_badge_kind_t incident_badge_kind(reptile_incident_t incident) {
+  switch (incident) {
+  case REPTILE_INCIDENT_NONE:
+    return UI_THEME_BADGE_SUCCESS;
+  case REPTILE_INCIDENT_CERTIFICATE_EXPIRED:
+  case REPTILE_INCIDENT_DIMENSION_NON_CONFORM:
+  case REPTILE_INCIDENT_AUDIT_LOCK:
+    return UI_THEME_BADGE_CRITICAL;
+  case REPTILE_INCIDENT_ENVIRONMENT_OUT_OF_RANGE:
+  case REPTILE_INCIDENT_REGISTER_MISSING:
+  case REPTILE_INCIDENT_CERTIFICATE_MISSING:
+  case REPTILE_INCIDENT_EDUCATION_MISSING:
+    return UI_THEME_BADGE_WARNING;
+  default:
+    return UI_THEME_BADGE_INFO;
+  }
+}
+
+static void accordion_header_event_cb(lv_event_t *e) {
+  detail_accordion_panel_t *panel =
+      (detail_accordion_panel_t *)lv_event_get_user_data(e);
+  if (!panel)
+    return;
+  lv_obj_t *header = lv_event_get_target(e);
+  bool expanded = lv_obj_has_state(header, LV_STATE_CHECKED);
+  if (panel->content) {
+    if (expanded) {
+      lv_obj_clear_flag(panel->content, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(panel->content, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (panel->arrow) {
+    lv_label_set_text(panel->arrow, expanded ? LV_SYMBOL_UP : LV_SYMBOL_DOWN);
+  }
+}
+
+static lv_obj_t *accordion_panel_create(lv_obj_t *parent, const char *title,
+                                        const char *icon, bool expanded,
+                                        detail_panel_id_t id) {
+  if (!parent || id >= DETAIL_PANEL_COUNT)
+    return NULL;
+
+  detail_accordion_panel_t *panel = &detail_accordion_panels[id];
+  panel->content = NULL;
+  panel->arrow = NULL;
+
+  lv_obj_t *container = lv_obj_create(parent);
+  lv_obj_remove_style_all(container);
+  lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(container, LV_PCT(100));
+  lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(container, 0, 0);
+  lv_obj_set_style_pad_gap(container, 10, 0);
+  lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *header = lv_btn_create(container);
+  lv_obj_remove_style_all(header);
+  lv_obj_add_flag(header, LV_OBJ_FLAG_CHECKABLE);
+  if (expanded) {
+    lv_obj_add_state(header, LV_STATE_CHECKED);
+  }
+  lv_obj_set_width(header, LV_PCT(100));
+  lv_obj_set_style_bg_color(header, lv_color_hex(0xE4F2E8), 0);
+  lv_obj_set_style_bg_grad_color(header, lv_color_hex(0xD1E7DA), 0);
+  lv_obj_set_style_bg_grad_dir(header, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(header, 14, 0);
+  lv_obj_set_style_border_width(header, 1, 0);
+  lv_obj_set_style_border_color(header, lv_color_hex(0xB7D3C2), 0);
+  lv_obj_set_style_pad_hor(header, 18, 0);
+  lv_obj_set_style_pad_ver(header, 12, 0);
+  lv_obj_set_style_pad_gap(header, 12, 0);
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *icon_label = lv_label_create(header);
+  ui_theme_apply_body(icon_label);
+  lv_label_set_text(icon_label, icon ? icon : LV_SYMBOL_SETTINGS);
+
+  lv_obj_t *title_label = lv_label_create(header);
+  ui_theme_apply_body(title_label);
+  lv_label_set_text(title_label, title ? title : "");
+  lv_obj_set_flex_grow(title_label, 1);
+
+  lv_obj_t *arrow = lv_label_create(header);
+  ui_theme_apply_caption(arrow);
+  lv_label_set_text(arrow, expanded ? LV_SYMBOL_UP : LV_SYMBOL_DOWN);
+
+  lv_obj_t *content = lv_obj_create(container);
+  lv_obj_remove_style_all(content);
+  lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(content, LV_PCT(100));
+  lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(content, 0, 0);
+  lv_obj_set_style_pad_gap(content, 14, 0);
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+
+  if (!expanded) {
+    lv_obj_add_flag(content, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  panel->content = content;
+  panel->arrow = arrow;
+  lv_obj_add_event_cb(header, accordion_header_event_cb, LV_EVENT_VALUE_CHANGED,
+                      panel);
+
+  return content;
+}
+
+static lv_obj_t *ui_config_dropdown_create(lv_obj_t *list, const char *icon,
+                                           const char *title, const char *options,
+                                           lv_event_cb_t event_cb, void *user_data,
+                                           const char *tooltip) {
+  if (!list)
+    return NULL;
+
+  lv_obj_t *item = lv_obj_create(list);
+  lv_obj_remove_style_all(item);
+  lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(item, LV_PCT(100));
+  lv_obj_set_style_bg_color(item, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(item, 16, 0);
+  lv_obj_set_style_border_width(item, 1, 0);
+  lv_obj_set_style_border_color(item, lv_color_hex(0xC7DDCB), 0);
+  lv_obj_set_style_shadow_width(item, 8, 0);
+  lv_obj_set_style_shadow_ofs_y(item, 2, 0);
+  lv_obj_set_style_shadow_color(item, lv_color_hex(0xBBDCCB), 0);
+  lv_obj_set_style_pad_all(item, 14, 0);
+  lv_obj_set_style_pad_gap(item, 10, 0);
+  lv_obj_set_flex_flow(item, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t *header = lv_obj_create(item);
+  lv_obj_remove_style_all(header);
+  lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(header, 0, 0);
+  lv_obj_set_style_pad_gap(header, 10, 0);
+  lv_obj_set_width(header, LV_PCT(100));
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *icon_label = lv_label_create(header);
+  ui_theme_apply_caption(icon_label);
+  lv_label_set_text(icon_label, icon ? icon : LV_SYMBOL_SETTINGS);
+
+  lv_obj_t *title_label = lv_label_create(header);
+  ui_theme_apply_body(title_label);
+  lv_label_set_text(title_label, title ? title : "");
+  lv_obj_set_flex_grow(title_label, 1);
+
+  lv_obj_t *dd = lv_dropdown_create(item);
+  ui_theme_apply_dropdown(dd);
+  lv_obj_set_width(dd, LV_PCT(100));
+  if (options) {
+    lv_dropdown_set_options(dd, options);
+  }
+  if (event_cb) {
+    lv_obj_add_event_cb(dd, event_cb, LV_EVENT_VALUE_CHANGED, user_data);
+  }
+  if (tooltip) {
+    lv_obj_set_tooltip_text(dd, tooltip);
+  }
+
+  return dd;
+}
+
 static void build_detail_screen(void) {
   screen_detail = lv_obj_create(NULL);
   ui_theme_apply_screen(screen_detail);
   lv_obj_set_style_pad_all(screen_detail, 16, 0);
+  lv_obj_set_style_pad_gap(screen_detail, 16, 0);
+  lv_obj_set_flex_flow(screen_detail, LV_FLEX_FLOW_COLUMN);
 
   detail_title = lv_label_create(screen_detail);
   ui_theme_apply_title(detail_title);
-  lv_obj_align(detail_title, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_label_set_text(detail_title, "Terrarium");
+  lv_obj_set_width(detail_title, LV_PCT(100));
 
-  detail_env_table = lv_table_create(screen_detail);
-  lv_obj_set_size(detail_env_table, 620, 260);
-  lv_obj_align(detail_env_table, LV_ALIGN_TOP_LEFT, 10, 60);
-  lv_table_set_column_count(detail_env_table, 2);
-  lv_table_set_row_count(detail_env_table, 12);
-  ui_theme_apply_table(detail_env_table, UI_THEME_TABLE_DEFAULT);
+  lv_obj_t *content = lv_obj_create(screen_detail);
+  lv_obj_remove_style_all(content);
+  lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(content, LV_PCT(100));
+  lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(content, 0, 0);
+  lv_obj_set_style_pad_gap(content, 16, 0);
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START);
 
-  detail_status_label = lv_label_create(screen_detail);
-  ui_theme_apply_body(detail_status_label);
-  lv_obj_align(detail_status_label, LV_ALIGN_TOP_LEFT, 10, 330);
+  /* Colonne A : monitoring */
+  lv_obj_t *col_monitor = lv_obj_create(content);
+  lv_obj_remove_style_all(col_monitor);
+  lv_obj_clear_flag(col_monitor, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(col_monitor, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(col_monitor, 0, 0);
+  lv_obj_set_style_pad_gap(col_monitor, 16, 0);
+  lv_obj_set_flex_flow(col_monitor, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_min_width(col_monitor, 300, 0);
+  lv_obj_set_flex_grow(col_monitor, 1);
 
-  detail_status_icon = lv_img_create(screen_detail);
+  lv_obj_t *monitor_card = ui_theme_create_card(col_monitor);
+  lv_obj_set_width(monitor_card, LV_PCT(100));
+  lv_obj_set_flex_flow(monitor_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(monitor_card, 14, 0);
+
+  detail_alert_badge =
+      ui_theme_create_badge(monitor_card, UI_THEME_BADGE_INFO,
+                            "Surveillance inactive");
+  lv_obj_set_style_align_self(detail_alert_badge, LV_ALIGN_START, 0);
+
+  lv_obj_t *status_row = lv_obj_create(monitor_card);
+  lv_obj_remove_style_all(status_row);
+  lv_obj_clear_flag(status_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(status_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_gap(status_row, 12, 0);
+  lv_obj_set_style_bg_opa(status_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_width(status_row, LV_PCT(100));
+
+  detail_status_icon = lv_img_create(status_row);
   lv_img_set_src(detail_status_icon,
                  ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
-  lv_obj_align_to(detail_status_icon, detail_status_label,
-                  LV_ALIGN_OUT_LEFT_MID, -10, 0);
+
+  detail_status_label = lv_label_create(status_row);
+  ui_theme_apply_body(detail_status_label);
+  lv_obj_set_flex_grow(detail_status_label, 1);
+  lv_label_set_long_mode(detail_status_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_status_label,
+                    "Attribuer une espèce pour configurer ce terrarium");
+
+  lv_obj_t *gauge_row = lv_obj_create(monitor_card);
+  lv_obj_remove_style_all(gauge_row);
+  lv_obj_clear_flag(gauge_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(gauge_row, LV_PCT(100));
+  lv_obj_set_style_bg_opa(gauge_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_gap(gauge_row, 18, 0);
+  lv_obj_set_flex_flow(gauge_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(gauge_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START);
+
+  lv_obj_t *temp_column = lv_obj_create(gauge_row);
+  lv_obj_remove_style_all(temp_column);
+  lv_obj_clear_flag(temp_column, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(temp_column, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(temp_column, 0, 0);
+  lv_obj_set_style_pad_gap(temp_column, 8, 0);
+  lv_obj_set_flex_flow(temp_column, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_min_width(temp_column, 160, 0);
+
+  detail_temp_meter = lv_meter_create(temp_column);
+  lv_obj_set_size(detail_temp_meter, 160, 160);
+  lv_meter_scale_t *temp_scale = lv_meter_add_scale(detail_temp_meter);
+  lv_meter_set_scale_ticks(detail_temp_meter, temp_scale, 51, 5, 10,
+                           lv_palette_main(LV_PALETTE_GREY));
+  lv_meter_set_scale_major_ticks(detail_temp_meter, temp_scale, 10, 4, 20,
+                                 lv_palette_main(LV_PALETTE_BLUE), 12);
+  lv_meter_set_scale_range(detail_temp_meter, temp_scale, 0, 500, 270, 135);
+  detail_temp_range_indicator =
+      lv_meter_add_arc(detail_temp_meter, temp_scale, 12,
+                       lv_palette_main(LV_PALETTE_GREEN), 0);
+  detail_temp_indicator = lv_meter_add_needle_line(
+      detail_temp_meter, temp_scale, 6, lv_palette_main(LV_PALETTE_RED), -10);
+
+  detail_temp_label = lv_label_create(temp_column);
+  ui_theme_apply_caption(detail_temp_label);
+  lv_label_set_long_mode(detail_temp_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_temp_label, "Température: --");
+
+  lv_obj_t *humidity_column = lv_obj_create(gauge_row);
+  lv_obj_remove_style_all(humidity_column);
+  lv_obj_clear_flag(humidity_column, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(humidity_column, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(humidity_column, 0, 0);
+  lv_obj_set_style_pad_gap(humidity_column, 8, 0);
+  lv_obj_set_flex_flow(humidity_column, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_min_width(humidity_column, 160, 0);
+
+  detail_humidity_arc = lv_arc_create(humidity_column);
+  lv_obj_set_size(detail_humidity_arc, 160, 160);
+  lv_arc_set_rotation(detail_humidity_arc, 270);
+  lv_arc_set_bg_angles(detail_humidity_arc, 135, 45);
+  lv_arc_set_range(detail_humidity_arc, 0, 1000);
+  lv_arc_set_value(detail_humidity_arc, 0);
+  lv_obj_clear_flag(detail_humidity_arc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_width(detail_humidity_arc, 14, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(detail_humidity_arc, lv_color_hex(0xD7EDDE),
+                             LV_PART_MAIN);
+  lv_obj_set_style_arc_width(detail_humidity_arc, 18, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(detail_humidity_arc,
+                             lv_palette_main(LV_PALETTE_TEAL),
+                             LV_PART_INDICATOR);
+
+  detail_humidity_label = lv_label_create(humidity_column);
+  ui_theme_apply_caption(detail_humidity_label);
+  lv_label_set_long_mode(detail_humidity_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_humidity_label, "Humidité: --");
+
+  lv_obj_t *growth_column = lv_obj_create(gauge_row);
+  lv_obj_remove_style_all(growth_column);
+  lv_obj_clear_flag(growth_column, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(growth_column, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(growth_column, 0, 0);
+  lv_obj_set_style_pad_gap(growth_column, 10, 0);
+  lv_obj_set_flex_flow(growth_column, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_grow(growth_column, 1);
+  lv_obj_set_style_min_width(growth_column, 180, 0);
+
+  detail_growth_label = lv_label_create(growth_column);
+  ui_theme_apply_caption(detail_growth_label);
+  lv_label_set_long_mode(detail_growth_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_growth_label, "Croissance: --");
+
+  detail_growth_bar = lv_bar_create(growth_column);
+  lv_bar_set_range(detail_growth_bar, 0, 1000);
+  lv_bar_set_value(detail_growth_bar, 0, LV_ANIM_OFF);
+  lv_obj_set_width(detail_growth_bar, LV_PCT(100));
+  lv_obj_clear_flag(detail_growth_bar, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_bg_color(detail_growth_bar, lv_color_hex(0xEDF7ED),
+                            LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(detail_growth_bar, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(detail_growth_bar,
+                            lv_palette_main(LV_PALETTE_GREEN),
+                            LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(detail_growth_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+
+  lv_obj_t *badge_row = lv_obj_create(monitor_card);
+  lv_obj_remove_style_all(badge_row);
+  lv_obj_clear_flag(badge_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(badge_row, LV_PCT(100));
+  lv_obj_set_style_bg_opa(badge_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_flex_flow(badge_row, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_gap(badge_row, 10, 0);
+
+  detail_stage_badge = ui_theme_create_badge(badge_row, UI_THEME_BADGE_INFO,
+                                             "Stade: --");
+  detail_pathology_badge = ui_theme_create_badge(badge_row, UI_THEME_BADGE_INFO,
+                                                 "Pathologie: --");
+  detail_incident_badge = ui_theme_create_badge(badge_row, UI_THEME_BADGE_INFO,
+                                                "Incident: --");
+
+  lv_obj_t *metrics_list = lv_obj_create(monitor_card);
+  lv_obj_remove_style_all(metrics_list);
+  lv_obj_clear_flag(metrics_list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_width(metrics_list, LV_PCT(100));
+  lv_obj_set_style_bg_opa(metrics_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(metrics_list, 0, 0);
+  lv_obj_set_style_pad_gap(metrics_list, 6, 0);
+  lv_obj_set_flex_flow(metrics_list, LV_FLEX_FLOW_COLUMN);
+
+  detail_uv_label = lv_label_create(metrics_list);
+  ui_theme_apply_caption(detail_uv_label);
+  lv_label_set_long_mode(detail_uv_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_uv_label, "UV: --");
+
+  detail_satiety_label = lv_label_create(metrics_list);
+  ui_theme_apply_caption(detail_satiety_label);
+  lv_label_set_text(detail_satiety_label, "Satiété: --");
+
+  detail_hydration_label = lv_label_create(metrics_list);
+  ui_theme_apply_caption(detail_hydration_label);
+  lv_label_set_text(detail_hydration_label, "Hydratation: --");
+
+  detail_weight_label = lv_label_create(metrics_list);
+  ui_theme_apply_caption(detail_weight_label);
+  lv_label_set_text(detail_weight_label, "Poids: --");
+
+  /* Colonne B : configuration */
+  lv_obj_t *col_config = lv_obj_create(content);
+  lv_obj_remove_style_all(col_config);
+  lv_obj_clear_flag(col_config, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(col_config, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(col_config, 0, 0);
+  lv_obj_set_style_pad_gap(col_config, 16, 0);
+  lv_obj_set_flex_flow(col_config, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_min_width(col_config, 320, 0);
+  lv_obj_set_flex_grow(col_config, 1);
+
+  lv_obj_t *config_card = ui_theme_create_card(col_config);
+  lv_obj_set_width(config_card, LV_PCT(100));
+  lv_obj_set_flex_flow(config_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(config_card, 16, 0);
+
+  lv_obj_t *config_title = lv_label_create(config_card);
+  ui_theme_apply_body(config_title);
+  lv_label_set_text(config_title, "Configuration terrarium");
+  lv_obj_set_width(config_title, LV_PCT(100));
 
   populate_species_options();
 
-  dropdown_species = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_species);
-  lv_obj_set_width(dropdown_species, 260);
-  lv_obj_align(dropdown_species, LV_ALIGN_TOP_RIGHT, -10, 10);
-  if (species_options_buffer[0] != '\0') {
-    lv_dropdown_set_options(dropdown_species, species_options_buffer);
-  }
+  lv_obj_t *species_panel =
+      accordion_panel_create(config_card, "Espèce", LV_SYMBOL_LIST, true,
+                             DETAIL_PANEL_SPECIES);
+  lv_obj_t *species_list = lv_list_create(species_panel);
+  lv_obj_set_width(species_list, LV_PCT(100));
+  lv_obj_set_style_bg_opa(species_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(species_list, 0, 0);
+  lv_obj_set_style_pad_gap(species_list, 12, 0);
+  lv_obj_set_scroll_dir(species_list, LV_DIR_VER);
+
+  dropdown_species = ui_config_dropdown_create(
+      species_list, LV_SYMBOL_LIST, "Occupant",
+      species_options_buffer[0] != '\0' ? species_options_buffer : NULL,
+      species_dropdown_event_cb, NULL,
+      "Sélectionner l'espèce maintenue");
   lv_dropdown_set_text(dropdown_species, "Choisir espèce");
-  lv_obj_add_event_cb(dropdown_species, species_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, NULL);
 
-  dropdown_substrate = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_substrate);
-  lv_dropdown_set_options(dropdown_substrate, substrate_options);
-  lv_obj_align(dropdown_substrate, LV_ALIGN_TOP_RIGHT, -10, 60);
-  lv_obj_add_event_cb(dropdown_substrate, config_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_SUBSTRATE);
+  lv_obj_t *material_panel = accordion_panel_create(
+      config_card, "Matériel & environnement", LV_SYMBOL_SETTINGS, true,
+      DETAIL_PANEL_MATERIAL);
+  lv_obj_t *material_list = lv_list_create(material_panel);
+  lv_obj_set_width(material_list, LV_PCT(100));
+  lv_obj_set_style_bg_opa(material_list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(material_list, 0, 0);
+  lv_obj_set_style_pad_gap(material_list, 12, 0);
+  lv_obj_set_scroll_dir(material_list, LV_DIR_VER);
 
-  dropdown_heating = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_heating);
-  lv_dropdown_set_options(dropdown_heating, heating_options);
-  lv_obj_align(dropdown_heating, LV_ALIGN_TOP_RIGHT, -10, 120);
-  lv_obj_add_event_cb(dropdown_heating, config_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_HEATING);
+  dropdown_substrate = ui_config_dropdown_create(
+      material_list, LV_SYMBOL_HOME, "Substrat", substrate_options,
+      config_dropdown_event_cb, (void *)(uintptr_t)CONFIG_SUBSTRATE,
+      "Choisir le substrat principal conforme au biotope");
 
-  dropdown_decor = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_decor);
-  lv_dropdown_set_options(dropdown_decor, decor_options);
-  lv_obj_align(dropdown_decor, LV_ALIGN_TOP_RIGHT, -10, 180);
-  lv_obj_add_event_cb(dropdown_decor, config_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_DECOR);
+  dropdown_heating = ui_config_dropdown_create(
+      material_list, LV_SYMBOL_POWER, "Chauffage", heating_options,
+      config_dropdown_event_cb, (void *)(uintptr_t)CONFIG_HEATING,
+      "Sélectionner le dispositif de chauffage installé");
 
-  dropdown_uv = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_uv);
-  lv_dropdown_set_options(dropdown_uv, uv_options);
-  lv_obj_align(dropdown_uv, LV_ALIGN_TOP_RIGHT, -10, 240);
-  lv_obj_add_event_cb(dropdown_uv, config_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_UV);
+  dropdown_decor = ui_config_dropdown_create(
+      material_list, LV_SYMBOL_DOWNLOAD, "Décor", decor_options,
+      config_dropdown_event_cb, (void *)(uintptr_t)CONFIG_DECOR,
+      "Définir les aménagements intérieurs principaux");
 
-  dropdown_size = lv_dropdown_create(screen_detail);
-  ui_theme_apply_dropdown(dropdown_size);
-  lv_dropdown_set_options(dropdown_size, size_options);
-  lv_obj_align(dropdown_size, LV_ALIGN_TOP_RIGHT, -10, 300);
-  lv_obj_add_event_cb(dropdown_size, config_dropdown_event_cb,
-                      LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)CONFIG_SIZE);
+  dropdown_uv = ui_config_dropdown_create(
+      material_list, LV_SYMBOL_EYE_OPEN, "Éclairage UV", uv_options,
+      config_dropdown_event_cb, (void *)(uintptr_t)CONFIG_UV,
+      "Type de rampe UVB installée");
 
-  lv_obj_t *btn_add_cert = ui_theme_create_button(
-      screen_detail, "Ajouter certificat", UI_THEME_BUTTON_PRIMARY,
-      add_certificate_event_cb, NULL);
-  lv_obj_set_width(btn_add_cert, 220);
-  lv_obj_align(btn_add_cert, LV_ALIGN_TOP_RIGHT, -10, 360);
+  dropdown_size = ui_config_dropdown_create(
+      material_list, LV_SYMBOL_DRIVE, "Dimensions", size_options,
+      config_dropdown_event_cb, (void *)(uintptr_t)CONFIG_SIZE,
+      "Gabarit standard du terrarium (L x l x h)");
 
-  education_switch_detail = lv_switch_create(screen_detail);
-  lv_obj_align(education_switch_detail, LV_ALIGN_TOP_RIGHT, -10, 420);
-  lv_obj_add_event_cb(education_switch_detail, education_switch_event_cb,
-                      LV_EVENT_VALUE_CHANGED, NULL);
-  lv_obj_t *edu_label = lv_label_create(screen_detail);
+  /* Colonne C : conformité et documentation */
+  lv_obj_t *col_compliance = lv_obj_create(content);
+  lv_obj_remove_style_all(col_compliance);
+  lv_obj_clear_flag(col_compliance, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(col_compliance, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(col_compliance, 0, 0);
+  lv_obj_set_style_pad_gap(col_compliance, 16, 0);
+  lv_obj_set_flex_flow(col_compliance, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_min_width(col_compliance, 320, 0);
+  lv_obj_set_flex_grow(col_compliance, 1);
+
+  lv_obj_t *compliance_card = ui_theme_create_card(col_compliance);
+  lv_obj_set_width(compliance_card, LV_PCT(100));
+  lv_obj_set_flex_flow(compliance_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_gap(compliance_card, 14, 0);
+
+  lv_obj_t *compliance_title = lv_label_create(compliance_card);
+  ui_theme_apply_body(compliance_title);
+  lv_label_set_text(compliance_title, "Conformité & documentation");
+  lv_obj_set_width(compliance_title, LV_PCT(100));
+
+  detail_compliance_label = lv_label_create(compliance_card);
+  ui_theme_apply_body(detail_compliance_label);
+  lv_label_set_long_mode(detail_compliance_label, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(detail_compliance_label,
+                    "Aucune conformité requise sans espèce");
+
+  lv_obj_t *register_row = lv_obj_create(compliance_card);
+  lv_obj_remove_style_all(register_row);
+  lv_obj_clear_flag(register_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(register_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(register_row, 0, 0);
+  lv_obj_set_style_pad_gap(register_row, 12, 0);
+  lv_obj_set_flex_flow(register_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(register_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
+
+  detail_register_label = lv_label_create(register_row);
+  ui_theme_apply_body(detail_register_label);
+  lv_label_set_text(detail_register_label, "Registre non renseigné");
+  lv_obj_set_flex_grow(detail_register_label, 1);
+
+  register_button = ui_theme_create_button(register_row,
+                                           "Consigner la cession",
+                                           UI_THEME_BUTTON_PRIMARY,
+                                           register_button_event_cb, NULL);
+  lv_obj_set_width(register_button, 220);
+
+  lv_obj_t *education_row = lv_obj_create(compliance_card);
+  lv_obj_remove_style_all(education_row);
+  lv_obj_clear_flag(education_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(education_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(education_row, 0, 0);
+  lv_obj_set_style_pad_gap(education_row, 12, 0);
+  lv_obj_set_flex_flow(education_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(education_row, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+  lv_obj_t *edu_label = lv_label_create(education_row);
   ui_theme_apply_caption(edu_label);
   lv_label_set_text(edu_label, "Affichage pédagogique");
-  lv_obj_align_to(edu_label, education_switch_detail, LV_ALIGN_OUT_LEFT_MID, -10,
-                  0);
 
-  detail_register_label = lv_label_create(screen_detail);
-  ui_theme_apply_body(detail_register_label);
-  lv_obj_align(detail_register_label, LV_ALIGN_TOP_LEFT, 10, 360);
+  education_switch_detail = lv_switch_create(education_row);
+  lv_obj_add_event_cb(education_switch_detail, education_switch_event_cb,
+                      LV_EVENT_VALUE_CHANGED, NULL);
 
-  register_button = ui_theme_create_button(
-      screen_detail, "Consigner la cession", UI_THEME_BUTTON_PRIMARY,
-      register_button_event_cb, NULL);
-  lv_obj_set_width(register_button, 240);
-  lv_obj_align(register_button, LV_ALIGN_TOP_LEFT, 10, 400);
+  lv_obj_t *cert_container = lv_obj_create(compliance_card);
+  lv_obj_remove_style_all(cert_container);
+  lv_obj_set_width(cert_container, LV_PCT(100));
+  lv_obj_set_style_bg_color(cert_container, lv_color_hex(0xF6FBF6), 0);
+  lv_obj_set_style_bg_opa(cert_container, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(cert_container, 14, 0);
+  lv_obj_set_style_border_width(cert_container, 1, 0);
+  lv_obj_set_style_border_color(cert_container, lv_color_hex(0xC7DDCB), 0);
+  lv_obj_set_style_pad_all(cert_container, 8, 0);
+  lv_obj_set_style_pad_gap(cert_container, 8, 0);
+  lv_obj_set_scroll_dir(cert_container, LV_DIR_VER);
+  lv_obj_set_style_max_height(cert_container, 220, 0);
 
-  detail_compliance_label = lv_label_create(screen_detail);
-  ui_theme_apply_body(detail_compliance_label);
-  lv_obj_align(detail_compliance_label, LV_ALIGN_TOP_LEFT, 10, 440);
-
-  detail_cert_table = lv_table_create(screen_detail);
-  lv_obj_set_size(detail_cert_table, 460, 120);
-  lv_obj_align(detail_cert_table, LV_ALIGN_BOTTOM_LEFT, 10, -150);
+  detail_cert_table = lv_table_create(cert_container);
+  lv_obj_set_width(detail_cert_table, LV_PCT(100));
   lv_table_set_column_count(detail_cert_table, 2);
   lv_table_set_row_count(detail_cert_table, 6);
   ui_theme_apply_table(detail_cert_table, UI_THEME_TABLE_DEFAULT);
 
-  lv_obj_t *btn_feed_stock = ui_theme_create_button(
-      screen_detail, "+10 proies", UI_THEME_BUTTON_SECONDARY,
-      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_FEED);
-  lv_obj_set_width(btn_feed_stock, 200);
-  lv_obj_align(btn_feed_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -180);
+  lv_obj_t *cert_action_row = lv_obj_create(compliance_card);
+  lv_obj_remove_style_all(cert_action_row);
+  lv_obj_clear_flag(cert_action_row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_opa(cert_action_row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(cert_action_row, 0, 0);
+  lv_obj_set_style_pad_gap(cert_action_row, 12, 0);
+  lv_obj_set_flex_flow(cert_action_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(cert_action_row, LV_FLEX_ALIGN_END,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  lv_obj_t *btn_water_stock = ui_theme_create_button(
-      screen_detail, "+20 L eau", UI_THEME_BUTTON_SECONDARY,
-      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_WATER);
-  lv_obj_set_width(btn_water_stock, 200);
-  lv_obj_align(btn_water_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -130);
+  lv_obj_t *btn_add_cert = ui_theme_create_button(
+      cert_action_row, "Ajouter certificat", UI_THEME_BUTTON_PRIMARY,
+      add_certificate_event_cb, NULL);
+  lv_obj_set_width(btn_add_cert, 220);
 
-  lv_obj_t *btn_substrate_stock = ui_theme_create_button(
-      screen_detail, "+2 substrats", UI_THEME_BUTTON_SECONDARY,
-      inventory_button_event_cb,
-      (void *)(uintptr_t)INVENTORY_ADD_SUBSTRATE);
-  lv_obj_set_width(btn_substrate_stock, 200);
-  lv_obj_align(btn_substrate_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -80);
+  lv_obj_t *btn_scan_cert = ui_theme_create_button(
+      cert_action_row, "Scanner certificat", UI_THEME_BUTTON_SECONDARY,
+      scan_certificate_event_cb, NULL);
+  lv_obj_set_width(btn_scan_cert, 220);
 
-  lv_obj_t *btn_uv_stock = ui_theme_create_button(
-      screen_detail, "+1 UV", UI_THEME_BUTTON_SECONDARY,
-      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_UV);
-  lv_obj_set_width(btn_uv_stock, 200);
-  lv_obj_align(btn_uv_stock, LV_ALIGN_BOTTOM_RIGHT, -10, -30);
+  /* Pied de page : navigation + stocks */
+  lv_obj_t *footer = lv_obj_create(screen_detail);
+  lv_obj_remove_style_all(footer);
+  lv_obj_set_width(footer, LV_PCT(100));
+  lv_obj_set_style_bg_opa(footer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(footer, 0, 0);
+  lv_obj_set_style_pad_gap(footer, 12, 0);
+  lv_obj_set_flex_flow(footer, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(footer, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-  lv_obj_t *btn_decor_stock = ui_theme_create_button(
-      screen_detail, "+1 décor", UI_THEME_BUTTON_SECONDARY,
-      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_DECOR);
-  lv_obj_set_width(btn_decor_stock, 200);
-  lv_obj_align(btn_decor_stock, LV_ALIGN_BOTTOM_RIGHT, -220, -30);
+  lv_obj_t *nav_group = lv_obj_create(footer);
+  lv_obj_remove_style_all(nav_group);
+  lv_obj_set_style_bg_opa(nav_group, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(nav_group, 0, 0);
+  lv_obj_set_style_pad_gap(nav_group, 12, 0);
+  lv_obj_set_flex_flow(nav_group, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(nav_group, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
 
-  lv_obj_t *btn_back = ui_theme_create_button(
-      screen_detail, "Retour", UI_THEME_BUTTON_SECONDARY, nav_button_event_cb,
-      screen_overview);
+  lv_obj_t *btn_back = ui_theme_create_button(nav_group, "Retour",
+                                              UI_THEME_BUTTON_SECONDARY,
+                                              nav_button_event_cb,
+                                              screen_overview);
   lv_obj_set_width(btn_back, 180);
-  lv_obj_align(btn_back, LV_ALIGN_BOTTOM_LEFT, 10, -10);
 
   lv_obj_t *btn_menu = ui_theme_create_button(
-      screen_detail, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
+      nav_group, "Menu Simulation", UI_THEME_BUTTON_SECONDARY,
       nav_button_event_cb, screen_simulation_menu);
   lv_obj_set_width(btn_menu, 200);
-  lv_obj_align(btn_menu, LV_ALIGN_BOTTOM_LEFT, 210, -10);
+
+  lv_obj_t *inventory_group = lv_obj_create(footer);
+  lv_obj_remove_style_all(inventory_group);
+  lv_obj_set_style_bg_opa(inventory_group, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_pad_all(inventory_group, 0, 0);
+  lv_obj_set_style_pad_gap(inventory_group, 10, 0);
+  lv_obj_set_flex_flow(inventory_group, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(inventory_group, LV_FLEX_ALIGN_END,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_grow(inventory_group, 1);
+
+  lv_obj_t *btn_feed_stock = ui_theme_create_button(
+      inventory_group, "+10 proies", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_FEED);
+  lv_obj_set_width(btn_feed_stock, 180);
+
+  lv_obj_t *btn_water_stock = ui_theme_create_button(
+      inventory_group, "+20 L eau", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_WATER);
+  lv_obj_set_width(btn_water_stock, 180);
+
+  lv_obj_t *btn_substrate_stock = ui_theme_create_button(
+      inventory_group, "+2 substrats", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb,
+      (void *)(uintptr_t)INVENTORY_ADD_SUBSTRATE);
+  lv_obj_set_width(btn_substrate_stock, 180);
+
+  lv_obj_t *btn_uv_stock = ui_theme_create_button(
+      inventory_group, "+1 UV", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_UV);
+  lv_obj_set_width(btn_uv_stock, 180);
+
+  lv_obj_t *btn_decor_stock = ui_theme_create_button(
+      inventory_group, "+1 décor", UI_THEME_BUTTON_SECONDARY,
+      inventory_button_event_cb, (void *)(uintptr_t)INVENTORY_ADD_DECOR);
+  lv_obj_set_width(btn_decor_stock, 180);
 }
 
 static void build_economy_screen(void) {
@@ -1636,15 +2151,18 @@ static void show_terrarium_context_menu(uint32_t index) {
 static void update_detail_screen(void) {
   if (!screen_detail)
     return;
+
   if (species_option_count == 0U && species_options_buffer[0] == '\0') {
     populate_species_options();
     if (dropdown_species && species_options_buffer[0] != '\0') {
       lv_dropdown_set_options(dropdown_species, species_options_buffer);
     }
   }
+
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility,
                                            (uint8_t)selected_terrarium);
+
   if (dropdown_species) {
     if (!terrarium) {
       lv_obj_add_state(dropdown_species, LV_STATE_DISABLED);
@@ -1665,26 +2183,71 @@ static void update_detail_screen(void) {
       }
     }
   }
+
   if (!terrarium || !terrarium->occupied) {
-    lv_label_set_text(detail_title, "Terrarium disponible");
-    lv_label_set_text(detail_status_label,
-                      "Attribuer une espèce pour configurer ce terrarium");
-    if (detail_status_icon) {
-    lv_img_set_src(detail_status_icon,
-                   ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
+    if (detail_title) {
+      lv_label_set_text(detail_title, "Terrarium disponible");
     }
-    if (detail_env_table) {
-      static const char *kLabels[12] = {
-          "Température",    "Humidité",   "Index UV",      "Satiété",
-          "Hydratation",    "Croissance", "Poids",        "Stade",
-          "Pathologie",     "Incident",   "Dimensions",    "Obligations",
-      };
-      for (uint32_t row = 0; row < 12U; ++row) {
-        lv_table_set_cell_value(detail_env_table, row, 0, kLabels[row]);
-        lv_table_set_cell_value(detail_env_table, row, 1, "-");
+    if (detail_alert_badge) {
+      lv_label_set_text(detail_alert_badge, "Terrarium libre");
+      ui_theme_badge_set_kind(detail_alert_badge, UI_THEME_BADGE_INFO);
+    }
+    if (detail_status_label) {
+      lv_label_set_text(detail_status_label,
+                        "Attribuer une espèce pour configurer ce terrarium");
+    }
+    if (detail_status_icon) {
+      lv_img_set_src(detail_status_icon,
+                     ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
+    }
+    if (detail_temp_label) {
+      lv_label_set_text(detail_temp_label, "Température: --");
+    }
+    if (detail_temp_meter && detail_temp_indicator) {
+      lv_meter_set_indicator_value(detail_temp_meter, detail_temp_indicator, 0);
+      if (detail_temp_range_indicator) {
+        lv_meter_set_indicator_start_value(detail_temp_meter,
+                                           detail_temp_range_indicator, 0);
+        lv_meter_set_indicator_end_value(detail_temp_meter,
+                                         detail_temp_range_indicator, 0);
       }
     }
-    update_certificate_table();
+    if (detail_humidity_arc) {
+      lv_arc_set_value(detail_humidity_arc, 0);
+    }
+    if (detail_humidity_label) {
+      lv_label_set_text(detail_humidity_label, "Humidité: --");
+    }
+    if (detail_growth_bar) {
+      lv_bar_set_value(detail_growth_bar, 0, LV_ANIM_OFF);
+    }
+    if (detail_growth_label) {
+      lv_label_set_text(detail_growth_label, "Croissance: --");
+    }
+    if (detail_uv_label) {
+      lv_label_set_text(detail_uv_label, "UV: --");
+    }
+    if (detail_satiety_label) {
+      lv_label_set_text(detail_satiety_label, "Satiété: --");
+    }
+    if (detail_hydration_label) {
+      lv_label_set_text(detail_hydration_label, "Hydratation: --");
+    }
+    if (detail_weight_label) {
+      lv_label_set_text(detail_weight_label, "Poids: --");
+    }
+    if (detail_stage_badge) {
+      lv_label_set_text(detail_stage_badge, "Stade: --");
+      ui_theme_badge_set_kind(detail_stage_badge, UI_THEME_BADGE_INFO);
+    }
+    if (detail_pathology_badge) {
+      lv_label_set_text(detail_pathology_badge, "Pathologie: --");
+      ui_theme_badge_set_kind(detail_pathology_badge, UI_THEME_BADGE_INFO);
+    }
+    if (detail_incident_badge) {
+      lv_label_set_text(detail_incident_badge, "Incident: --");
+      ui_theme_badge_set_kind(detail_incident_badge, UI_THEME_BADGE_INFO);
+    }
     if (detail_compliance_label) {
       lv_label_set_text(detail_compliance_label,
                         "Aucune conformité requise sans espèce");
@@ -1706,94 +2269,153 @@ static void update_detail_screen(void) {
         lv_label_set_text(label, "Consigner la cession");
       }
     }
+    update_certificate_table();
     return;
   }
+
   const species_profile_t *profile = &terrarium->species;
-  lv_label_set_text_fmt(detail_title, "T%02" PRIu32 " - %s (%s)",
-                        (uint32_t)(selected_terrarium + 1U),
-                        terrarium->nickname, profile->name);
-
-  lv_table_set_cell_value(detail_env_table, 0, 0, "Température");
-  lv_table_set_cell_value_fmt(detail_env_table, 0, 1, "%.1f °C (%.1f-%.1f)",
-                              terrarium->temperature_c, profile->day_temp_min,
-                              profile->day_temp_max);
-  lv_table_set_cell_value(detail_env_table, 1, 0, "Humidité");
-  lv_table_set_cell_value_fmt(detail_env_table, 1, 1, "%.0f %% (%.0f-%.0f)",
-                              terrarium->humidity_pct, profile->humidity_min,
-                              profile->humidity_max);
-  lv_table_set_cell_value(detail_env_table, 2, 0, "Index UV");
-  lv_table_set_cell_value_fmt(detail_env_table, 2, 1, "%.2f (%.1f-%.1f)",
-                              terrarium->uv_index, profile->uv_min,
-                              profile->uv_max);
-  lv_table_set_cell_value(detail_env_table, 3, 0, "Satiété");
-  lv_table_set_cell_value_fmt(detail_env_table, 3, 1, "%.0f %%",
-                              terrarium->satiety * 100.0f);
-  lv_table_set_cell_value(detail_env_table, 4, 0, "Hydratation");
-  lv_table_set_cell_value_fmt(detail_env_table, 4, 1, "%.0f %%",
-                              terrarium->hydration * 100.0f);
-  lv_table_set_cell_value(detail_env_table, 5, 0, "Croissance");
-  lv_table_set_cell_value_fmt(detail_env_table, 5, 1, "%.0f %%",
-                              terrarium->growth * 100.0f);
-  lv_table_set_cell_value(detail_env_table, 6, 0, "Poids");
-  lv_table_set_cell_value_fmt(detail_env_table, 6, 1, "%.0f g",
-                              terrarium->weight_g);
-  lv_table_set_cell_value(detail_env_table, 7, 0, "Stade");
-  lv_table_set_cell_value(detail_env_table, 7, 1,
-                          growth_stage_to_string(terrarium->stage));
-  lv_table_set_cell_value(detail_env_table, 8, 0, "Pathologie");
-  lv_table_set_cell_value(detail_env_table, 8, 1,
-                          pathology_to_string(terrarium->pathology));
-  lv_table_set_cell_value(detail_env_table, 9, 0, "Incident");
-  lv_table_set_cell_value(detail_env_table, 9, 1,
-                          incident_to_string(terrarium->incident));
-  const regulation_rule_t *rule =
-      regulations_get_rule((int)terrarium->species.id);
-  lv_table_set_cell_value(detail_env_table, 10, 0, "Dimensions");
-  if (rule) {
-    lv_table_set_cell_value_fmt(detail_env_table, 10, 1,
-                                "%.0fx%.0fx%.0f cm / min %.0fx%.0fx%.0f cm",
-                                terrarium->config.length_cm,
-                                terrarium->config.width_cm,
-                                terrarium->config.height_cm, rule->min_length_cm,
-                                rule->min_width_cm, rule->min_height_cm);
-  } else {
-    lv_table_set_cell_value_fmt(detail_env_table, 10, 1,
-                                "%.0fx%.0fx%.0f cm", terrarium->config.length_cm,
-                                terrarium->config.width_cm,
-                                terrarium->config.height_cm);
+  char title[128];
+  const char *display_name =
+      (terrarium->nickname[0] != '\0') ? terrarium->nickname
+                                        : terrarium->species.name;
+  snprintf(title, sizeof(title), "T%02" PRIu32 " - %s (%s)",
+           (uint32_t)(selected_terrarium + 1U), display_name, profile->name);
+  if (detail_title) {
+    lv_label_set_text(detail_title, title);
   }
-  lv_table_set_cell_value(detail_env_table, 11, 0, "Obligations");
-  const char *cert_status = "Certificat absent";
-  if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED) {
-    cert_status = "Certificat expiré";
-  } else if (terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_MISSING) {
-    cert_status = "Certificat manquant";
-  } else if (terrarium->certificate_count > 0) {
-    cert_status = "Certificat enregistré";
-  }
-  const char *register_status =
-      terrarium->config.register_completed ? "Registre OK" : "Registre à consigner";
-  lv_table_set_cell_value_fmt(detail_env_table, 11, 1, "%s | %s", cert_status,
-                              register_status);
 
-  lv_label_set_text_fmt(
-      detail_status_label,
-      "Substrat: %s | Chauffage: %s | Décor: %s | UV: %s",
-      terrarium->config.substrate, terrarium->config.heating,
-      terrarium->config.decor, terrarium->config.uv_setup);
+  bool warn = terrarium->pathology != REPTILE_PATHOLOGY_NONE ||
+              terrarium->incident != REPTILE_INCIDENT_NONE;
   if (detail_status_icon) {
-    bool warn = terrarium->pathology != REPTILE_PATHOLOGY_NONE ||
-                terrarium->incident != REPTILE_INCIDENT_NONE;
     lv_img_set_src(detail_status_icon,
                    ui_theme_get_icon(warn ? UI_THEME_ICON_TERRARIUM_ALERT
-                                         : UI_THEME_ICON_TERRARIUM_OK));
+                                          : UI_THEME_ICON_TERRARIUM_OK));
+  }
+  if (detail_status_label) {
+    lv_label_set_text_fmt(
+        detail_status_label,
+        "Substrat: %s | Chauffage: %s | Décor: %s | UV: %s",
+        terrarium->config.substrate, terrarium->config.heating,
+        terrarium->config.decor, terrarium->config.uv_setup);
+  }
+
+  if (detail_alert_badge) {
+    if (terrarium->incident != REPTILE_INCIDENT_NONE) {
+      ui_theme_badge_set_kind(detail_alert_badge,
+                              incident_badge_kind(terrarium->incident));
+      lv_label_set_text_fmt(detail_alert_badge, "Incident: %s",
+                            incident_to_string(terrarium->incident));
+    } else if (terrarium->pathology != REPTILE_PATHOLOGY_NONE) {
+      ui_theme_badge_set_kind(detail_alert_badge,
+                              pathology_badge_kind(terrarium->pathology));
+      lv_label_set_text_fmt(detail_alert_badge, "Surveillance: %s",
+                            pathology_to_string(terrarium->pathology));
+    } else {
+      ui_theme_badge_set_kind(detail_alert_badge, UI_THEME_BADGE_SUCCESS);
+      lv_label_set_text(detail_alert_badge, "Paramètres conformes");
+    }
+  }
+
+  bool is_daytime = g_facility.cycle.is_daytime;
+  float temp_min = is_daytime ? profile->day_temp_min : profile->night_temp_min;
+  float temp_max = is_daytime ? profile->day_temp_max : profile->night_temp_max;
+  if (detail_temp_meter && detail_temp_indicator) {
+    int32_t temp_value = (int32_t)lrintf(terrarium->temperature_c * 10.0f);
+    lv_meter_set_indicator_value(detail_temp_meter, detail_temp_indicator,
+                                 temp_value);
+    if (detail_temp_range_indicator) {
+      lv_meter_set_indicator_start_value(
+          detail_temp_meter, detail_temp_range_indicator,
+          (int32_t)lrintf(temp_min * 10.0f));
+      lv_meter_set_indicator_end_value(
+          detail_temp_meter, detail_temp_range_indicator,
+          (int32_t)lrintf(temp_max * 10.0f));
+    }
+  }
+  if (detail_temp_label) {
+    lv_label_set_text_fmt(detail_temp_label,
+                          "Température: %.1f °C (%.1f-%.1f °C %s)",
+                          terrarium->temperature_c, temp_min, temp_max,
+                          is_daytime ? "jour" : "nuit");
+  }
+
+  if (detail_humidity_arc) {
+    lv_arc_set_value(detail_humidity_arc,
+                     (int32_t)lrintf(terrarium->humidity_pct * 10.0f));
+  }
+  if (detail_humidity_label) {
+    lv_label_set_text_fmt(detail_humidity_label,
+                          "Humidité: %.0f %% (%.0f-%.0f %%)",
+                          terrarium->humidity_pct, profile->humidity_min,
+                          profile->humidity_max);
+  }
+
+  if (detail_growth_bar) {
+    lv_bar_set_value(detail_growth_bar,
+                     (int32_t)lrintf(terrarium->growth * 1000.0f),
+                     LV_ANIM_OFF);
+  }
+  if (detail_growth_label) {
+    lv_label_set_text_fmt(detail_growth_label, "Croissance: %.0f %%",
+                          terrarium->growth * 100.0f);
+  }
+
+  if (detail_uv_label) {
+    lv_label_set_text_fmt(detail_uv_label, "UV: %.2f (%.1f-%.1f)",
+                          terrarium->uv_index, profile->uv_min,
+                          profile->uv_max);
+  }
+  if (detail_satiety_label) {
+    lv_label_set_text_fmt(detail_satiety_label, "Satiété: %.0f %%",
+                          terrarium->satiety * 100.0f);
+  }
+  if (detail_hydration_label) {
+    lv_label_set_text_fmt(detail_hydration_label, "Hydratation: %.0f %%",
+                          terrarium->hydration * 100.0f);
+  }
+  if (detail_weight_label) {
+    lv_label_set_text_fmt(detail_weight_label, "Poids: %.0f g / %.0f g",
+                          terrarium->weight_g, profile->adult_weight_g);
+  }
+
+  if (detail_stage_badge) {
+    ui_theme_badge_set_kind(detail_stage_badge, UI_THEME_BADGE_INFO);
+    lv_label_set_text_fmt(detail_stage_badge, "Stade: %s",
+                          growth_stage_to_string(terrarium->stage));
+  }
+  if (detail_pathology_badge) {
+    ui_theme_badge_set_kind(detail_pathology_badge,
+                            pathology_badge_kind(terrarium->pathology));
+    lv_label_set_text_fmt(detail_pathology_badge, "Pathologie: %s",
+                          pathology_to_string(terrarium->pathology));
+  }
+  if (detail_incident_badge) {
+    ui_theme_badge_set_kind(detail_incident_badge,
+                            incident_badge_kind(terrarium->incident));
+    lv_label_set_text_fmt(detail_incident_badge, "Incident: %s",
+                          incident_to_string(terrarium->incident));
+  }
+
+  if (detail_compliance_label) {
+    if (terrarium->compliance_message[0] != '\0') {
+      lv_label_set_text(detail_compliance_label,
+                        terrarium->compliance_message);
+    } else if (terrarium->incident != REPTILE_INCIDENT_NONE) {
+      lv_label_set_text_fmt(detail_compliance_label,
+                            "Obligation non respectée: %s",
+                            incident_to_string(terrarium->incident));
+    } else {
+      lv_label_set_text(detail_compliance_label,
+                        "Obligations réglementaires satisfaites");
+    }
   }
 
   load_dropdown_value(dropdown_substrate, substrate_options,
                       terrarium->config.substrate);
   load_dropdown_value(dropdown_heating, heating_options,
                       terrarium->config.heating);
-  load_dropdown_value(dropdown_decor, decor_options, terrarium->config.decor);
+  load_dropdown_value(dropdown_decor, decor_options,
+                      terrarium->config.decor);
   load_dropdown_value(dropdown_uv, uv_options, terrarium->config.uv_setup);
   if (dropdown_size) {
     int size_index = find_size_option(terrarium->config.length_cm,
@@ -1813,28 +2435,25 @@ static void update_detail_screen(void) {
       lv_obj_clear_state(education_switch_detail, LV_STATE_CHECKED);
     }
   }
+
   if (detail_register_label) {
     if (terrarium->config.register_completed &&
         terrarium->config.register_reference[0] != '\0') {
       lv_label_set_text_fmt(detail_register_label, "Registre: %s",
                             terrarium->config.register_reference);
     } else {
-      lv_label_set_text(detail_register_label, "Registre non renseigné");
+      lv_label_set_text(detail_register_label, "Registre à compléter");
     }
   }
+
   if (register_button) {
     lv_obj_t *label = lv_obj_get_child(register_button, 0);
     if (label) {
-      lv_label_set_text(label, terrarium->config.register_completed
-                                   ? "Annuler la cession"
-                                   : "Consigner la cession");
+      lv_label_set_text(label,
+                        terrarium->config.register_completed
+                            ? "Annuler la cession"
+                            : "Consigner la cession");
     }
-  }
-  if (detail_compliance_label) {
-    lv_label_set_text(detail_compliance_label,
-                      terrarium->compliance_message[0] != '\0'
-                          ? terrarium->compliance_message
-                          : "Aucune remarque");
   }
 
   update_certificate_table();
@@ -2211,6 +2830,25 @@ static void config_dropdown_event_cb(lv_event_t *e) {
                       "Configuration refusée (non conforme)");
   }
   update_detail_screen();
+}
+
+static void scan_certificate_event_cb(lv_event_t *e) {
+  (void)e;
+  terrarium_t *terrarium =
+      reptile_facility_get_terrarium(&g_facility, (uint8_t)selected_terrarium);
+  if (!terrarium || !terrarium->occupied) {
+    if (detail_compliance_label) {
+      lv_label_set_text(detail_compliance_label,
+                        "Scanner disponible après assignation d'une espèce");
+    }
+    return;
+  }
+  ESP_LOGI(TAG, "Demande de scan certificat pour T%02" PRIu32,
+           (uint32_t)(selected_terrarium + 1U));
+  if (detail_compliance_label) {
+    lv_label_set_text(detail_compliance_label,
+                      "Scan certificat en attente de lecture NFC/QR...");
+  }
 }
 
 static void add_certificate_event_cb(lv_event_t *e) {
