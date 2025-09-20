@@ -197,11 +197,24 @@ Chaque minute, un historique circulaire est alimenté pour alimenter les graphiq
 journaux CSV.
 
 ### Configuration persistante multi-terrariums
-L'écran de paramètres (`settings_screen_show`) expose une interface tabulaire permettant de
-configurer chaque terrarium (nom, seuils jour/nuit, hystérésis, horaires, UV, intervalles min.).
-Les réglages sont sérialisés via NVS (`KEY_ENV`) et réappliqués au démarrage en même temps que
-les préférences de veille et de niveau de logs. L'appel à `settings_apply()` propage immédiatement
-la configuration vers le contrôleur d'environnement même si le mode réel est déjà actif.
+L'écran de paramètres (`settings_screen_show`) a été refondu autour d'une colonne de navigation
+(`ui_theme_create_nav_card`) qui synthétise chaque terrarium (icône espèce, résumé jour/nuit) et
+d'une zone de contenu à cartes thématiques. Les cartes regroupent les réglages généraux
+(nombre de terrariums, période de boucle, veille, niveau de logs) et les profils détaillés
+de chaque terrarium (consignes jour/nuit, hystérésis, UV, intervalles minimaux).
+
+![Interface paramètres Verdant](docs/screenshots/settings_refonte.svg)
+
+- Les spinbox et sliders sont couplés via `create_spin_slider_*`, avec légendes d'unités et
+  validation instantanée (bordures rouges si `heat_on` ≤ `heat_off`, créneaux UV identiques…).
+- Les horaires utilisent `create_time_control`, affichent un libellé HH:MM synchronisé et exposent
+  des info-bulles pour contextualiser chaque champ.
+- Le bandeau d'état applique `ui_theme_create_badge` pour signaler l'état de persistance
+  (synchronisé, appliqué mais non sauvegardé, modifications en cours).
+- Deux actions distinctes sont disponibles : **Appliquer** pousse immédiatement la configuration
+  en RAM via `settings_apply()` sans écrire en flash, tandis que **Sauver** valide et persiste dans
+  NVS (`settings_save()`). Un modal prévient l'utilisateur en cas de fermeture avec des changements
+  non sauvegardés.
 
 ### Journalisation mode réel
 Un enregistreur dédié (`logging_real_start`) consigne, pour chaque terrarium et à chaque mise à
