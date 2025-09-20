@@ -16,6 +16,7 @@
 
 #include "driver/gpio.h"  // ESP-IDF GPIO driver library
 #include "esp_err.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Pin Definitions */
@@ -23,6 +24,10 @@
 #define SERVO_FEED_PIN   GPIO_NUM_17 /* Servo control pin for feeding */
 #define WATER_PUMP_PIN   GPIO_NUM_18 /* Pump control pin for watering */
 #define HEAT_RES_PIN     GPIO_NUM_19 /* Heating resistor control pin */
+
+/* Default pulse widths (in milliseconds) applied to monostable actuators */
+#define REPTILE_GPIO_HEAT_PULSE_MS 5000u
+#define REPTILE_GPIO_PUMP_PULSE_MS 1000u
 
 /* Function Prototypes */
 
@@ -32,11 +37,12 @@ typedef struct {
     void (*gpio_int)(int32_t pin, gpio_isr_t isr_handler);
     void (*digital_write)(uint16_t pin, uint8_t value);
     uint8_t (*digital_read)(uint16_t pin);
-    void (*feed)(void);
-    void (*water)(void);
-    void (*heat)(void);
-    void (*uv)(bool on);
+    void (*feed)(size_t channel);
+    void (*water)(size_t channel);
+    void (*heat)(size_t channel);
+    void (*uv)(size_t channel, bool on);
     void (*deinit)(void);
+    size_t channel_count;
 } actuator_driver_t;
 
 void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode);
@@ -47,6 +53,11 @@ void reptile_feed_gpio(void);
 void reptile_water_gpio(void);
 void reptile_heat_gpio(void);
 void reptile_uv_gpio(bool on);
+void reptile_feed_gpio_channel(size_t channel);
+void reptile_water_gpio_channel(size_t channel);
+void reptile_heat_gpio_channel(size_t channel);
+void reptile_uv_gpio_channel(size_t channel, bool on);
+size_t reptile_actuator_channel_count(void);
 esp_err_t reptile_actuators_init(void);
 void reptile_actuators_deinit(void);
 
