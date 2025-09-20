@@ -159,6 +159,15 @@ static lv_obj_t *regulations_export_toast;
 static lv_timer_t *regulations_export_toast_timer;
 static time_t regulations_last_export_time;
 static char regulations_last_export_path[128];
+static bool regulations_table_initialized;
+static size_t regulations_table_rule_count;
+static bool regulations_incident_cache_valid;
+static uint32_t regulations_incident_hash;
+static size_t regulations_incident_cached_count;
+static time_t regulations_prev_export_time;
+static char regulations_prev_export_path[sizeof(regulations_last_export_path)];
+static char regulations_summary_cache[192];
+static char regulations_export_text_cache[128];
 
 static lv_timer_t *facility_timer;
 static lv_timer_t *screen_build_timer;
@@ -309,6 +318,45 @@ static lv_coord_t determine_card_width(uint32_t terrarium_count);
 static float compute_stock_health(const reptile_inventory_t *inventory,
                                   uint32_t terrarium_count,
                                   const char **lowest_label);
+
+static inline uint32_t hash32_init(void) { return 2166136261u; }
+
+static inline uint32_t hash32_update(uint32_t hash, const void *data,
+                                     size_t len) {
+  const uint8_t *bytes = (const uint8_t *)data;
+  for (size_t i = 0; i < len; ++i) {
+    hash ^= bytes[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static inline uint32_t hash32_update_u32(uint32_t hash, uint32_t value) {
+  return hash32_update(hash, &value, sizeof(value));
+}
+
+static inline uint32_t hash32_update_bool(uint32_t hash, bool value) {
+  uint32_t v = value ? 1U : 0U;
+  return hash32_update(hash, &v, sizeof(v));
+}
+
+static inline uint32_t hash32_update_float_scaled(uint32_t hash, float value,
+                                                  float scale) {
+  int32_t scaled = (int32_t)lrintf(value * scale);
+  return hash32_update(hash, &scaled, sizeof(scaled));
+}
+
+static inline uint32_t hash32_update_buffer(uint32_t hash, const char *buffer,
+                                            size_t max_len) {
+  if (!buffer || max_len == 0U) {
+    return hash32_update_u32(hash, 0U);
+  }
+  size_t len = strnlen(buffer, max_len);
+  if (len > 0U) {
+    hash = hash32_update(hash, buffer, len);
+  }
+  return hash32_update_u32(hash, (uint32_t)len);
+}
 
 bool reptile_game_is_active(void) { return s_game_active; }
 
@@ -1888,6 +1936,15 @@ void reptile_game_start(esp_lcd_panel_handle_t panel,
   (void)panel;
   (void)touch;
   s_game_active = true;
+  regulations_table_initialized = false;
+  regulations_table_rule_count = 0;
+  regulations_incident_cache_valid = false;
+  regulations_incident_hash = 0;
+  regulations_incident_cached_count = 0;
+  regulations_prev_export_time = 0;
+  regulations_prev_export_path[0] = '\0';
+  regulations_summary_cache[0] = '\0';
+  regulations_export_text_cache[0] = '\0';
 
   build_simulation_menu_screen();
 
@@ -1946,6 +2003,15 @@ void reptile_game_stop(void) {
     lv_obj_del(screen_regulations);
     screen_regulations = NULL;
   }
+  regulations_table_initialized = false;
+  regulations_table_rule_count = 0;
+  regulations_incident_cache_valid = false;
+  regulations_incident_hash = 0;
+  regulations_incident_cached_count = 0;
+  regulations_prev_export_time = 0;
+  regulations_prev_export_path[0] = '\0';
+  regulations_summary_cache[0] = '\0';
+  regulations_export_text_cache[0] = '\0';
 }
 
 void reptile_tick(lv_timer_t *timer) { facility_timer_cb(timer); }
@@ -2986,32 +3052,45 @@ static void update_regulation_screen(void) {
 
   const regulation_rule_t *rules = NULL;
   size_t rule_count = regulations_get_rules(&rules);
-  lv_table_set_row_count(regulations_table, rule_count + 1U);
-  lv_table_set_cell_value(regulations_table, 0, 0, "Espèce");
-  lv_table_set_cell_value(regulations_table, 0, 1, "Statut");
-  lv_table_set_cell_value(regulations_table, 0, 2, "Certificat");
-  lv_table_set_cell_value(regulations_table, 0, 3, "Dimensions min");
-  for (size_t i = 0; i < rule_count; ++i) {
-    const regulation_rule_t *rule = &rules[i];
-    lv_table_set_cell_value(regulations_table, i + 1U, 0,
-                            rule->common_name ? rule->common_name : "N/D");
-    lv_table_set_cell_value(regulations_table, i + 1U, 1,
-                            regulations_status_to_string(rule->status));
-    lv_table_set_cell_value(regulations_table, i + 1U, 2,
-                            rule->certificate_text ? rule->certificate_text
-                                                   : "N/A");
-    char dim_buf[48];
-    snprintf(dim_buf, sizeof(dim_buf), "%.0fx%.0fx%.0f cm", rule->min_length_cm,
-             rule->min_width_cm, rule->min_height_cm);
-    lv_table_set_cell_value(regulations_table, i + 1U, 3, dim_buf);
+
+  if (!regulations_table_initialized ||
+      regulations_table_rule_count != rule_count) {
+    lv_table_set_row_count(regulations_table, rule_count + 1U);
+    lv_table_set_cell_value(regulations_table, 0, 0, "Espèce");
+    lv_table_set_cell_value(regulations_table, 0, 1, "Statut");
+    lv_table_set_cell_value(regulations_table, 0, 2, "Certificat");
+    lv_table_set_cell_value(regulations_table, 0, 3, "Dimensions min");
+    for (size_t i = 0; i < rule_count; ++i) {
+      const regulation_rule_t *rule = &rules[i];
+      lv_table_set_cell_value(regulations_table, i + 1U, 0,
+                              rule->common_name ? rule->common_name : "N/D");
+      lv_table_set_cell_value(regulations_table, i + 1U, 1,
+                              regulations_status_to_string(rule->status));
+      lv_table_set_cell_value(regulations_table, i + 1U, 2,
+                              rule->certificate_text ? rule->certificate_text
+                                                     : "N/A");
+      char dim_buf[48];
+      snprintf(dim_buf, sizeof(dim_buf), "%.0fx%.0fx%.0f cm",
+               rule->min_length_cm, rule->min_width_cm, rule->min_height_cm);
+      lv_table_set_cell_value(regulations_table, i + 1U, 3, dim_buf);
+    }
+    regulations_table_initialized = true;
+    regulations_table_rule_count = rule_count;
   }
 
+  typedef struct {
+    uint32_t index;
+    const terrarium_t *terrarium;
+    bool has_incident;
+    bool has_pathology;
+    bool compliance_issue;
+  } regulation_incident_entry_t;
+
+  regulation_incident_entry_t entries[REPTILE_MAX_TERRARIUMS];
+  size_t entry_count = 0;
   uint32_t compliance_issues = 0;
   uint32_t pathology_flags = 0;
-
-  if (regulations_incident_list && lv_obj_is_valid(regulations_incident_list)) {
-    lv_obj_clean(regulations_incident_list);
-  }
+  uint32_t incident_hash = hash32_init();
 
   for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
     const terrarium_t *terrarium =
@@ -3021,7 +3100,8 @@ static void update_regulation_screen(void) {
 
     const regulation_rule_t *rule =
         regulations_get_rule((int)terrarium->species.id);
-    bool expired = terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED;
+    bool expired =
+        terrarium->incident == REPTILE_INCIDENT_CERTIFICATE_EXPIRED;
     bool cert_ok = terrarium->certificate_count > 0 && !expired &&
                    terrarium->incident != REPTILE_INCIDENT_CERTIFICATE_MISSING;
 
@@ -3060,117 +3140,197 @@ static void update_regulation_screen(void) {
     if (has_pathology)
       pathology_flags++;
 
-    if (!regulations_incident_list ||
-        !lv_obj_is_valid(regulations_incident_list))
-      continue;
+    entries[entry_count++] = (regulation_incident_entry_t){
+        .index = i,
+        .terrarium = terrarium,
+        .has_incident = has_incident,
+        .has_pathology = has_pathology,
+        .compliance_issue = compliance_issue,
+    };
 
-    lv_obj_t *card = ui_theme_create_card(regulations_incident_list);
-    lv_obj_set_style_pad_all(card, 16, 0);
-    lv_obj_set_style_pad_gap(card, 10, 0);
-    lv_obj_set_width(card, LV_PCT(100));
-
-    lv_obj_t *header = lv_obj_create(card);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
-    lv_obj_set_width(header, LV_PCT(100));
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_gap(header, 12, 0);
-
-    lv_obj_t *title = lv_label_create(header);
-    ui_theme_apply_body(title);
-    const char *species_name =
-        (terrarium->nickname[0] != '\0') ? terrarium->nickname
-                                          : terrarium->species.name;
-    lv_label_set_text_fmt(title, "T%02" PRIu32 " • %s", (uint32_t)(i + 1U),
-                          species_name);
-
-    ui_theme_badge_kind_t badge_kind = UI_THEME_BADGE_WARNING;
-    const char *badge_text = "Surveillance";
-    if (has_incident) {
-      badge_kind = UI_THEME_BADGE_CRITICAL;
-      badge_text = incident_to_string(terrarium->incident);
-    } else if (has_pathology) {
-      badge_kind = UI_THEME_BADGE_WARNING;
-      badge_text = pathology_to_string(terrarium->pathology);
-    }
-    lv_obj_t *badge = ui_theme_create_badge(header, badge_kind, badge_text);
-    lv_obj_set_width(badge, LV_SIZE_CONTENT);
-
-    lv_obj_t *message = lv_label_create(card);
-    ui_theme_apply_body(message);
-    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(message, LV_PCT(100));
-    if (terrarium->compliance_message[0] != '\0') {
-      lv_label_set_text(message, terrarium->compliance_message);
-    } else if (has_incident) {
-      lv_label_set_text_fmt(message, "Incident: %s",
-                            incident_to_string(terrarium->incident));
-    } else if (has_pathology) {
-      lv_label_set_text_fmt(message, "Pathologie: %s",
-                            pathology_to_string(terrarium->pathology));
-    } else {
-      lv_label_set_text(message, "Suivi de conformité en cours");
-    }
-
-    lv_obj_t *meta = lv_obj_create(card);
-    lv_obj_remove_style_all(meta);
-    lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
-    lv_obj_set_width(meta, LV_PCT(100));
-    lv_obj_set_flex_flow(meta, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_style_pad_gap(meta, 10, 0);
-
-    lv_obj_t *economy_label = lv_label_create(meta);
-    ui_theme_apply_caption(economy_label);
-    lv_label_set_text_fmt(
-        economy_label, "Économie: %.2f €/j vs %.2f €/j",
-        (double)terrarium->revenue_cents_per_day / 100.0,
-        (double)terrarium->operating_cost_cents_per_day / 100.0);
-
-    lv_obj_t *timer_label = lv_label_create(meta);
-    ui_theme_apply_caption(timer_label);
-    lv_label_set_text_fmt(timer_label, "Suivi conformité: %.1f h",
-                          (double)terrarium->compliance_timer_h);
+    incident_hash = hash32_update_u32(incident_hash, i);
+    incident_hash = hash32_update_bool(incident_hash, compliance_issue);
+    incident_hash =
+        hash32_update_u32(incident_hash, (uint32_t)terrarium->incident);
+    incident_hash =
+        hash32_update_u32(incident_hash, (uint32_t)terrarium->pathology);
+    incident_hash =
+        hash32_update_u32(incident_hash, terrarium->certificate_count);
+    incident_hash = hash32_update_buffer(incident_hash,
+                                         terrarium->compliance_message,
+                                         sizeof(terrarium->compliance_message));
+    incident_hash = hash32_update_buffer(incident_hash, terrarium->nickname,
+                                         sizeof(terrarium->nickname));
+    incident_hash = hash32_update_buffer(incident_hash,
+                                         terrarium->species.name,
+                                         sizeof(terrarium->species.name));
+    incident_hash = hash32_update_float_scaled(incident_hash,
+                                               terrarium->compliance_timer_h,
+                                               10.0f);
+    incident_hash = hash32_update_u32(
+        incident_hash, (uint32_t)terrarium->revenue_cents_per_day);
+    incident_hash = hash32_update_u32(
+        incident_hash, (uint32_t)terrarium->operating_cost_cents_per_day);
   }
 
-  if (regulations_incident_list && lv_obj_is_valid(regulations_incident_list) &&
-      lv_obj_get_child_cnt(regulations_incident_list) == 0) {
-    lv_obj_t *empty_card = ui_theme_create_card(regulations_incident_list);
-    lv_obj_set_style_pad_all(empty_card, 16, 0);
-    lv_obj_set_width(empty_card, LV_PCT(100));
-    lv_obj_t *label = lv_label_create(empty_card);
-    ui_theme_apply_body(label);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(label, "Aucune infraction ou incident actif");
+  incident_hash = hash32_update_u32(incident_hash, compliance_issues);
+  incident_hash = hash32_update_u32(incident_hash, pathology_flags);
+  incident_hash = hash32_update_u32(incident_hash, g_facility.compliance_alerts);
+  incident_hash = hash32_update_u32(incident_hash, g_facility.alerts_active);
+  incident_hash = hash32_update_u32(incident_hash, g_facility.pathology_active);
+  incident_hash = hash32_update_u32(incident_hash, (uint32_t)entry_count);
+
+  bool list_valid = regulations_incident_list &&
+                    lv_obj_is_valid(regulations_incident_list);
+  bool rebuild_incidents =
+      list_valid && (!regulations_incident_cache_valid ||
+                     regulations_incident_hash != incident_hash ||
+                     regulations_incident_cached_count != entry_count);
+
+  if (!list_valid) {
+    regulations_incident_cache_valid = false;
+  }
+
+  if (rebuild_incidents) {
+    lv_obj_clean(regulations_incident_list);
+    for (size_t n = 0; n < entry_count; ++n) {
+      const regulation_incident_entry_t *entry = &entries[n];
+      const terrarium_t *terrarium = entry->terrarium;
+      lv_obj_t *card = ui_theme_create_card(regulations_incident_list);
+      lv_obj_set_style_pad_all(card, 16, 0);
+      lv_obj_set_style_pad_gap(card, 10, 0);
+      lv_obj_set_width(card, LV_PCT(100));
+
+      lv_obj_t *header = lv_obj_create(card);
+      lv_obj_remove_style_all(header);
+      lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+      lv_obj_set_width(header, LV_PCT(100));
+      lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+      lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                            LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+      lv_obj_set_style_pad_gap(header, 12, 0);
+
+      lv_obj_t *title = lv_label_create(header);
+      ui_theme_apply_body(title);
+      const char *species_name =
+          (terrarium->nickname[0] != '\0') ? terrarium->nickname
+                                            : terrarium->species.name;
+      lv_label_set_text_fmt(title, "T%02" PRIu32 " • %s",
+                            (uint32_t)(entry->index + 1U), species_name);
+
+      ui_theme_badge_kind_t badge_kind = UI_THEME_BADGE_WARNING;
+      const char *badge_text = "Surveillance";
+      if (entry->has_incident) {
+        badge_kind = UI_THEME_BADGE_CRITICAL;
+        badge_text = incident_to_string(terrarium->incident);
+      } else if (entry->has_pathology) {
+        badge_kind = UI_THEME_BADGE_WARNING;
+        badge_text = pathology_to_string(terrarium->pathology);
+      }
+      lv_obj_t *badge = ui_theme_create_badge(header, badge_kind, badge_text);
+      lv_obj_set_width(badge, LV_SIZE_CONTENT);
+
+      lv_obj_t *message = lv_label_create(card);
+      ui_theme_apply_body(message);
+      lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(message, LV_PCT(100));
+      if (terrarium->compliance_message[0] != '\0') {
+        lv_label_set_text(message, terrarium->compliance_message);
+      } else if (entry->has_incident) {
+        lv_label_set_text_fmt(message, "Incident: %s",
+                              incident_to_string(terrarium->incident));
+      } else if (entry->has_pathology) {
+        lv_label_set_text_fmt(message, "Pathologie: %s",
+                              pathology_to_string(terrarium->pathology));
+      } else {
+        lv_label_set_text(message, "Suivi de conformité en cours");
+      }
+
+      lv_obj_t *meta = lv_obj_create(card);
+      lv_obj_remove_style_all(meta);
+      lv_obj_set_style_bg_opa(meta, LV_OPA_TRANSP, 0);
+      lv_obj_set_width(meta, LV_PCT(100));
+      lv_obj_set_flex_flow(meta, LV_FLEX_FLOW_ROW_WRAP);
+      lv_obj_set_style_pad_gap(meta, 10, 0);
+
+      lv_obj_t *economy_label = lv_label_create(meta);
+      ui_theme_apply_caption(economy_label);
+      lv_label_set_text_fmt(
+          economy_label, "Économie: %.2f €/j vs %.2f €/j",
+          (double)terrarium->revenue_cents_per_day / 100.0,
+          (double)terrarium->operating_cost_cents_per_day / 100.0);
+
+      lv_obj_t *timer_label = lv_label_create(meta);
+      ui_theme_apply_caption(timer_label);
+      lv_label_set_text_fmt(timer_label, "Suivi conformité: %.1f h",
+                            (double)terrarium->compliance_timer_h);
+    }
+
+    if (lv_obj_get_child_cnt(regulations_incident_list) == 0) {
+      lv_obj_t *empty_card = ui_theme_create_card(regulations_incident_list);
+      lv_obj_set_style_pad_all(empty_card, 16, 0);
+      lv_obj_set_width(empty_card, LV_PCT(100));
+      lv_obj_t *label = lv_label_create(empty_card);
+      ui_theme_apply_body(label);
+      lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+      lv_label_set_text(label, "Aucune infraction ou incident actif");
+    }
+
+    regulations_incident_cache_valid = true;
+    regulations_incident_hash = incident_hash;
+    regulations_incident_cached_count = entry_count;
   }
 
   if (regulations_summary_label &&
       lv_obj_is_valid(regulations_summary_label)) {
-    lv_label_set_text_fmt(
-        regulations_summary_label,
-        "Infractions listées: %" PRIu32 " • Alertes conformité: %" PRIu32
-        " • Pathologies suivies: %" PRIu32 " • Incidents actifs: %" PRIu32,
-        compliance_issues, g_facility.compliance_alerts, pathology_flags,
-        g_facility.alerts_active);
+    char summary[sizeof(regulations_summary_cache)];
+    snprintf(summary, sizeof(summary),
+             "Infractions listées: %" PRIu32
+             " • Alertes conformité: %" PRIu32
+             " • Pathologies suivies: %" PRIu32
+             " • Incidents actifs: %" PRIu32,
+             compliance_issues, g_facility.compliance_alerts, pathology_flags,
+             g_facility.alerts_active);
+    if (strncmp(summary, regulations_summary_cache,
+                sizeof(regulations_summary_cache)) != 0) {
+      lv_label_set_text(regulations_summary_label, summary);
+      strncpy(regulations_summary_cache, summary,
+              sizeof(regulations_summary_cache) - 1U);
+      regulations_summary_cache[sizeof(regulations_summary_cache) - 1U] = '\0';
+    }
   }
 
   if (regulations_export_label && lv_obj_is_valid(regulations_export_label)) {
-    if (regulations_last_export_time == 0) {
-      lv_label_set_text(regulations_export_label, "Aucun export réalisé");
-    } else {
-      char time_buf[32];
-      struct tm tm_info;
-      localtime_r(&regulations_last_export_time, &tm_info);
-      strftime(time_buf, sizeof(time_buf), "%d/%m %H:%M", &tm_info);
-      if (regulations_last_export_path[0] != '\0') {
-        lv_label_set_text_fmt(regulations_export_label,
-                              "Dernier export: %s (%s)", time_buf,
-                              regulations_last_export_path);
+    bool changed =
+        (regulations_last_export_time != regulations_prev_export_time) ||
+        (strncmp(regulations_last_export_path, regulations_prev_export_path,
+                 sizeof(regulations_prev_export_path)) != 0);
+    if (changed) {
+      char text[sizeof(regulations_export_text_cache)];
+      if (regulations_last_export_time == 0) {
+        snprintf(text, sizeof(text), "Aucun export réalisé");
       } else {
-        lv_label_set_text_fmt(regulations_export_label,
-                              "Dernier export: %s", time_buf);
+        char time_buf[32];
+        struct tm tm_info;
+        localtime_r(&regulations_last_export_time, &tm_info);
+        strftime(time_buf, sizeof(time_buf), "%d/%m %H:%M", &tm_info);
+        if (regulations_last_export_path[0] != '\0') {
+          snprintf(text, sizeof(text), "Dernier export: %s (%s)", time_buf,
+                   regulations_last_export_path);
+        } else {
+          snprintf(text, sizeof(text), "Dernier export: %s", time_buf);
+        }
       }
+      lv_label_set_text(regulations_export_label, text);
+      strncpy(regulations_export_text_cache, text,
+              sizeof(regulations_export_text_cache) - 1U);
+      regulations_export_text_cache[sizeof(regulations_export_text_cache) - 1U] =
+          '\0';
+      regulations_prev_export_time = regulations_last_export_time;
+      strncpy(regulations_prev_export_path, regulations_last_export_path,
+              sizeof(regulations_prev_export_path) - 1U);
+      regulations_prev_export_path[sizeof(regulations_prev_export_path) - 1U] =
+          '\0';
     }
   }
 }
