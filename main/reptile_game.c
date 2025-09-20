@@ -57,6 +57,12 @@ typedef enum {
   SAVE_ACTION_RESET_STATS,
 } save_action_t;
 
+typedef enum {
+  SCREEN_REQUEST_NONE = 0,
+  SCREEN_REQUEST_OVERVIEW,
+  SCREEN_REQUEST_DETAIL,
+} screen_request_t;
+
 typedef struct {
   lv_obj_t *card;
   lv_obj_t *icon;
@@ -193,12 +199,6 @@ typedef enum {
   TERRARIUM_CONTEXT_ACTION_HISTORY = 0x02U,
   TERRARIUM_CONTEXT_ACTION_CLOSE = 0xFFU,
 } terrarium_context_action_t;
-
-typedef enum {
-  SCREEN_REQUEST_NONE = 0,
-  SCREEN_REQUEST_OVERVIEW,
-  SCREEN_REQUEST_DETAIL,
-} screen_request_t;
 
 static char
     species_options_buffer[REPTILE_SPECIES_COUNT * (REPTILE_NAME_MAX_LEN + 1U)];
