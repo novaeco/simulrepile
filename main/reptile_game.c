@@ -2132,7 +2132,7 @@ static bool terrarium_cards_resize(uint32_t count) {
 
   if (count == 0U) {
     if (old_cards) {
-      lv_mem_free(old_cards);
+      lv_free(old_cards);
     }
     terrarium_cards = NULL;
     terrarium_card_capacity = 0U;
@@ -2142,7 +2142,7 @@ static bool terrarium_cards_resize(uint32_t count) {
 
   size_t bytes = (size_t)count * sizeof(*old_cards);
   terrarium_card_widgets_t *new_cards =
-      (terrarium_card_widgets_t *)lv_mem_alloc(bytes);
+      (terrarium_card_widgets_t *)lv_malloc(bytes);
   if (!new_cards) {
     ESP_LOGE(TAG,
              "Allocation dynamique des cartes terrarium impossible (%" PRIu32 ")",
@@ -2156,7 +2156,7 @@ static bool terrarium_cards_resize(uint32_t count) {
     if (copy_count > 0U) {
       memcpy(new_cards, old_cards, copy_count * sizeof(*old_cards));
     }
-    lv_mem_free(old_cards);
+    lv_free(old_cards);
   }
 
   terrarium_cards = new_cards;
