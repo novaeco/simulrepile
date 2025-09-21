@@ -801,7 +801,6 @@ static esp_err_t sdspi_ch422g_do_transaction(sdspi_dev_handle_t handle, sdmmc_co
     _lock_release(&s_ch422g_lock);
     return ret;
 }
-#endif
 
 bool sd_is_mounted(void)
 {
