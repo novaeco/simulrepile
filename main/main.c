@@ -110,6 +110,25 @@ static void sd_cs_selftest(void) {
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
     s_sd_cs_ready = true;
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+    if (sd_uses_direct_cs()) {
+      ESP_LOGI(TAG,
+               "Ligne CS microSD pilotée directement par GPIO%d.",
+               CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#if !CONFIG_STORAGE_SD_USE_GPIO_CS
+      ESP_LOGW(TAG,
+               "Fallback GPIO activé : CH422G indisponible au boot. Les accès SD "
+               "utiliseront la liaison directe jusqu'à réparation.");
+#endif
+    } else {
+#ifdef CONFIG_CH422G_EXIO_SD_CS
+      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G EXIO%d.",
+               CONFIG_CH422G_EXIO_SD_CS);
+#else
+      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G.");
+#endif
+    }
+#endif
     menu_header_update();
     return;
   }
@@ -127,13 +146,18 @@ static void sd_cs_selftest(void) {
              "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
   }
 
-#if !CONFIG_STORAGE_SD_USE_GPIO_CS
-  ESP_LOGW(TAG,
-           "Le firmware continuera sans carte SD tant que le bus CH422G ne "
-           "répond pas ou qu'un fallback GPIO n'est pas configuré.");
-#else
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
   ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
            CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#elif CONFIG_STORAGE_SD_GPIO_FALLBACK
+  ESP_LOGW(TAG,
+           "Fallback GPIO%d configuré : connectez le fil CS direct ou rétablissez "
+           "le CH422G pour retrouver la microSD.",
+           CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#else
+  ESP_LOGW(TAG,
+           "Le firmware continuera sans carte SD tant que le bus CH422G ne "
+           "répond pas ou qu'aucun fallback GPIO n'est configuré.");
 #endif
   menu_header_update();
 }
@@ -179,18 +203,32 @@ static void menu_header_update(void) {
   if (menu_header_sd_label) {
     char sd_text[96];
     lv_color_t sd_color = lv_color_hex(0x2F4F43);
+    const char *cs_hint = "";
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+    if (sd_uses_direct_cs()) {
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
+      cs_hint = " \u00b7 GPIO";
+#else
+      cs_hint = " \u00b7 GPIO fallback";
+#endif
+    } else {
+      cs_hint = " \u00b7 CH422G";
+    }
+#endif
     if (!s_sd_cs_ready) {
       const char *err = (s_sd_cs_last_err != ESP_OK)
                             ? esp_err_to_name(s_sd_cs_last_err)
                             : "bus";
-      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_WARNING " microSD indisponible (%s)",
-               err);
+      snprintf(sd_text, sizeof(sd_text),
+               LV_SYMBOL_WARNING " microSD indisponible (%s)%s", err, cs_hint);
       sd_color = lv_color_hex(0xB54B3A);
     } else if (sd_is_mounted()) {
-      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD prête");
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD prête%s",
+               cs_hint);
       sd_color = lv_color_hex(0x2F4F43);
     } else {
-      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD en attente");
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD en attente%s",
+               cs_hint);
       sd_color = lv_color_hex(0xA46A2D);
     }
     lv_label_set_text(menu_header_sd_label, sd_text);
