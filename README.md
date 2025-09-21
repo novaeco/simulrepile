@@ -173,10 +173,16 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 - `CONFIG_STORAGE_SD_GPIO_FALLBACK` : bascule automatiquement la CS sur le GPIO
   de secours lorsque le CH422G reste muet au démarrage, afin que les tests SD
   et l'application continuent pendant le diagnostic matériel.
+- `CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT` : lance automatiquement le montage
+  de la carte lorsque le fallback est actif **uniquement** si EXIO4→GPIO34 est
+  câblé. Laisser cette option désactivée lorsque la liaison n'est pas assurée
+  pour éviter les blocages prolongés de `esp_vfs_fat_sdspi_mount()` et la
+  réaction du watchdog.
 - Lorsque le fallback est actif sans recâblage EXIO4→GPIO34, le firmware affiche
   désormais un avertissement persistant et n'effectue plus de redémarrage
-  forcé. Suivre les instructions affichées dans le bandeau LVGL ou désactiver
-  l'option dans `menuconfig`.
+  forcé. Suivre les instructions affichées dans le bandeau LVGL, câbler EXIO4→GPIO34
+  puis activer `Automatically mount the fallback CS` pour récupérer les accès SD,
+  ou laisser l'auto-mount désactivé tant que la réparation n'est pas terminée.
 - Le pilote I²C déclenche automatiquement une récupération matérielle lorsque SDA/SCL
   restent bloquées (clock stretch infini, périphérique en erreur). Toutes les handles
   enregistrées (CH422G, multiplexeur, GT911…) sont relâchées puis recréées pour que

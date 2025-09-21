@@ -49,6 +49,10 @@
 
 #include "esp_timer.h"
 
+#ifndef CONFIG_CH422G_EXIO_SD_CS
+#define CONFIG_CH422G_EXIO_SD_CS 4
+#endif
+
 static const char *TAG = "main"; // Tag for logging
 
 static lv_timer_t *sleep_timer; // Inactivity timer handle
@@ -460,26 +464,30 @@ static void wait_for_sd_card(void) {
       if (sd_uses_direct_cs() && sd_fallback_due_to_ch422g()) {
         restart_required = false;
         ESP_LOGE(TAG,
-                 "Fallback GPIO%d actif sans câblage détecté. Relier EXIO4 (SD_CS) à "
-                 "GPIO%d ou désactiver Component config → Storage / SD card → Allow "
-                 "automatic GPIO CS fallback.",
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+                 "Fallback GPIO%d actif sans câblage détecté. Relier EXIO%u (SD_CS) à "
+                 "GPIO%d puis activer Component config → Storage / SD card → "
+                 "Automatically mount the fallback CS, ou laisser l'option "
+                 "désactivée pour éviter les WDT.",
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
         s_sd_cs_ready = false;
         s_sd_cs_last_err = err;
         if (lvgl_port_lock(-1)) {
           char hint[192];
           snprintf(hint, sizeof(hint),
-                   "Fallback CS direct sur GPIO%d.\nRelier EXIO4→GPIO%d ou "
-                   "désactiver le fallback dans menuconfig.",
-                   CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+                   "Fallback CS direct sur GPIO%d.\nRelier EXIO%u→GPIO%d puis "
+                   "activer l'option d'auto-mount dans menuconfig.",
+                   CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+                   CONFIG_STORAGE_SD_GPIO_CS_NUM);
           menu_hint_append(hint);
           lvgl_port_unlock();
         }
         char screen_msg[192];
         snprintf(screen_msg, sizeof(screen_msg),
-                 "Fallback GPIO%d actif\nCâbler EXIO4→GPIO%d ou désactiver "
-                 "le fallback.",
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+                 "Fallback GPIO%d actif\nCâbler EXIO%u→GPIO%d puis activer\n"
+                 "l'auto-mount dans menuconfig.",
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
         show_error_screen(screen_msg);
         break;
       }
