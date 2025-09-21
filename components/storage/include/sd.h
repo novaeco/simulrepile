@@ -39,6 +39,11 @@ bool sd_is_mounted(void);
 /**\n * @brief Report whether CS is currently driven by a direct GPIO path.\n */
 bool sd_uses_direct_cs(void);
 
+/**
+ * @brief Report whether the direct GPIO mode was forced because CH422G failed.
+ */
+bool sd_fallback_due_to_ch422g(void);
+
 /* Legacy aliases kept for compatibility with existing modules */
 static inline esp_err_t sd_mmc_init(void) { return sd_mount(NULL); }
 static inline esp_err_t sd_mmc_unmount(void) { return sd_unmount(); }
