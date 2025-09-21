@@ -5,12 +5,23 @@ config STORAGE_SD_USE_GPIO_CS
     default n
     help
         Enable this option only when the SD card chip-select line is wired
-        directly to an ESP32-S3 GPIO. The default configuration relies on the
-        CH422G expander (EXIO4) and does not require an extra wire.
+        directly to an ESP32-S3 GPIO. The driver will never touch the CH422G
+        expander when this mode is selected.
+
+config STORAGE_SD_GPIO_FALLBACK
+    bool "Allow automatic GPIO CS fallback when CH422G probe fails"
+    depends on !STORAGE_SD_USE_GPIO_CS
+    default y
+    help
+        When enabled, the storage driver will automatically configure the
+        fallback GPIO defined below if the CH422G expander cannot be reached at
+        boot. This is useful when the expander is absent, temporarily
+        miswired or when the firmware needs to continue operating while the
+        bus is repaired.
 
 config STORAGE_SD_GPIO_CS_NUM
     int "GPIO number for the SD card CS fallback"
-    depends on STORAGE_SD_USE_GPIO_CS
+    depends on STORAGE_SD_USE_GPIO_CS || STORAGE_SD_GPIO_FALLBACK
     range 0 48
     default 34
     help

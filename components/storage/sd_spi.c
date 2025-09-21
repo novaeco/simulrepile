@@ -48,16 +48,28 @@
 #define CONFIG_STORAGE_SD_USE_GPIO_CS 0
 #endif
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
+#ifndef CONFIG_STORAGE_SD_GPIO_FALLBACK
+#define CONFIG_STORAGE_SD_GPIO_FALLBACK 0
+#endif
+
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+#define STORAGE_SD_HAVE_DIRECT 1
+#else
+#define STORAGE_SD_HAVE_DIRECT 0
+#endif
+
+#if STORAGE_SD_HAVE_DIRECT
 #define STORAGE_SD_GPIO_CS CONFIG_STORAGE_SD_GPIO_CS_NUM
 #endif
 
 static sdmmc_card_t *s_card = NULL;
 static bool s_bus_ready = false;
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
+#if STORAGE_SD_HAVE_DIRECT
 static bool s_direct_cs_configured = false;
 #endif
+
+static bool s_use_direct_cs = CONFIG_STORAGE_SD_USE_GPIO_CS;
 
 static esp_err_t sd_bus_ensure(void)
 {
@@ -90,7 +102,7 @@ static esp_err_t sd_bus_ensure(void)
     return err;
 }
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
+#if STORAGE_SD_HAVE_DIRECT
 static esp_err_t sd_configure_direct_cs(void)
 {
     if (s_direct_cs_configured) {
@@ -109,7 +121,8 @@ static esp_err_t sd_configure_direct_cs(void)
     s_direct_cs_configured = true;
     return ESP_OK;
 }
-#else
+#endif
+
 static inline esp_err_t sd_ch422g_select(void)
 {
     return ch422g_exio_set(CH422G_EXIO_SD_CS, false);
@@ -795,6 +808,15 @@ bool sd_is_mounted(void)
     return s_card != NULL;
 }
 
+bool sd_uses_direct_cs(void)
+{
+#if STORAGE_SD_HAVE_DIRECT
+    return s_use_direct_cs;
+#else
+    return false;
+#endif
+}
+
 esp_err_t sd_mount(sdmmc_card_t **out_card)
 {
     if (s_card != NULL) {
@@ -809,20 +831,59 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
     host.max_freq_khz = SD_SPI_INIT_FREQ_KHZ;
-#if !CONFIG_STORAGE_SD_USE_GPIO_CS
-    host.do_transaction = sdspi_ch422g_do_transaction;
+
+    bool use_direct = s_use_direct_cs;
+#if !STORAGE_SD_HAVE_DIRECT
+    (void)use_direct;
 #endif
 
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_cfg.host_id = host.slot;
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS setup");
-    ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS idle high");
-    slot_cfg.gpio_cs = STORAGE_SD_GPIO_CS;
+#if STORAGE_SD_HAVE_DIRECT
+    if (!use_direct) {
+#endif
+        esp_err_t init_err = ch422g_init();
+        if (init_err != ESP_OK) {
+#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
+            ESP_LOGW(TAG,
+                     "CH422G init failed (%s). Falling back to GPIO%d for SD card CS.",
+                     esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
+            s_use_direct_cs = true;
+            use_direct = true;
 #else
-    ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "ch422g init");
-    ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+            return init_err;
+#endif
+        } else {
+            ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+        }
+#if STORAGE_SD_HAVE_DIRECT
+    }
+
+    if (use_direct) {
+        ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS setup");
+        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS idle high");
+        slot_cfg.gpio_cs = STORAGE_SD_GPIO_CS;
+    } else {
+        slot_cfg.gpio_cs = SDSPI_SLOT_NO_CS;
+    }
+#else
     slot_cfg.gpio_cs = SDSPI_SLOT_NO_CS;
+#endif
+
+#if !STORAGE_SD_HAVE_DIRECT
+    host.do_transaction = sdspi_ch422g_do_transaction;
+#else
+    if (!use_direct) {
+        host.do_transaction = sdspi_ch422g_do_transaction;
+    }
+#endif
+
+#if !STORAGE_SD_HAVE_DIRECT
+    ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+#else
+    if (!use_direct) {
+        ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+    }
 #endif
 
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
@@ -833,8 +894,12 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
         .use_one_fat = false,
     };
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS release");
+#if STORAGE_SD_HAVE_DIRECT
+    if (use_direct) {
+        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS release");
+    } else {
+        ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS release");
+    }
 #else
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS release");
 #endif
@@ -850,15 +915,21 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
 
     sdmmc_card_print_info(stdout, s_card);
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    gpio_set_level(STORAGE_SD_GPIO_CS, 1);
+#if STORAGE_SD_HAVE_DIRECT
+    if (use_direct) {
+        gpio_set_level(STORAGE_SD_GPIO_CS, 1);
+        if (CONFIG_STORAGE_SD_USE_GPIO_CS) {
+            ESP_LOGI(TAG, "SD card detected and mounted via GPIO%d CS", STORAGE_SD_GPIO_CS);
+        } else {
+            ESP_LOGW(TAG, "SD card detected and mounted via GPIO%d fallback CS", STORAGE_SD_GPIO_CS);
+        }
+    } else {
+        sd_ch422g_deselect();
+        ESP_LOGI(TAG, "SD card detected and mounted via CH422G-controlled CS");
+    }
 #else
     sd_ch422g_deselect();
     ESP_LOGI(TAG, "SD card detected and mounted via CH422G-controlled CS");
-#endif
-
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    ESP_LOGI(TAG, "SD card detected and mounted");
 #endif
 
     if (out_card) {
@@ -880,9 +951,13 @@ esp_err_t sd_unmount(void)
     }
     s_card = NULL;
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    if (s_direct_cs_configured) {
-        gpio_set_level(STORAGE_SD_GPIO_CS, 1);
+#if STORAGE_SD_HAVE_DIRECT
+    if (s_use_direct_cs) {
+        if (s_direct_cs_configured) {
+            gpio_set_level(STORAGE_SD_GPIO_CS, 1);
+        }
+    } else {
+        sd_ch422g_deselect();
     }
 #else
     sd_ch422g_deselect();
@@ -915,16 +990,36 @@ esp_err_t sd_card_print_info(void)
 
 esp_err_t sd_spi_cs_selftest(void)
 {
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
-    ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
-    esp_rom_delay_us(5);
-    ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
-#else
-    ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "ch422g init");
+#if STORAGE_SD_HAVE_DIRECT
+    if (s_use_direct_cs) {
+        ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
+        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
+        esp_rom_delay_us(5);
+        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
+        return ESP_OK;
+    }
+#endif
+
+    esp_err_t err = ch422g_init();
+    if (err != ESP_OK) {
+#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
+        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_RESPONSE) {
+            ESP_LOGW(TAG,
+                     "CH422G init failed (%s). Switching self-test to GPIO%d fallback.",
+                     esp_err_to_name(err), STORAGE_SD_GPIO_CS);
+            s_use_direct_cs = true;
+            ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
+            ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
+            esp_rom_delay_us(5);
+            ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
+            return ESP_OK;
+        }
+#endif
+        return err;
+    }
+
     ESP_RETURN_ON_ERROR(sd_ch422g_select(), TAG, "CS low");
     esp_rom_delay_us(5);
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS high");
-#endif
     return ESP_OK;
 }

@@ -36,6 +36,9 @@ esp_err_t sd_spi_cs_selftest(void);
 /**\n * @brief Query the mount state without touching the hardware.\n */
 bool sd_is_mounted(void);
 
+/**\n * @brief Report whether CS is currently driven by a direct GPIO path.\n */
+bool sd_uses_direct_cs(void);
+
 /* Legacy aliases kept for compatibility with existing modules */
 static inline esp_err_t sd_mmc_init(void) { return sd_mount(NULL); }
 static inline esp_err_t sd_mmc_unmount(void) { return sd_unmount(); }
