@@ -100,6 +100,7 @@ static uint32_t facility_effective_limit(bool simulation_mode);
 static uint32_t facility_scale_initial_resource(uint32_t base, uint32_t limit);
 static bool facility_purge_slots_above_limit(reptile_facility_t *facility,
                                              uint32_t limit);
+static void facility_refresh_aggregates(reptile_facility_t *facility);
 static const char *mode_dir(game_mode_t mode);
 static esp_err_t ensure_storage_ready(const char *context);
 static esp_err_t ensure_directories(const reptile_facility_t *facility);
@@ -336,6 +337,106 @@ static bool facility_purge_slots_above_limit(reptile_facility_t *facility,
     memset(terrarium, 0, sizeof(*terrarium));
   }
   return modified;
+}
+
+/* Recompute aggregate counters without mutating the simulation state.  This is
+ * only required when terrariums are truncated (e.g. loading a save with more
+ * slots than the active limit).  facility_reset() and similar paths already
+ * initialise these fields explicitly, so they intentionally skip this helper to
+ * avoid redundant work.
+ */
+static void facility_refresh_aggregates(reptile_facility_t *facility) {
+  if (!facility) {
+    return;
+  }
+
+  uint32_t limit = facility->terrarium_count;
+  if (limit > REPTILE_MAX_TERRARIUMS) {
+    limit = REPTILE_MAX_TERRARIUMS;
+  }
+
+  uint32_t pathology_count = 0;
+  uint32_t incident_count = 0;
+  uint32_t compliance_count = 0;
+  uint32_t mature_count = 0;
+  uint32_t occupied_count = 0;
+  float growth_sum = 0.0f;
+  time_t now = time(NULL);
+  const reptile_day_cycle_t *cycle = &facility->cycle;
+
+  for (uint32_t i = 0; i < limit; ++i) {
+    const terrarium_t *terrarium = &facility->terrariums[i];
+    if (!terrarium->occupied) {
+      continue;
+    }
+
+    occupied_count++;
+    growth_sum += terrarium->growth;
+
+    const species_profile_t *profile = &terrarium->species;
+    if (profile->name[0] == '\0') {
+      continue;
+    }
+
+    bool expired_cert = false;
+    bool cert_ok = certificates_valid(terrarium, now, &expired_cert);
+    bool compliance_issue = false;
+    bool education_issue = false;
+
+    const regulation_rule_t *rule = regulations_get_rule((int)profile->id);
+    if (rule) {
+      regulations_compliance_input_t input = {
+          .length_cm = terrarium->config.length_cm,
+          .width_cm = terrarium->config.width_cm,
+          .height_cm = terrarium->config.height_cm,
+          .temperature_c = terrarium->temperature_c,
+          .humidity_pct = terrarium->humidity_pct,
+          .uv_index = terrarium->uv_index,
+          .is_daytime = cycle->is_daytime,
+          .certificate_count = terrarium->certificate_count,
+          .certificate_valid = cert_ok,
+          .certificate_expired = expired_cert,
+          .register_present = terrarium->config.register_completed,
+          .education_present = terrarium->config.educational_panel_present,
+      };
+      regulations_compliance_report_t report = {0};
+      if (regulations_evaluate(rule, &input, &report) == ESP_OK) {
+        if (!report.allowed) {
+          compliance_issue = true;
+        } else if (!report.dimensions_ok) {
+          compliance_issue = true;
+        } else if (!report.certificate_ok) {
+          compliance_issue = true;
+        } else if (!report.register_ok) {
+          compliance_issue = true;
+        } else if (!report.education_ok) {
+          education_issue = true;
+        }
+      }
+    } else if (!cert_ok) {
+      compliance_issue = true;
+    }
+
+    if (terrarium->stage >= REPTILE_GROWTH_ADULT) {
+      mature_count++;
+    }
+    if (terrarium->pathology != REPTILE_PATHOLOGY_NONE) {
+      pathology_count++;
+    }
+    if (terrarium->incident != REPTILE_INCIDENT_NONE) {
+      incident_count++;
+    }
+    if (compliance_issue || education_issue) {
+      compliance_count++;
+    }
+  }
+
+  facility->alerts_active = incident_count + pathology_count;
+  facility->pathology_active = pathology_count;
+  facility->compliance_alerts = compliance_count;
+  facility->mature_count = mature_count;
+  facility->average_growth =
+      (occupied_count > 0U) ? (growth_sum / (float)occupied_count) : 0.0f;
 }
 
 static void facility_reset(reptile_facility_t *facility, uint32_t limit) {
@@ -588,6 +689,10 @@ esp_err_t reptile_facility_load(reptile_facility_t *facility) {
     reduced = true;
   }
   if (reduced) {
+    facility_refresh_aggregates(facility);
+    /* Persist counters that now match the truncated state so future loads do
+     * not reintroduce stale aggregates.
+     */
     ESP_LOGI(TAG,
              "Réduction automatique de l'élevage à %u terrariums (mode %s)",
              (unsigned)limit,
