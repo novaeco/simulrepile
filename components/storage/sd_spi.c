@@ -52,6 +52,10 @@
 #define CONFIG_STORAGE_SD_GPIO_FALLBACK 0
 #endif
 
+#ifndef CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+#define CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT 0
+#endif
+
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
 #define STORAGE_SD_HAVE_DIRECT 1
 #else
@@ -833,6 +837,16 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     host.max_freq_khz = SD_SPI_INIT_FREQ_KHZ;
 
     bool use_direct = s_use_direct_cs;
+#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK && !CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+    if (use_direct && s_forced_fallback) {
+        ESP_LOGW(TAG,
+                 "Skipping SD mount: CH422G offline and fallback auto-mount disabled. "
+                 "Wire EXIO%u→GPIO%d or enable the auto-mount Kconfig option once the "
+                 "jumper is installed.",
+                 CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+        return ESP_ERR_INVALID_STATE;
+    }
+#endif
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
     s_forced_fallback = false;
 #endif
@@ -1019,6 +1033,14 @@ esp_err_t sd_spi_cs_selftest(void)
             ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
             esp_rom_delay_us(5);
             ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
+#if !CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+            ESP_LOGW(TAG,
+                     "GPIO fallback auto-mount disabled – SD mounting will be deferred to "
+                     "avoid watchdog resets. Once EXIO%u is wired to GPIO%d, enable "
+                     "Component config → Storage / SD card → Automatically mount the "
+                     "fallback CS.",
+                     CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+#endif
             return ESP_OK;
         }
 #endif

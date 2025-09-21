@@ -19,6 +19,18 @@ config STORAGE_SD_GPIO_FALLBACK
         miswired or when the firmware needs to continue operating while the
         bus is repaired.
 
+config STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+    bool "Automatically mount the SD card when the fallback CS is engaged"
+    depends on STORAGE_SD_GPIO_FALLBACK
+    default n
+    help
+        Enable this option only when the CH422G expander is permanently
+        unavailable *and* the CS line has been hard-wired from EXIO to the
+        fallback GPIO. Leaving this disabled keeps the firmware from blocking
+        inside esp_vfs_fat_sdspi_mount() when no working CS path exists,
+        preventing watchdog resets. Once the wiring is in place, enable the
+        option to let the firmware attempt the direct-GPIO mount automatically.
+
 config STORAGE_SD_GPIO_CS_NUM
     int "GPIO number for the SD card CS fallback"
     depends on STORAGE_SD_USE_GPIO_CS || STORAGE_SD_GPIO_FALLBACK
