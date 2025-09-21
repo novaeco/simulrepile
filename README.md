@@ -8,8 +8,10 @@
 ## Objectifs du projet
 Ce dépôt illustre le développement d'un simulateur d'élevage multi-terrariums
 exécuté sur un ESP32‑S3 associé à un écran TFT 1024×600. L'application combine
-une logique métier riche (gestion de 25 terrariums, conformité réglementaire,
-économie) et une interface LVGL avancée (tableaux, graphiques, popups).
+une logique métier riche (gestion de 25 terrariums en mode Réel, limitation à
+`SIMULATION_TERRARIUM_LIMIT` = 2 en mode Simulation pour ménager les ressources,
+conformité réglementaire, économie) et une interface LVGL avancée (tableaux,
+graphiques, popups).
 Le moteur graphique s'appuie sur LVGL et un pilote RGB ST7262, tandis qu'un
 contrôleur tactile capacitif GT911 gère l'interaction utilisateur.
 
@@ -17,7 +19,8 @@ contrôleur tactile capacitif GT911 gère l'interaction utilisateur.
 
 - Structures de données dédiées (`reptile_facility_t`, `terrarium_t`,
   `species_profile_t`, inventaire) pour piloter simultanément jusqu'à 25
-  terrariums.
+  terrariums en mode Réel, avec plafonnement automatique à `SIMULATION_TERRARIUM_LIMIT`
+  (2) en mode Simulation.
 - Simulation complète des besoins biologiques (température, hygrométrie, UV,
   nutrition/hydratation), de la croissance, des pathologies et incidents
   réglementaires.
@@ -70,7 +73,7 @@ La logique métier est regroupée dans `components/reptile_logic/` :
 |-----------|----------------|
 | `species_profile_t` | Paramètres biologiques et économiques d'une espèce (plages T°/HR/UV, rythme de croissance, coûts). |
 | `terrarium_t` | État complet d'un terrarium (config matérielle, bio-statuts, certificats, incidents). |
-| `reptile_facility_t` | Ensemble des 25 terrariums, inventaire, économie, cycle jour/nuit et métriques globales. |
+| `reptile_facility_t` | Ensemble des 25 terrariums du mode Réel, inventaire, économie, cycle jour/nuit et métriques globales ; réduit dynamiquement à `SIMULATION_TERRARIUM_LIMIT` (2) en mode Simulation. |
 
 Le moteur met à jour chaque seconde :
 
@@ -107,6 +110,11 @@ public.
 
 L'état complet est persisté sur microSD via `reptile_facility_save` et
 `reptile_facility_load` avec versionnement et slots multiples.
+
+> **Note de migration :** lors du chargement d'une sauvegarde créée avant la
+> réduction du mode Simulation, `reptile_facility_load` tronque automatiquement
+> la liste des terrariums au plafond `SIMULATION_TERRARIUM_LIMIT` (2) tout en
+> conservant les 25 terrariums disponibles en mode Réel.
 
 ## Prérequis
 ### Logiciel
