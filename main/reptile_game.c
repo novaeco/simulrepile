@@ -89,7 +89,9 @@ static lv_obj_t *menu_summary_sd_label;
 static lv_obj_t *menu_summary_event_label;
 static lv_obj_t *menu_summary_event_icon;
 static lv_obj_t *terrarium_grid;
-static terrarium_card_widgets_t terrarium_cards[REPTILE_MAX_TERRARIUMS];
+static terrarium_card_widgets_t *terrarium_cards;
+static uint32_t terrarium_card_capacity;
+static uint32_t terrarium_card_count;
 static lv_obj_t *cash_label;
 static lv_obj_t *cash_badge;
 static lv_obj_t *cash_bar;
@@ -319,6 +321,11 @@ static lv_coord_t determine_card_width(uint32_t terrarium_count);
 static float compute_stock_health(const reptile_inventory_t *inventory,
                                   uint32_t terrarium_count,
                                   const char **lowest_label);
+static bool terrarium_cards_sync_with_facility(void);
+static void terrarium_card_widgets_build(uint32_t index);
+static bool terrarium_cards_resize(uint32_t count);
+static void terrarium_cards_clear_widgets(uint32_t from_index);
+static void terrarium_cards_free(void);
 
 static inline uint32_t hash32_init(void) { return 2166136261u; }
 
@@ -368,6 +375,7 @@ void reptile_game_init(void) {
   game_mode_set(GAME_MODE_SIMULATION);
   reptile_facility_init(&g_facility, true, s_active_slot, game_mode_get());
   snprintf(s_active_slot, sizeof(s_active_slot), "%s", g_facility.slot);
+  terrarium_cards_sync_with_facility();
   selected_terrarium = 0;
   last_tick_ms = 0;
   autosave_ms = 0;
@@ -692,62 +700,8 @@ static void build_overview_screen(void) {
   lv_obj_set_scroll_dir(terrarium_grid, LV_DIR_VER);
   lv_obj_set_scrollbar_mode(terrarium_grid, LV_SCROLLBAR_MODE_AUTO);
 
-  for (uint32_t i = 0; i < REPTILE_MAX_TERRARIUMS; ++i) {
-    terrarium_card_widgets_t *widgets = &terrarium_cards[i];
-    widgets->card = ui_theme_create_card(terrarium_grid);
-    lv_obj_set_style_pad_all(widgets->card, 16, 0);
-    lv_obj_set_style_pad_gap(widgets->card, 10, 0);
-    lv_obj_set_style_min_width(widgets->card, 200, 0);
-    lv_obj_set_style_max_width(widgets->card, 240, 0);
-    lv_obj_set_style_min_height(widgets->card, 150, 0);
-    lv_obj_set_flex_flow(widgets->card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(widgets->card, LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(widgets->card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(widgets->card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(widgets->card, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
-    lv_obj_add_event_cb(widgets->card, terrarium_card_event_cb, LV_EVENT_CLICKED,
-                        (void *)(uintptr_t)i);
-    lv_obj_add_event_cb(widgets->card, terrarium_card_event_cb,
-                        LV_EVENT_LONG_PRESSED, (void *)(uintptr_t)i);
-
-    lv_obj_t *header = lv_obj_create(widgets->card);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_width(header, LV_PCT(100));
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(header, 0, 0);
-    lv_obj_set_style_pad_gap(header, 12, 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
-
-    widgets->icon = lv_img_create(header);
-    lv_img_set_src(widgets->icon, ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
-
-    widgets->title = lv_label_create(header);
-    ui_theme_apply_body(widgets->title);
-    lv_obj_set_flex_grow(widgets->title, 1);
-    lv_label_set_text(widgets->title, "T00");
-
-    widgets->badge = ui_theme_create_badge(header, UI_THEME_BADGE_INFO, "Libre");
-    lv_obj_set_style_align_self(widgets->badge, LV_ALIGN_END, 0);
-
-    widgets->name = lv_label_create(widgets->card);
-    ui_theme_apply_title(widgets->name);
-    lv_obj_set_width(widgets->name, LV_PCT(100));
-    lv_label_set_long_mode(widgets->name, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(widgets->name, "Disponible");
-
-    widgets->stage = lv_label_create(widgets->card);
-    ui_theme_apply_body(widgets->stage);
-    lv_obj_set_width(widgets->stage, LV_PCT(100));
-    lv_label_set_long_mode(widgets->stage, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(widgets->stage, "Aucun occupant");
-
-    widgets->warning = lv_label_create(widgets->card);
-    ui_theme_apply_caption(widgets->warning);
-    lv_obj_set_width(widgets->warning, LV_PCT(100));
-    lv_label_set_long_mode(widgets->warning, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(widgets->warning, "Touchez pour configurer");
-  }
+  terrarium_cards_clear_widgets(0);
+  terrarium_cards_sync_with_facility();
 
   lv_obj_t *metrics_card = ui_theme_create_card(screen_overview);
   lv_obj_set_size(metrics_card, 320, 420);
@@ -1984,10 +1938,12 @@ void reptile_game_stop(void) {
   menu_summary_sd_label = NULL;
   menu_summary_event_label = NULL;
   menu_summary_event_icon = NULL;
+  terrarium_cards_clear_widgets(0);
   if (screen_overview) {
     lv_obj_del(screen_overview);
     screen_overview = NULL;
   }
+  terrarium_grid = NULL;
   if (screen_detail) {
     lv_obj_del(screen_detail);
     screen_detail = NULL;
@@ -2013,6 +1969,8 @@ void reptile_game_stop(void) {
   regulations_prev_export_path[0] = '\0';
   regulations_summary_cache[0] = '\0';
   regulations_export_text_cache[0] = '\0';
+
+  terrarium_cards_free();
 }
 
 void reptile_tick(lv_timer_t *timer) { facility_timer_cb(timer); }
@@ -2130,12 +2088,202 @@ static float compute_stock_health(const reptile_inventory_t *inventory,
   return min_ratio;
 }
 
-static void update_terrarium_card(uint32_t index, lv_coord_t card_width) {
-  if (index >= REPTILE_MAX_TERRARIUMS)
+static void terrarium_cards_clear_widgets(uint32_t from_index) {
+  if (!terrarium_cards)
+    return;
+
+  bool grid_valid = terrarium_grid && lv_obj_is_valid(terrarium_grid);
+
+  if (from_index >= terrarium_card_count) {
+    if (from_index == 0U && terrarium_card_capacity > 0U) {
+      memset(terrarium_cards, 0,
+             terrarium_card_capacity * sizeof(*terrarium_cards));
+      terrarium_card_count = 0U;
+    }
+    return;
+  }
+
+  for (uint32_t i = from_index; i < terrarium_card_count; ++i) {
+    terrarium_card_widgets_t *widgets = &terrarium_cards[i];
+    lv_obj_t *card = widgets->card;
+    if (grid_valid && card && lv_obj_is_valid(card)) {
+      lv_obj_del(card);
+    }
+    memset(widgets, 0, sizeof(*widgets));
+  }
+
+  terrarium_card_count = from_index;
+  if (from_index == 0U && terrarium_card_capacity > 0U) {
+    memset(terrarium_cards, 0,
+           terrarium_card_capacity * sizeof(*terrarium_cards));
+  }
+}
+
+static bool terrarium_cards_resize(uint32_t count) {
+  if (count == terrarium_card_capacity)
+    return true;
+
+  if (count < terrarium_card_count) {
+    terrarium_cards_clear_widgets(count);
+  }
+
+  terrarium_card_widgets_t *old_cards = terrarium_cards;
+  uint32_t old_capacity = terrarium_card_capacity;
+
+  if (count == 0U) {
+    if (old_cards) {
+      lv_mem_free(old_cards);
+    }
+    terrarium_cards = NULL;
+    terrarium_card_capacity = 0U;
+    terrarium_card_count = 0U;
+    return true;
+  }
+
+  size_t bytes = (size_t)count * sizeof(*old_cards);
+  terrarium_card_widgets_t *new_cards =
+      (terrarium_card_widgets_t *)lv_mem_alloc(bytes);
+  if (!new_cards) {
+    ESP_LOGE(TAG,
+             "Allocation dynamique des cartes terrarium impossible (%" PRIu32 ")",
+             count);
+    return false;
+  }
+  memset(new_cards, 0, bytes);
+
+  if (old_cards && old_capacity > 0U) {
+    uint32_t copy_count = (old_capacity < count) ? old_capacity : count;
+    if (copy_count > 0U) {
+      memcpy(new_cards, old_cards, copy_count * sizeof(*old_cards));
+    }
+    lv_mem_free(old_cards);
+  }
+
+  terrarium_cards = new_cards;
+  terrarium_card_capacity = count;
+  if (terrarium_card_count > count) {
+    terrarium_card_count = count;
+  }
+  return true;
+}
+
+static void terrarium_card_widgets_build(uint32_t index) {
+  if (!terrarium_cards || index >= terrarium_card_capacity)
+    return;
+  if (!terrarium_grid || !lv_obj_is_valid(terrarium_grid))
     return;
 
   terrarium_card_widgets_t *widgets = &terrarium_cards[index];
+  if (widgets->card && lv_obj_is_valid(widgets->card)) {
+    lv_obj_del(widgets->card);
+  }
+  memset(widgets, 0, sizeof(*widgets));
+
+  widgets->card = ui_theme_create_card(terrarium_grid);
   if (!widgets->card)
+    return;
+
+  lv_obj_set_style_pad_all(widgets->card, 16, 0);
+  lv_obj_set_style_pad_gap(widgets->card, 10, 0);
+  lv_obj_set_style_min_width(widgets->card, 200, 0);
+  lv_obj_set_style_max_width(widgets->card, 240, 0);
+  lv_obj_set_style_min_height(widgets->card, 150, 0);
+  lv_obj_set_flex_flow(widgets->card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(widgets->card, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+  lv_obj_clear_flag(widgets->card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(widgets->card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(widgets->card, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+  lv_obj_add_event_cb(widgets->card, terrarium_card_event_cb, LV_EVENT_CLICKED,
+                      (void *)(uintptr_t)index);
+  lv_obj_add_event_cb(widgets->card, terrarium_card_event_cb,
+                      LV_EVENT_LONG_PRESSED, (void *)(uintptr_t)index);
+
+  lv_obj_t *header = lv_obj_create(widgets->card);
+  lv_obj_remove_style_all(header);
+  lv_obj_set_width(header, LV_PCT(100));
+  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_all(header, 0, 0);
+  lv_obj_set_style_pad_gap(header, 12, 0);
+  lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+
+  widgets->icon = lv_img_create(header);
+  lv_img_set_src(widgets->icon, ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK));
+
+  widgets->title = lv_label_create(header);
+  ui_theme_apply_body(widgets->title);
+  lv_obj_set_flex_grow(widgets->title, 1);
+  lv_label_set_text(widgets->title, "T00");
+
+  widgets->badge =
+      ui_theme_create_badge(header, UI_THEME_BADGE_INFO, "Libre");
+  lv_obj_set_style_align_self(widgets->badge, LV_ALIGN_END, 0);
+
+  widgets->name = lv_label_create(widgets->card);
+  ui_theme_apply_title(widgets->name);
+  lv_obj_set_width(widgets->name, LV_PCT(100));
+  lv_label_set_long_mode(widgets->name, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(widgets->name, "Disponible");
+
+  widgets->stage = lv_label_create(widgets->card);
+  ui_theme_apply_body(widgets->stage);
+  lv_obj_set_width(widgets->stage, LV_PCT(100));
+  lv_label_set_long_mode(widgets->stage, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(widgets->stage, "Aucun occupant");
+
+  widgets->warning = lv_label_create(widgets->card);
+  ui_theme_apply_caption(widgets->warning);
+  lv_obj_set_width(widgets->warning, LV_PCT(100));
+  lv_label_set_long_mode(widgets->warning, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(widgets->warning, "Touchez pour configurer");
+
+  if (terrarium_card_count < (index + 1U)) {
+    terrarium_card_count = index + 1U;
+  }
+}
+
+static bool terrarium_cards_sync_with_facility(void) {
+  if (terrarium_grid && !lv_obj_is_valid(terrarium_grid)) {
+    terrarium_grid = NULL;
+  }
+
+  if (!terrarium_grid) {
+    terrarium_cards_clear_widgets(0);
+  }
+
+  uint32_t desired = g_facility.terrarium_count;
+  if (!terrarium_cards_resize(desired)) {
+    if (selected_terrarium >= desired) {
+      selected_terrarium = (desired > 0U) ? (desired - 1U) : 0U;
+    }
+    return false;
+  }
+
+  if (terrarium_grid && lv_obj_is_valid(terrarium_grid)) {
+    for (uint32_t i = 0; i < desired; ++i) {
+      terrarium_card_widgets_t *widgets = &terrarium_cards[i];
+      if (!widgets->card || !lv_obj_is_valid(widgets->card)) {
+        terrarium_card_widgets_build(i);
+      }
+    }
+  } else if (desired == 0U) {
+    terrarium_card_count = 0U;
+  }
+
+  if (selected_terrarium >= desired) {
+    selected_terrarium = (desired > 0U) ? (desired - 1U) : 0U;
+  }
+  return true;
+}
+
+static void terrarium_cards_free(void) { (void)terrarium_cards_resize(0); }
+
+static void update_terrarium_card(uint32_t index, lv_coord_t card_width) {
+  if (!terrarium_cards || index >= terrarium_card_capacity)
+    return;
+
+  terrarium_card_widgets_t *widgets = &terrarium_cards[index];
+  if (!widgets->card || !lv_obj_is_valid(widgets->card))
     return;
 
   if (index >= g_facility.terrarium_count) {
@@ -2269,11 +2417,12 @@ static void update_terrarium_card(uint32_t index, lv_coord_t card_width) {
 }
 
 static void update_overview_screen(void) {
-  if (!terrarium_grid)
+  terrarium_cards_sync_with_facility();
+  if (!terrarium_grid || !lv_obj_is_valid(terrarium_grid))
     return;
 
   lv_coord_t card_width = determine_card_width(g_facility.terrarium_count);
-  for (uint32_t i = 0; i < REPTILE_MAX_TERRARIUMS; ++i) {
+  for (uint32_t i = 0; i < g_facility.terrarium_count; ++i) {
     update_terrarium_card(i, card_width);
   }
 
@@ -2453,7 +2602,7 @@ static void terrarium_context_overlay_event_cb(lv_event_t *e) {
 }
 
 static void show_terrarium_history_dialog(uint32_t index) {
-  if (index >= REPTILE_MAX_TERRARIUMS)
+  if (index >= g_facility.terrarium_count)
     return;
   const terrarium_t *terrarium =
       reptile_facility_get_terrarium_const(&g_facility, (uint8_t)index);
@@ -2496,7 +2645,7 @@ static void show_terrarium_history_dialog(uint32_t index) {
 }
 
 static void show_terrarium_context_menu(uint32_t index) {
-  if (index >= REPTILE_MAX_TERRARIUMS)
+  if (index >= g_facility.terrarium_count)
     return;
   close_terrarium_context_menu();
 
@@ -3637,7 +3786,7 @@ static void terrarium_context_button_event_cb(lv_event_t *e) {
   terrarium_context_action_t action =
       (terrarium_context_action_t)(encoded & 0xFFU);
 
-  if (index >= REPTILE_MAX_TERRARIUMS) {
+  if (index >= g_facility.terrarium_count) {
     close_terrarium_context_menu();
     return;
   }
@@ -3989,6 +4138,7 @@ static void save_slot_event_cb(lv_event_t *e) {
   if (reptile_facility_set_slot(&g_facility, slot) == ESP_OK) {
     simulation_apply_active_slot(g_facility.slot);
     selected_terrarium = 0;
+    terrarium_cards_sync_with_facility();
     prev_income_snapshot = g_facility.economy.daily_income_cents;
     prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
     if (save_status_label) {
@@ -4020,6 +4170,7 @@ static void save_action_event_cb(lv_event_t *e) {
     err = reptile_facility_load(&g_facility);
     if (err == ESP_OK) {
       lv_label_set_text(save_status_label, "Chargement réussi");
+      terrarium_cards_sync_with_facility();
       update_overview_screen();
       update_detail_screen();
       update_economy_screen();
@@ -4044,6 +4195,7 @@ static void simulation_new_game_event_cb(lv_event_t *e) {
   esp_err_t err = reptile_facility_save(&g_facility);
 
   selected_terrarium = 0;
+  terrarium_cards_sync_with_facility();
   autosave_ms = 0;
   last_tick_ms = lv_tick_get();
   prev_income_snapshot = g_facility.economy.daily_income_cents;
@@ -4078,6 +4230,7 @@ static void simulation_resume_event_cb(lv_event_t *e) {
   last_tick_ms = lv_tick_get();
   prev_income_snapshot = g_facility.economy.daily_income_cents;
   prev_expense_snapshot = g_facility.economy.daily_expenses_cents;
+  terrarium_cards_sync_with_facility();
 
   simulation_set_status("Slot chargé: %s", g_facility.slot);
   simulation_enter_overview();
