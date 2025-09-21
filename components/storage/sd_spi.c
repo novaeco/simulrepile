@@ -1040,8 +1040,10 @@ esp_err_t sd_spi_cs_selftest(void)
                      "Component config → Storage / SD card → Automatically mount the "
                      "fallback CS.",
                      CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
-#endif
+            return ESP_ERR_INVALID_STATE;
+#else
             return ESP_OK;
+#endif
         }
 #endif
         return err;

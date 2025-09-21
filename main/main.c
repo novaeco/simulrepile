@@ -145,6 +145,17 @@ static void sd_cs_selftest(void) {
              "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
              "SCL=GPIO%d et les résistances de tirage 2.2–4.7 kΩ.",
              CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+  } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE &&
+             sd_fallback_due_to_ch422g()) {
+    ESP_LOGW(TAG,
+             "Fallback CS direct GPIO%d actif sans liaison détectée. Reliez EXIO%u "
+             "à GPIO%d puis activez Component config → Storage / SD card → "
+             "Automatically mount the fallback CS pour autoriser le montage "
+             "automatique.",
+             CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+             CONFIG_STORAGE_SD_GPIO_CS_NUM);
+#endif
   } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE) {
     ESP_LOGE(TAG,
              "Bus I2C instable : lecture NACK pendant la configuration de la "
@@ -417,11 +428,40 @@ static void wait_for_sd_card(void) {
   }
 
   if (!s_sd_cs_ready) {
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+    if (sd_fallback_due_to_ch422g() && sd_uses_direct_cs()) {
+      ESP_LOGE(TAG,
+               "Attente SD annulée : fallback GPIO%d inactif tant que le pont EXIO%u→GPIO%d "
+               "n'est pas câblé (%s).",
+               CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+               CONFIG_STORAGE_SD_GPIO_CS_NUM, esp_err_to_name(s_sd_cs_last_err));
+      char screen_msg[192];
+      snprintf(screen_msg, sizeof(screen_msg),
+               "Fallback GPIO%d requis\nRelier EXIO%u→GPIO%d puis activer\n"
+               "l'auto-mount dans menuconfig.",
+               CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+               CONFIG_STORAGE_SD_GPIO_CS_NUM);
+      show_error_screen(screen_msg);
+      if (lvgl_port_lock(-1)) {
+        char hint[192];
+        snprintf(hint, sizeof(hint),
+                 "CS direct sur GPIO%d inactif. Relier EXIO%u→GPIO%d et activer"
+                 " l'option d'auto-mount du fallback.",
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
+        menu_hint_append(hint);
+        lvgl_port_unlock();
+      }
+      menu_header_update();
+      return;
+    }
+#endif
     ESP_LOGE(TAG,
              "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
              "CH422G ou activez le fallback GPIO dans menuconfig.",
              esp_err_to_name(s_sd_cs_last_err));
     show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
+    menu_header_update();
     return;
   }
 
