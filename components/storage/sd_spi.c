@@ -70,6 +70,7 @@ static bool s_direct_cs_configured = false;
 #endif
 
 static bool s_use_direct_cs = CONFIG_STORAGE_SD_USE_GPIO_CS;
+static bool s_forced_fallback = false;
 
 static esp_err_t sd_bus_ensure(void)
 {
@@ -832,6 +833,9 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     host.max_freq_khz = SD_SPI_INIT_FREQ_KHZ;
 
     bool use_direct = s_use_direct_cs;
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
+    s_forced_fallback = false;
+#endif
 #if !STORAGE_SD_HAVE_DIRECT
     (void)use_direct;
 #endif
@@ -849,11 +853,13 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
                      esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
             use_direct = true;
+            s_forced_fallback = true;
 #else
             return init_err;
 #endif
         } else {
             ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+            s_forced_fallback = false;
         }
 #if STORAGE_SD_HAVE_DIRECT
     }
@@ -925,6 +931,7 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     } else {
         sd_ch422g_deselect();
         ESP_LOGI(TAG, "SD card detected and mounted via CH422G-controlled CS");
+        s_forced_fallback = false;
     }
 #else
     sd_ch422g_deselect();
@@ -1007,6 +1014,7 @@ esp_err_t sd_spi_cs_selftest(void)
                      "CH422G init failed (%s). Switching self-test to GPIO%d fallback.",
                      esp_err_to_name(err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
+            s_forced_fallback = true;
             ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
             ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
             esp_rom_delay_us(5);
@@ -1020,5 +1028,15 @@ esp_err_t sd_spi_cs_selftest(void)
     ESP_RETURN_ON_ERROR(sd_ch422g_select(), TAG, "CS low");
     esp_rom_delay_us(5);
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS high");
+    s_forced_fallback = false;
     return ESP_OK;
+}
+
+bool sd_fallback_due_to_ch422g(void)
+{
+#if STORAGE_SD_HAVE_DIRECT
+    return s_use_direct_cs && s_forced_fallback;
+#else
+    return false;
+#endif
 }

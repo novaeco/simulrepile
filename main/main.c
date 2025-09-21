@@ -104,6 +104,7 @@ void reset_last_mode(void) { save_last_mode(APP_MODE_MENU_OVERRIDE); }
 static void sleep_timer_cb(lv_timer_t *timer);
 static void menu_header_timer_cb(lv_timer_t *timer);
 static void menu_header_update(void);
+static void menu_hint_append(const char *message);
 
 static void sd_cs_selftest(void) {
   s_sd_cs_ready = false;
@@ -204,13 +205,23 @@ static void menu_header_update(void) {
     char sd_text[96];
     lv_color_t sd_color = lv_color_hex(0x2F4F43);
     const char *cs_hint = "";
+    bool forced_fallback = false;
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
     if (sd_uses_direct_cs()) {
+      if (sd_fallback_due_to_ch422g()) {
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
-      cs_hint = " \u00b7 GPIO";
+        cs_hint = " \u00b7 GPIO (!)";
 #else
-      cs_hint = " \u00b7 GPIO fallback";
+        cs_hint = " \u00b7 GPIO fallback (!)";
 #endif
+        forced_fallback = true;
+      } else {
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
+        cs_hint = " \u00b7 GPIO";
+#else
+        cs_hint = " \u00b7 GPIO fallback";
+#endif
+      }
     } else {
       cs_hint = " \u00b7 CH422G";
     }
@@ -225,11 +236,13 @@ static void menu_header_update(void) {
     } else if (sd_is_mounted()) {
       snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD prête%s",
                cs_hint);
-      sd_color = lv_color_hex(0x2F4F43);
+      sd_color = forced_fallback ? lv_color_hex(0xB27B16)
+                                 : lv_color_hex(0x2F4F43);
     } else {
       snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD en attente%s",
                cs_hint);
-      sd_color = lv_color_hex(0xA46A2D);
+      sd_color = forced_fallback ? lv_color_hex(0xB27B16)
+                                 : lv_color_hex(0xA46A2D);
     }
     lv_label_set_text(menu_header_sd_label, sd_text);
     lv_obj_set_style_text_color(menu_header_sd_label, sd_color, 0);
@@ -330,19 +343,7 @@ static void menu_btn_wake_cb(lv_event_t *e) {
   ESP_LOGI(TAG, "Désactivation manuelle de la veille automatique");
   sleep_set_enabled(false);
   sleep_timer_arm(false);
-  if (menu_quick_hint_label) {
-    const char *existing = lv_label_get_text(menu_quick_hint_label);
-    const char *message =
-        "Veille automatique désactivée pour cette session.";
-    if (existing && existing[0] != '\0') {
-      char buffer[256];
-      snprintf(buffer, sizeof(buffer), "%s\n%s", existing, message);
-      lv_label_set_text(menu_quick_hint_label, buffer);
-    } else {
-      lv_label_set_text(menu_quick_hint_label, message);
-    }
-    lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
-  }
+  menu_hint_append("Veille automatique désactivée pour cette session.");
   menu_header_update();
 }
 
@@ -358,6 +359,22 @@ void sleep_set_enabled(bool enabled) {
 }
 
 bool sleep_is_enabled(void) { return sleep_enabled; }
+
+static void menu_hint_append(const char *message) {
+  if (!menu_quick_hint_label || !message || message[0] == '\0') {
+    return;
+  }
+
+  const char *existing = lv_label_get_text(menu_quick_hint_label);
+  if (existing && existing[0] != '\0') {
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), "%s\n%s", existing, message);
+    lv_label_set_text(menu_quick_hint_label, buffer);
+  } else {
+    lv_label_set_text(menu_quick_hint_label, message);
+  }
+  lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+}
 
 static void show_error_screen(const char *msg) {
   if (!lvgl_port_lock(-1))
@@ -389,6 +406,7 @@ static void wait_for_sd_card(void) {
   int attempts = 0;
   const int max_attempts = 10;
   bool wdt_registered = false;
+  bool restart_required = false;
 
   if (sd_is_mounted()) {
     return;
@@ -425,6 +443,7 @@ static void wait_for_sd_card(void) {
           ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
                    esp_err_to_name(del_ret));
         }
+        wdt_registered = false;
       }
       menu_header_update();
       return;
@@ -436,20 +455,52 @@ static void wait_for_sd_card(void) {
     menu_header_update();
     vTaskDelay(pdMS_TO_TICKS(500));
     if (++attempts >= max_attempts) {
+      restart_required = true;
+#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+      if (sd_uses_direct_cs() && sd_fallback_due_to_ch422g()) {
+        restart_required = false;
+        ESP_LOGE(TAG,
+                 "Fallback GPIO%d actif sans câblage détecté. Relier EXIO4 (SD_CS) à "
+                 "GPIO%d ou désactiver Component config → Storage / SD card → Allow "
+                 "automatic GPIO CS fallback.",
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+        s_sd_cs_ready = false;
+        s_sd_cs_last_err = err;
+        if (lvgl_port_lock(-1)) {
+          char hint[192];
+          snprintf(hint, sizeof(hint),
+                   "Fallback CS direct sur GPIO%d.\nRelier EXIO4→GPIO%d ou "
+                   "désactiver le fallback dans menuconfig.",
+                   CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+          menu_hint_append(hint);
+          lvgl_port_unlock();
+        }
+        char screen_msg[192];
+        snprintf(screen_msg, sizeof(screen_msg),
+                 "Fallback GPIO%d actif\nCâbler EXIO4→GPIO%d ou désactiver "
+                 "le fallback.",
+                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_STORAGE_SD_GPIO_CS_NUM);
+        show_error_screen(screen_msg);
+        break;
+      }
+#endif
       show_error_screen("Carte SD absente - redémarrage");
       vTaskDelay(pdMS_TO_TICKS(2000));
-      if (wdt_registered) {
-        esp_err_t del_ret = esp_task_wdt_delete(NULL);
-        if (del_ret != ESP_OK) {
-          ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
-                   esp_err_to_name(del_ret));
-        }
-        wdt_registered = false;
-      }
-      esp_restart();
-      return;
+      break;
     }
     // Attendre indéfiniment jusqu'à insertion d'une carte valide
+  }
+
+  if (wdt_registered) {
+    esp_err_t del_ret = esp_task_wdt_delete(NULL);
+    if (del_ret != ESP_OK) {
+      ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
+               esp_err_to_name(del_ret));
+    }
+  }
+  menu_header_update();
+  if (restart_required) {
+    esp_restart();
   }
 }
 

@@ -173,10 +173,20 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 - `CONFIG_STORAGE_SD_GPIO_FALLBACK` : bascule automatiquement la CS sur le GPIO
   de secours lorsque le CH422G reste muet au démarrage, afin que les tests SD
   et l'application continuent pendant le diagnostic matériel.
+- Lorsque le fallback est actif sans recâblage EXIO4→GPIO34, le firmware affiche
+  désormais un avertissement persistant et n'effectue plus de redémarrage
+  forcé. Suivre les instructions affichées dans le bandeau LVGL ou désactiver
+  l'option dans `menuconfig`.
 - Le pilote I²C déclenche automatiquement une récupération matérielle lorsque SDA/SCL
   restent bloquées (clock stretch infini, périphérique en erreur). Toutes les handles
   enregistrées (CH422G, multiplexeur, GT911…) sont relâchées puis recréées pour que
   le bus reparte proprement après réparation du câblage.
+
+### Dépannage CH422G / microSD
+
+Une procédure complète de diagnostic (mesures matérielles, réglages `menuconfig`,
+recâblage du fallback et messages attendus dans `idf.py monitor`) est disponible
+dans [`docs/troubleshooting/ch422g.md`](docs/troubleshooting/ch422g.md).
 
 ## Menu de démarrage et modes d'exécution
 Au reset, le firmware présente un tableau de bord structuré : en-tête flex affichant le logo, l'heure
