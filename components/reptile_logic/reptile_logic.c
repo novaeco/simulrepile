@@ -95,7 +95,11 @@ static bool s_storage_warned = false;
 
 static void copy_string(char *dst, size_t len, const char *src);
 static void terrarium_reset(terrarium_t *terrarium);
-static void facility_reset(reptile_facility_t *facility);
+static void facility_reset(reptile_facility_t *facility, uint32_t limit);
+static uint32_t facility_effective_limit(bool simulation_mode);
+static uint32_t facility_scale_initial_resource(uint32_t base, uint32_t limit);
+static bool facility_purge_slots_above_limit(reptile_facility_t *facility,
+                                             uint32_t limit);
 static const char *mode_dir(game_mode_t mode);
 static esp_err_t ensure_storage_ready(const char *context);
 static esp_err_t ensure_directories(const reptile_facility_t *facility);
@@ -297,17 +301,64 @@ static void terrarium_reset(terrarium_t *terrarium) {
                                    "Terrarium disponible (aucune espèce attribuée)");
 }
 
-static void facility_reset(reptile_facility_t *facility) {
-  for (uint32_t i = 0; i < REPTILE_MAX_TERRARIUMS; ++i) {
+static uint32_t facility_effective_limit(bool simulation_mode) {
+  return simulation_mode ? SIMULATION_TERRARIUM_LIMIT : REPTILE_MAX_TERRARIUMS;
+}
+
+static uint32_t facility_scale_initial_resource(uint32_t base, uint32_t limit) {
+  if (base == 0U || limit == 0U) {
+    return 0U;
+  }
+  uint64_t scaled = (uint64_t)base * (uint64_t)limit;
+  uint32_t value = (uint32_t)(scaled / REPTILE_MAX_TERRARIUMS);
+  if (value == 0U) {
+    value = 1U;
+  }
+  return value;
+}
+
+static bool facility_purge_slots_above_limit(reptile_facility_t *facility,
+                                             uint32_t limit) {
+  if (!facility) {
+    return false;
+  }
+  if (limit > REPTILE_MAX_TERRARIUMS) {
+    limit = REPTILE_MAX_TERRARIUMS;
+  }
+  bool modified = false;
+  const terrarium_t blank = {0};
+  for (uint32_t i = limit; i < REPTILE_MAX_TERRARIUMS; ++i) {
+    terrarium_t *terrarium = &facility->terrariums[i];
+    if (!modified &&
+        memcmp(terrarium, &blank, sizeof(*terrarium)) != 0) {
+      modified = true;
+    }
+    memset(terrarium, 0, sizeof(*terrarium));
+  }
+  return modified;
+}
+
+static void facility_reset(reptile_facility_t *facility, uint32_t limit) {
+  if (!facility) {
+    return;
+  }
+  if (limit > REPTILE_MAX_TERRARIUMS) {
+    limit = REPTILE_MAX_TERRARIUMS;
+  }
+  for (uint32_t i = 0; i < limit; ++i) {
     terrarium_reset(&facility->terrariums[i]);
   }
-  facility->terrarium_count = REPTILE_MAX_TERRARIUMS;
-  facility->inventory.feeders = 180;
-  facility->inventory.supplement_doses = 120;
-  facility->inventory.substrate_bags = 24;
-  facility->inventory.uv_bulbs = 12;
-  facility->inventory.decor_kits = 10;
-  facility->inventory.water_reserve_l = 300;
+  facility_purge_slots_above_limit(facility, limit);
+  facility->terrarium_count = (uint8_t)limit;
+  facility->inventory.feeders = facility_scale_initial_resource(180U, limit);
+  facility->inventory.supplement_doses =
+      facility_scale_initial_resource(120U, limit);
+  facility->inventory.substrate_bags =
+      facility_scale_initial_resource(24U, limit);
+  facility->inventory.uv_bulbs = facility_scale_initial_resource(12U, limit);
+  facility->inventory.decor_kits = facility_scale_initial_resource(10U, limit);
+  facility->inventory.water_reserve_l =
+      facility_scale_initial_resource(300U, limit);
   facility->economy.cash_cents = 350000; /* 3 500 € */
   facility->economy.daily_income_cents = 0;
   facility->economy.daily_expenses_cents = 0;
@@ -524,6 +575,31 @@ esp_err_t reptile_facility_load(reptile_facility_t *facility) {
     facility->terrarium_count = REPTILE_MAX_TERRARIUMS;
   }
 
+  uint32_t limit = facility_effective_limit(facility->simulation_mode);
+  if (limit > REPTILE_MAX_TERRARIUMS) {
+    limit = REPTILE_MAX_TERRARIUMS;
+  }
+  bool reduced = false;
+  if (facility->terrarium_count > limit) {
+    facility->terrarium_count = (uint8_t)limit;
+    reduced = true;
+  }
+  if (facility_purge_slots_above_limit(facility, limit)) {
+    reduced = true;
+  }
+  if (reduced) {
+    ESP_LOGI(TAG,
+             "Réduction automatique de l'élevage à %u terrariums (mode %s)",
+             (unsigned)limit,
+             facility->simulation_mode ? "simulation" : "réel");
+    esp_err_t save_err = reptile_facility_save(facility);
+    if (save_err != ESP_OK) {
+      ESP_LOGW(TAG,
+               "Impossible de persister la réduction automatique (err=%d)",
+               save_err);
+    }
+  }
+
   ESP_LOGI(TAG, "État chargé depuis %s", path);
   return ESP_OK;
 }
@@ -542,8 +618,10 @@ esp_err_t reptile_facility_set_slot(reptile_facility_t *facility,
   }
   copy_string(facility->slot, sizeof(facility->slot), new_slot);
 
+  uint32_t limit = facility_effective_limit(facility->simulation_mode);
+
   if (reptile_facility_load(facility) != ESP_OK) {
-    facility_reset(facility);
+    facility_reset(facility, limit);
     return reptile_facility_save(facility);
   }
   return ESP_OK;
@@ -573,7 +651,8 @@ esp_err_t reptile_facility_init(reptile_facility_t *facility, bool simulation,
     copy_string(facility->slot, sizeof(facility->slot), slot_name);
   }
 
-  facility_reset(facility);
+  uint32_t limit = facility_effective_limit(simulation);
+  facility_reset(facility, limit);
 
   esp_err_t dir_err = ensure_directories(facility);
   if (dir_err != ESP_OK) {
@@ -1120,7 +1199,13 @@ void reptile_facility_reset_state(reptile_facility_t *facility) {
   if (!facility) {
     return;
   }
-  facility_reset(facility);
+  uint32_t limit = facility_effective_limit(facility->simulation_mode);
+  facility_reset(facility, limit);
+}
+
+void reptile_facility_reset_with_limit(reptile_facility_t *facility,
+                                       uint32_t limit) {
+  facility_reset(facility, limit);
 }
 
 esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,

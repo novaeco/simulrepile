@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #define REPTILE_MAX_TERRARIUMS 25U
+#define SIMULATION_TERRARIUM_LIMIT 2U
 #define REPTILE_MAX_CERTIFICATES 6U
 #define REPTILE_NAME_MAX_LEN 32U
 #define REPTILE_CONFIG_STR_LEN 32U
@@ -203,6 +204,8 @@ void reptile_facility_compute_metrics(const reptile_facility_t *facility,
                                       reptile_facility_metrics_t *out);
 void reptile_facility_reset_statistics(reptile_facility_t *facility);
 void reptile_facility_reset_state(reptile_facility_t *facility);
+void reptile_facility_reset_with_limit(reptile_facility_t *facility,
+                                       uint32_t limit);
 
 esp_err_t reptile_terrarium_set_species(terrarium_t *terrarium,
                                         const species_profile_t *profile,
