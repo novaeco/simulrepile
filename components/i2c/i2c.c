@@ -153,12 +153,23 @@ DEV_I2C_Port DEV_I2C_Init()
 
     // Define I2C bus configuration parameters
     i2c_master_bus_config_t i2c_bus_config = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,       // Default clock source for I2C
+        .clk_source = I2C_CLK_SRC_DEFAULT,      // Default clock source for I2C
         .i2c_port = EXAMPLE_I2C_MASTER_NUM,     // I2C master port number
         .scl_io_num = EXAMPLE_I2C_MASTER_SCL,   // I2C SCL (clock) pin
         .sda_io_num = EXAMPLE_I2C_MASTER_SDA,   // I2C SDA (data) pin
-        .glitch_ignore_cnt = 7,                  // Ignore glitches in the I2C signal
+        .glitch_ignore_cnt = 7,                 // Ignore glitches in the I2C signal
     };
+
+#if CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS
+    /*
+     * The esp_driver_i2c master reconfigures the GPIOs during
+     * i2c_new_master_bus(), clearing the pull mode we set above. Make sure the
+     * controller keeps the internal pull-ups enabled so that boards without
+     * external resistors (comme la Waveshare ESP32-S3 1024x600) bénéficient
+     * d'une polarisation fiable du bus.
+     */
+    i2c_bus_config.flags.enable_internal_pullup = 1;
+#endif
 
     esp_err_t ret = i2c_new_master_bus(&i2c_bus_config, &handle.bus);
     if (ret == ESP_ERR_INVALID_STATE) {
