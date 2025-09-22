@@ -106,7 +106,7 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
 
     esp_err_t probe_ret = DEV_I2C_Probe(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
     if (probe_ret == ESP_OK) {
-        ESP_LOGI(TAG, "GT911 détecté @0x%02X (addr usine)", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+        ESP_LOGI(TAG, "GT911 déjà reconnu @0x%02X", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
         address_ready = true;
     }
 

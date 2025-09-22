@@ -1,7 +1,32 @@
 menu "Storage / SD card"
 
+config SD_SPI_MOSI_IO
+    int "GPIO MOSI pour le bus SPI microSD"
+    range 0 48
+    default 11
+    help
+        Broche MOSI (COPI) du bus SDSPI connecté au lecteur microSD de la carte
+        Waveshare ESP32-S3 Touch LCD 7B. La valeur par défaut reflète le
+        routage d'usine (GPIO11).
+
+config SD_SPI_MISO_IO
+    int "GPIO MISO pour le bus SPI microSD"
+    range 0 48
+    default 13
+    help
+        Broche MISO (CIPO) du bus SDSPI. Par défaut elle correspond au GPIO13
+        présent sur la nappe TF.
+
+config SD_SPI_SCLK_IO
+    int "GPIO SCLK pour le bus SPI microSD"
+    range 0 48
+    default 12
+    help
+        Broche d'horloge SPI dédiée au lecteur microSD. La configuration
+        standard Waveshare relie SCLK au GPIO12 de l'ESP32-S3.
+
 config SD_AUTOMOUNT
-    bool "Automatically mount the SD card at boot"
+    bool "Monter automatiquement la carte microSD au démarrage"
     default y
     help
         Lorsque cette option est activée, l'application tente de monter la
@@ -10,7 +35,7 @@ config SD_AUTOMOUNT
         montage à une étape ultérieure de l'initialisation.
 
 config SD_MOUNT_POINT
-    string "Mount point for the SD card"
+    string "Point de montage de la carte microSD"
     default "/sdcard"
     help
         Point de montage FAT exposé dans le VFS une fois la carte initialisée.
@@ -18,17 +43,16 @@ config SD_MOUNT_POINT
         différent.
 
 config SD_USE_FALLBACK_GPIO_CS
-    bool "Drive SD card CS from an ESP32-S3 GPIO"
+    bool "Forcer CS microSD sur un GPIO natif"
     default y
     help
         Active la commande directe de la ligne chip-select microSD par un GPIO
-        de l'ESP32-S3. Cette voie est désormais la configuration recommandée :
-        le bus I²C du CH422G reste disponible pour le rétroéclairage, VCOM,
-        USB_SEL, CAN_SEL, etc., tandis que la microSD évite tout trafic I²C
-        dans les contextes ISR.
+        de l'ESP32-S3. Ce contournement est obligatoire avec l'extenseur
+        CH422G, le bus I²C ne pouvant être sollicité depuis les callbacks ISR
+        du driver SDSPI.
 
 config SD_FALLBACK_CS_GPIO
-    int "GPIO number controlling the SD card CS"
+    int "GPIO utilisé pour la ligne CS microSD"
     range 0 48
     default 34
     help
