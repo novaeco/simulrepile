@@ -27,10 +27,19 @@ static bool ch422g_scheduler_started(void)
 static void ch422g_retry_delay(void)
 {
     if (ch422g_scheduler_started()) {
+        static bool s_wdt_status_warned = false;
+
         vTaskDelay(pdMS_TO_TICKS(CH422G_RETRY_DELAY_MS));
-        esp_err_t wdt_ret = esp_task_wdt_reset();
-        if (wdt_ret != ESP_OK && wdt_ret != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "esp_task_wdt_reset failed during retry delay: %s", esp_err_to_name(wdt_ret));
+
+        esp_err_t status = esp_task_wdt_status(NULL);
+        if (status == ESP_OK) {
+            esp_err_t wdt_ret = esp_task_wdt_reset();
+            if (wdt_ret != ESP_OK && wdt_ret != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "esp_task_wdt_reset failed during retry delay: %s", esp_err_to_name(wdt_ret));
+            }
+        } else if (status != ESP_ERR_NOT_FOUND && status != ESP_ERR_INVALID_STATE && !s_wdt_status_warned) {
+            ESP_LOGW(TAG, "esp_task_wdt_status failed during retry delay: %s", esp_err_to_name(status));
+            s_wdt_status_warned = true;
         }
     } else {
         esp_rom_delay_us(CH422G_RETRY_DELAY_MS * 1000);
