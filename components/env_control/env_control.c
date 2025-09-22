@@ -2,6 +2,7 @@
 #include "sensors.h"
 #include "gpio.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -16,7 +17,8 @@
 #define MIN_UV_LUX_THRESHOLD 50.0f
 
 typedef struct {
-    reptile_env_history_entry_t samples[REPTILE_ENV_HISTORY_LENGTH];
+    reptile_env_history_entry_t *samples;
+    size_t capacity;
     size_t head;
     size_t count;
     time_t last_timestamp;
@@ -89,16 +91,83 @@ static bool uv_schedule_should_enable(const terrarium_ctrl_t *terr, const struct
     return minutes_in_range(minute, uv_on, uv_off);
 }
 
+static void history_release(history_buffer_t *history)
+{
+    if (!history) {
+        return;
+    }
+    if (history->samples) {
+        heap_caps_free(history->samples);
+        history->samples = NULL;
+    }
+    history->capacity = 0;
+    history->head = 0;
+    history->count = 0;
+    history->last_timestamp = 0;
+}
+
+static esp_err_t history_ensure_allocated(history_buffer_t *history)
+{
+    if (!history) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (history->samples && history->capacity >= REPTILE_ENV_HISTORY_LENGTH) {
+        memset(history->samples, 0, history->capacity * sizeof(*history->samples));
+        history->head = 0;
+        history->count = 0;
+        history->last_timestamp = 0;
+        return ESP_OK;
+    }
+
+    history_release(history);
+
+    const size_t entries = REPTILE_ENV_HISTORY_LENGTH;
+    static const uint32_t caps_priority[] = {
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT,
+    };
+
+    reptile_env_history_entry_t *buffer = NULL;
+    for (size_t i = 0; i < sizeof(caps_priority) / sizeof(caps_priority[0]); ++i) {
+        buffer = heap_caps_calloc(entries, sizeof(*history->samples), caps_priority[i]);
+        if (buffer) {
+            break;
+        }
+    }
+
+    if (!buffer) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    history->samples = buffer;
+    history->capacity = entries;
+    history->head = 0;
+    history->count = 0;
+    history->last_timestamp = 0;
+    return ESP_OK;
+}
+
 static void history_reset(history_buffer_t *history)
 {
-    memset(history, 0, sizeof(*history));
+    if (!history) {
+        return;
+    }
+    history->head = 0;
+    history->count = 0;
+    history->last_timestamp = 0;
+    if (history->samples && history->capacity > 0) {
+        memset(history->samples, 0, history->capacity * sizeof(*history->samples));
+    }
 }
 
 static void history_push(history_buffer_t *history, const reptile_env_history_entry_t *entry)
 {
+    if (!history || !history->samples || history->capacity == 0) {
+        return;
+    }
     history->samples[history->head] = *entry;
-    history->head = (history->head + 1u) % REPTILE_ENV_HISTORY_LENGTH;
-    if (history->count < REPTILE_ENV_HISTORY_LENGTH) {
+    history->head = (history->head + 1u) % history->capacity;
+    if (history->count < history->capacity) {
         history->count++;
     }
     history->last_timestamp = entry->timestamp;
@@ -478,7 +547,7 @@ void reptile_env_get_default_config(reptile_env_config_t *cfg)
     }
 }
 
-static void controller_reset_locked(void)
+static esp_err_t controller_reset_locked(void)
 {
     for (size_t i = 0; i < s_ctrl.config.terrarium_count; ++i) {
         terrarium_ctrl_t *terr = &s_ctrl.terrariums[i];
@@ -502,9 +571,31 @@ static void controller_reset_locked(void)
         terr->manual_pump_requested = false;
         terr->uv_manual = false;
         terr->uv_manual_state = false;
+        esp_err_t err = history_ensure_allocated(&terr->history);
+        if (err != ESP_OK) {
+            return err;
+        }
         history_reset(&terr->history);
         apply_uv_gpio(i, false);
     }
+
+    for (size_t i = s_ctrl.config.terrarium_count; i < REPTILE_ENV_MAX_TERRARIUMS; ++i) {
+        terrarium_ctrl_t *terr = &s_ctrl.terrariums[i];
+        terr->index = i;
+        history_release(&terr->history);
+        terr->heat_task = NULL;
+        terr->pump_task = NULL;
+        terr->last_heat_command = 0;
+        terr->last_pump_command = 0;
+        terr->heat_demand = false;
+        terr->pump_demand = false;
+        terr->manual_heat_requested = false;
+        terr->manual_pump_requested = false;
+        terr->uv_manual = false;
+        terr->uv_manual_state = false;
+    }
+
+    return ESP_OK;
 }
 
 esp_err_t reptile_env_start(const reptile_env_config_t *cfg,
@@ -534,8 +625,11 @@ esp_err_t reptile_env_start(const reptile_env_config_t *cfg,
         }
     }
     xSemaphoreTake(s_ctrl.lock, portMAX_DELAY);
-    controller_reset_locked();
+    err = controller_reset_locked();
     xSemaphoreGive(s_ctrl.lock);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     const TickType_t period = pdMS_TO_TICKS(s_ctrl.config.period_ms);
     s_ctrl.timer = xTimerCreate("env_ctrl", period, pdTRUE, NULL, controller_timer_cb);
@@ -576,6 +670,7 @@ void reptile_env_stop(void)
             terr->pump_task = NULL;
         }
         apply_uv_gpio(i, false);
+        history_reset(&terr->history);
     }
     xSemaphoreGive(s_ctrl.lock);
 }
@@ -586,14 +681,24 @@ esp_err_t reptile_env_update_config(const reptile_env_config_t *cfg)
         return ESP_ERR_INVALID_ARG;
     }
     if (!s_ctrl.running) {
+        reptile_env_config_t prev = s_ctrl.config;
         s_ctrl.config = *cfg;
         if (s_ctrl.config.period_ms == 0) {
             s_ctrl.config.period_ms = REPTILE_ENV_DEFAULT_PERIOD_MS;
         }
         if (s_ctrl.lock) {
             xSemaphoreTake(s_ctrl.lock, portMAX_DELAY);
-            controller_reset_locked();
+            esp_err_t err = controller_reset_locked();
             xSemaphoreGive(s_ctrl.lock);
+            if (err != ESP_OK) {
+                s_ctrl.config = prev;
+                if (s_ctrl.lock) {
+                    xSemaphoreTake(s_ctrl.lock, portMAX_DELAY);
+                    controller_reset_locked();
+                    xSemaphoreGive(s_ctrl.lock);
+                }
+                return err;
+            }
         }
         return ESP_OK;
     }
@@ -637,9 +742,14 @@ size_t reptile_env_get_history(size_t terrarium_index,
     }
     xSemaphoreTake(s_ctrl.lock, portMAX_DELAY);
     history_buffer_t *history = &s_ctrl.terrariums[terrarium_index].history;
+    if (!history->samples || history->capacity == 0) {
+        xSemaphoreGive(s_ctrl.lock);
+        return 0;
+    }
+    size_t capacity = history->capacity;
     size_t count = history->count < max_entries ? history->count : max_entries;
     for (size_t i = 0; i < count; ++i) {
-        size_t idx = (history->head + REPTILE_ENV_HISTORY_LENGTH - count + i) % REPTILE_ENV_HISTORY_LENGTH;
+        size_t idx = (history->head + capacity - count + i) % capacity;
         out[i] = history->samples[idx];
     }
     xSemaphoreGive(s_ctrl.lock);
