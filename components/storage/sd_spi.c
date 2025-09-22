@@ -862,12 +862,20 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
         esp_err_t init_err = ch422g_init();
         if (init_err != ESP_OK) {
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
+            s_forced_fallback = true;
+#if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
             ESP_LOGW(TAG,
                      "CH422G init failed (%s). Falling back to GPIO%d for SD card CS.",
                      esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
             use_direct = true;
-            s_forced_fallback = true;
+#else
+            ESP_LOGW(TAG,
+                     "CH422G init failed (%s). GPIO%d fallback available but auto-mount "
+                     "disabled; SD mounting will be deferred until the wiring is in place.",
+                     esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
+            return init_err;
+#endif
 #else
             return init_err;
 #endif
@@ -1024,25 +1032,28 @@ esp_err_t sd_spi_cs_selftest(void)
     if (err != ESP_OK) {
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
         if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_RESPONSE) {
+            s_forced_fallback = true;
+#if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
             ESP_LOGW(TAG,
                      "CH422G init failed (%s). Switching self-test to GPIO%d fallback.",
                      esp_err_to_name(err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
-            s_forced_fallback = true;
             ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
             ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 0), TAG, "CS low");
             esp_rom_delay_us(5);
             ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS high");
-#if !CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
-            ESP_LOGW(TAG,
-                     "GPIO fallback auto-mount disabled – SD mounting will be deferred to "
-                     "avoid watchdog resets. Once EXIO%u is wired to GPIO%d, enable "
-                     "Component config → Storage / SD card → Automatically mount the "
-                     "fallback CS.",
-                     CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
-            return ESP_ERR_INVALID_STATE;
-#else
             return ESP_OK;
+#else
+            ESP_LOGW(TAG,
+                     "CH422G init failed (%s). GPIO%d fallback available but auto-mount "
+                     "disabled; keeping CS idle to avoid watchdog resets.",
+                     esp_err_to_name(err), STORAGE_SD_GPIO_CS);
+            ESP_LOGW(TAG,
+                     "Wire EXIO%u→GPIO%d and enable Component config → Storage / SD card → "
+                     "Automatically mount the fallback CS once the jumper is installed.",
+                     CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+            s_use_direct_cs = CONFIG_STORAGE_SD_USE_GPIO_CS;
+            return ESP_ERR_NOT_FOUND;
 #endif
         }
 #endif
@@ -1059,7 +1070,7 @@ esp_err_t sd_spi_cs_selftest(void)
 bool sd_fallback_due_to_ch422g(void)
 {
 #if STORAGE_SD_HAVE_DIRECT
-    return s_use_direct_cs && s_forced_fallback;
+    return s_forced_fallback;
 #else
     return false;
 #endif
