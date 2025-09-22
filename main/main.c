@@ -15,7 +15,6 @@
 #include "rgb_lcd_port.h" // Header for Waveshare RGB LCD driver
 
 #include "can.h"
-#include "ch422g.h"
 #include "driver/gpio.h" // GPIO definitions for wake-up source
 #include "driver/ledc.h" // LEDC for backlight PWM
 #include "esp_lcd_panel_ops.h"
@@ -49,10 +48,6 @@
 #include <time.h>
 
 #include "esp_timer.h"
-
-#ifndef CONFIG_CH422G_EXIO_SD_CS
-#define CONFIG_CH422G_EXIO_SD_CS 4
-#endif
 
 static const char *TAG = "main"; // Tag for logging
 
@@ -116,22 +111,8 @@ static void sd_cs_selftest(void) {
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
     s_sd_cs_ready = true;
-#if CONFIG_SD_USE_FALLBACK_GPIO_CS
-    ESP_LOGI(TAG,
-             "Ligne CS microSD pilotée directement par GPIO%d.",
-             CONFIG_SD_FALLBACK_CS_GPIO);
-#else
-#ifdef CONFIG_CH422G_EXIO_SD_CS
-    ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G EXIO%d.",
-             CONFIG_CH422G_EXIO_SD_CS);
-#else
-    ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G.");
-#endif
-    ESP_LOGI(TAG,
-             "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
-             ch422g_get_address(), CONFIG_I2C_MASTER_SDA_GPIO,
-             CONFIG_I2C_MASTER_SCL_GPIO);
-#endif
+    int cs_gpio = sd_get_cs_gpio();
+    ESP_LOGI(TAG, "Ligne CS microSD pilotée directement par GPIO%d.", cs_gpio);
     menu_header_update();
     return;
   }
@@ -143,30 +124,15 @@ static void sd_cs_selftest(void) {
   ESP_LOGW(TAG, "Bus levels: SDA=%d SCL=%d (0=bas, 1=haut).", sda_level,
            scl_level);
   if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
-#if CONFIG_SD_USE_FALLBACK_GPIO_CS
     ESP_LOGE(TAG,
              "GPIO%d ne répond pas. Vérifiez le câblage direct de la CS microSD et "
              "la configuration menuconfig.",
-             CONFIG_SD_FALLBACK_CS_GPIO);
-#else
-    ESP_LOGE(TAG,
-             "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
-             "SCL=GPIO%d et les résistances de tirage 2.2–4.7 kΩ.",
-             CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
-#endif
-  } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE) {
-    ESP_LOGE(TAG,
-             "Bus I2C instable : lecture NACK pendant la configuration de la "
-             "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
+             sd_get_cs_gpio());
   }
 
   ESP_LOGW(TAG,
            "Le firmware continuera sans carte SD tant que la ligne CS ne "
-#if CONFIG_SD_USE_FALLBACK_GPIO_CS
            "répond pas ou que le câblage direct n'est pas réparé.");
-#else
-           "répond pas ou qu'un dépannage CH422G est nécessaire.");
-#endif
   menu_header_update();
 }
 
@@ -210,9 +176,9 @@ static void menu_header_update(void) {
 
   if (menu_header_sd_label) {
     char sd_text[96];
+    char cs_hint[32];
     lv_color_t sd_color = lv_color_hex(0x2F4F43);
-    const char *cs_hint = sd_uses_direct_cs() ? " \u00b7 GPIO"
-                                              : " \u00b7 CH422G";
+    snprintf(cs_hint, sizeof(cs_hint), " \u00b7 CS=GPIO%d", sd_get_cs_gpio());
     if (!s_sd_cs_ready) {
       const char *err = (s_sd_cs_last_err != ESP_OK)
                             ? esp_err_to_name(s_sd_cs_last_err)
@@ -435,19 +401,9 @@ static void wait_for_sd_card(void) {
 
   if (!s_sd_cs_ready) {
     ESP_LOGE(TAG,
-             "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
-#if CONFIG_SD_USE_FALLBACK_GPIO_CS
-             "direct (GPIO%d) ou vérifiez le câblage.",
-             esp_err_to_name(s_sd_cs_last_err), CONFIG_SD_FALLBACK_CS_GPIO);
-#else
-             "CH422G.",
-             esp_err_to_name(s_sd_cs_last_err));
-#endif
-#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+             "Attente SD annulée : autotest CS échoué (%s). Réparez le bus direct GPIO%d.",
+             esp_err_to_name(s_sd_cs_last_err), sd_get_cs_gpio());
     show_error_screen("CS microSD directe indisponible\nVérifier le câblage GPIO");
-#else
-    show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
-#endif
     menu_header_update();
     return;
   }

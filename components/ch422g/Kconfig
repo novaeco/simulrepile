@@ -11,13 +11,5 @@ config CH422G_I2C_ADDR
         broches d'adressage sont recâblées ou si un module de rechange est
         monté.
 
-config CH422G_EXIO_SD_CS
-    int "CH422G EXIO line driving the SD CS"
-    range 1 8
-    default 4
-    help
-        Numéro d'EXIO (1..8) du CH422G utilisé pour piloter la ligne chip-select
-        du lecteur microSD. Les cartes Waveshare 1024x600 câblent l'entrée EXIO4
-        vers le convertisseur de niveau du slot SD.
-
 endmenu
+

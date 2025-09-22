@@ -104,8 +104,15 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
 
     bool address_ready = false;
 
-    if (gt911_config && esp_lcd_touch_gt911->config.rst_gpio_num != GPIO_NUM_NC && esp_lcd_touch_gt911->config.int_gpio_num != GPIO_NUM_NC) {
-        /* Prepare pin for touch controller int */
+    esp_err_t probe_ret = DEV_I2C_Probe(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+    if (probe_ret == ESP_OK) {
+        ESP_LOGI(TAG, "GT911 détecté @0x%02X (addr usine)", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+        address_ready = true;
+    }
+
+    if (!address_ready && gt911_config && esp_lcd_touch_gt911->config.rst_gpio_num != GPIO_NUM_NC &&
+        esp_lcd_touch_gt911->config.int_gpio_num != GPIO_NUM_NC) {
+        /* Prépare la ligne INT pour la sélection d'adresse */
         const gpio_config_t int_gpio_config = {
             .mode = GPIO_MODE_OUTPUT,
             .intr_type = GPIO_INTR_DISABLE,
@@ -137,22 +144,22 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
         vTaskDelay(pdMS_TO_TICKS(10));
 
         vTaskDelay(pdMS_TO_TICKS(50));
-        address_ready = true;
-    } else {
-        esp_err_t probe_ret = DEV_I2C_Probe(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
-        if (probe_ret == ESP_OK) {
-            ESP_LOGI(TAG, "GT911 already acknowledged at 0x%02X", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+        esp_err_t reprobe = DEV_I2C_Probe(ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
+        if (reprobe == ESP_OK) {
+            ESP_LOGI(TAG, "GT911 verrouillé @0x%02X via INT/RST", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS);
             address_ready = true;
         } else {
-            ESP_LOGW(TAG, "Unable to drive INT/RST for GT911 address selection (%s)", esp_err_to_name(probe_ret));
-            /* Reset controller */
-            ret = touch_gt911_reset(esp_lcd_touch_gt911);
-            ESP_GOTO_ON_ERROR(ret, err, TAG, "GT911 reset failed");
+            ESP_LOGW(TAG, "GT911 introuvable après séquence INT/RST (%s)", esp_err_to_name(reprobe));
         }
+    } else if (!address_ready) {
+        ESP_LOGW(TAG, "GT911 aucun ACK @0x%02X (%s) — reset simple", ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, esp_err_to_name(probe_ret));
+        /* Reset controller */
+        ret = touch_gt911_reset(esp_lcd_touch_gt911);
+        ESP_GOTO_ON_ERROR(ret, err, TAG, "GT911 reset failed");
     }
 
     if (!address_ready) {
-        ESP_LOGW(TAG, "Proceeding with GT911 using default wiring assumptions");
+        ESP_LOGW(TAG, "GT911: hypothèses de câblage par défaut utilisées");
     }
 
     /* Prepare pin for touch interrupt */

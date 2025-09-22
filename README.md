@@ -166,13 +166,13 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
   réduire si les longueurs de nappe imposent une marge sur les fronts montants.
 - `CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS` : active les résistances internes de
   tirage pour consolider les pull-ups externes sur SDA/SCL.
-- `CONFIG_CH422G_I2C_ADDR` / `CONFIG_CH422G_EXIO_SD_CS` : adresse 7 bits de
-  l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD. Le
-  firmware sonde d'abord l'adresse configurée (0x24 par défaut) puis explore la
-  plage 0x20–0x27 pour tolérer les modules de rechange.
-- `CONFIG_SD_USE_FALLBACK_GPIO_CS` + `CONFIG_SD_FALLBACK_CS_GPIO` : active un
-  câblage direct de la CS microSD vers un GPIO de l'ESP32-S3 (34 conseillé)
-  lorsque l'extenseur CH422G est absent ou irréparable.
+- `CONFIG_CH422G_I2C_ADDR` : adresse 7 bits de l'extenseur. Le firmware
+  sonde d'abord la valeur configurée (0x24 par défaut) puis explore la plage
+  0x20–0x27 pour tolérer les modules de rechange.
+- `CONFIG_SD_USE_FALLBACK_GPIO_CS` + `CONFIG_SD_FALLBACK_CS_GPIO` : imposent le
+  pilotage direct de la CS microSD par un GPIO de l'ESP32-S3 (GPIO34 par
+  défaut) afin d'éviter tout trafic I²C dans les ISR. Adapter la valeur si le
+  pont EXIO→GPIO utilise une autre broche.
 - `CONFIG_SD_AUTOMOUNT` / `CONFIG_SD_MOUNT_POINT` : permettent de monter
   automatiquement la carte au boot et d'ajuster le chemin VFS (`/sdcard` par
   défaut).
@@ -184,7 +184,7 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 ### Dépannage CH422G / microSD
 
 Une procédure complète de diagnostic (mesures matérielles, réglages `menuconfig`,
-recâblage du fallback et messages attendus dans `idf.py monitor`) est disponible
+documentation du pont CS direct et messages attendus dans `idf.py monitor`) est disponible
 dans [`docs/troubleshooting/ch422g.md`](docs/troubleshooting/ch422g.md).
 
 Pour isoler un défaut matériel, un firmware minimal d'analyse I²C est fourni
