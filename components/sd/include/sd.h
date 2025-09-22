@@ -48,15 +48,18 @@ extern "C" {
 /**
  * @brief Initialise the SPI bus, mount the SD card and print its descriptor.
  *
- * When the card is already mounted the function simply returns the cached
- * handle. The chip-select line is driven directly by the ESP32-S3 GPIO defined
- * in Kconfig (default: GPIO34) to avoid I²C traffic inside ISR contexts.
+ * Lorsque la carte est déjà montée la fonction renvoie simplement ESP_OK.
+ * La ligne CS est pilotée directement par le GPIO ESP32-S3 défini
+ * dans Kconfig (par défaut : GPIO34) afin d'éviter tout trafic I²C dans les ISR.
  *
- * @param[out] out_card Optional pointer that will receive the mounted card
- *                      descriptor.
  * @return ::ESP_OK on success or a propagated error code.
  */
-esp_err_t sd_mount(sdmmc_card_t **out_card);
+esp_err_t sd_mount(void);
+
+/**
+ * @brief Retrieve the descriptor of the currently mounted card.
+ */
+sdmmc_card_t *sd_get_card(void);
 
 /**
  * @brief Unmount the FAT filesystem and release the SPI bus.
@@ -100,7 +103,7 @@ bool sd_uses_direct_cs(void);
 int sd_get_cs_gpio(void);
 
 /* Legacy aliases kept for compatibility with existing modules */
-static inline esp_err_t sd_mmc_init(void) { return sd_mount(NULL); }
+static inline esp_err_t sd_mmc_init(void) { return sd_mount(); }
 static inline esp_err_t sd_mmc_unmount(void) { return sd_unmount(); }
 
 #ifdef __cplusplus

@@ -420,8 +420,9 @@ static void wait_for_sd_card(void) {
     if (wdt_registered) {
       esp_task_wdt_reset();
     }
-    err = sd_mount(&s_sd_card);
+    err = sd_mount();
     if (err == ESP_OK) {
+      s_sd_card = sd_get_card();
       hide_error_screen();
       sd_write_selftest();
       if (wdt_registered) {
@@ -576,8 +577,9 @@ void app_main() {
   sd_cs_selftest();
 #if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
-    esp_err_t sd_ret = sd_mount(&s_sd_card);
+    esp_err_t sd_ret = sd_mount();
     if (sd_ret == ESP_OK) {
+      s_sd_card = sd_get_card();
       sd_write_selftest();
     } else {
       ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));

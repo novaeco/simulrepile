@@ -22,8 +22,7 @@ static inline bool sd_uses_direct_cs(void) { return true; }
 
 static inline int sd_get_cs_gpio(void) { return 34; }
 
-static inline esp_err_t sd_mount(sdmmc_card_t **out_card) {
-  (void)out_card;
+static inline esp_err_t sd_mount(void) {
   mkdir(SD_MOUNT_POINT, 0777);
   FILE *f = fopen(SD_MOUNT_POINT "/selftest.txt", "w");
   if (f) {
@@ -32,6 +31,8 @@ static inline esp_err_t sd_mount(sdmmc_card_t **out_card) {
   }
   return ESP_OK;
 }
+
+static inline sdmmc_card_t *sd_get_card(void) { return NULL; }
 
 static inline esp_err_t sd_unmount(void) { return ESP_OK; }
 
@@ -44,5 +45,5 @@ static inline esp_err_t sd_card_print_info(void) {
   return sd_card_print_info_stream(stdout);
 }
 
-static inline esp_err_t sd_mmc_init(void) { return sd_mount(NULL); }
+static inline esp_err_t sd_mmc_init(void) { return sd_mount(); }
 static inline esp_err_t sd_mmc_unmount(void) { return sd_unmount(); }
