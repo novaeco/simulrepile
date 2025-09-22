@@ -297,7 +297,7 @@ esp_err_t ch422g_init(void)
     s_shadow = 0xFFu;
     ret = ch422g_write_shadow();
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "CH422G ready on 0x%02X", s_addr);
+        ESP_LOGI(TAG, "CH422G prêt @0x%02X (SDA=%d SCL=%d)", s_addr, CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
         s_diag_logged = false;
     } else {
         ESP_LOGE(TAG, "Failed to initialise CH422G outputs: %s", esp_err_to_name(ret));

@@ -18,7 +18,9 @@ static inline bool sd_is_mounted(void) {
   return stat(SD_MOUNT_POINT, &st) == 0;
 }
 
-static inline bool sd_uses_direct_cs(void) { return false; }
+static inline bool sd_uses_direct_cs(void) { return true; }
+
+static inline int sd_get_cs_gpio(void) { return 34; }
 
 static inline esp_err_t sd_mount(sdmmc_card_t **out_card) {
   (void)out_card;

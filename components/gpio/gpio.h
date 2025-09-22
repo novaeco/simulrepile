@@ -55,13 +55,6 @@
 #if WATER_PUMP_EXIO == HEAT_RES_EXIO
 #error "WATER_PUMP_EXIO conflicts with HEAT_RES_EXIO"
 #endif
-#ifdef CONFIG_CH422G_EXIO_SD_CS
-#if CONFIG_CH422G_EXIO_SD_CS == WATER_PUMP_EXIO || \
-    CONFIG_CH422G_EXIO_SD_CS == HEAT_RES_EXIO || \
-    (SERVO_FEED_EXIO > 0 && CONFIG_CH422G_EXIO_SD_CS == SERVO_FEED_EXIO)
-#error "Actuator EXIO lines conflict with SD card CS line"
-#endif
-#endif
 
 /* Default pulse widths (in milliseconds) applied to monostable actuators */
 #define REPTILE_GPIO_HEAT_PULSE_MS 5000u

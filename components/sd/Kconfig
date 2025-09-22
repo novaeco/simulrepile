@@ -18,24 +18,23 @@ config SD_MOUNT_POINT
         différent.
 
 config SD_USE_FALLBACK_GPIO_CS
-    bool "Bypass CH422G and drive SD card CS from an ESP32-S3 GPIO"
-    default n
+    bool "Drive SD card CS from an ESP32-S3 GPIO"
+    default y
     help
-        Active un chemin de repli matériel pour les installations où
-        l'extenseur CH422G est absent ou irréparable. La ligne chip-select
-        microSD doit alors être câblée en permanence vers la broche GPIO
-        indiquée ci-dessous (EXIO4→GPIO34 sur la carte Waveshare 7B).
+        Active la commande directe de la ligne chip-select microSD par un GPIO
+        de l'ESP32-S3. Cette voie est désormais la configuration recommandée :
+        le bus I²C du CH422G reste disponible pour le rétroéclairage, VCOM,
+        USB_SEL, CAN_SEL, etc., tandis que la microSD évite tout trafic I²C
+        dans les contextes ISR.
 
 config SD_FALLBACK_CS_GPIO
-    int "Fallback GPIO number controlling SD card CS"
-    depends on SD_USE_FALLBACK_GPIO_CS
+    int "GPIO number controlling the SD card CS"
     range 0 48
     default 34
     help
-        Numéro de GPIO employé pour piloter la ligne CS du lecteur microSD
-        lorsque le CH422G est contourné. Sur la Waveshare ESP32-S3 Touch LCD
-        7B, la broche 34 est accessible sur le connecteur d'extension et ne
-        rentre pas en conflit avec le bus RGB.
+        Numéro de GPIO employé pour piloter la ligne CS du lecteur microSD.
+        Sur la Waveshare ESP32-S3 Touch LCD 7B, la broche 34 est accessible sur
+        le connecteur d'extension et ne rentre pas en conflit avec le bus RGB.
 
 endmenu
 
