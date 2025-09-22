@@ -151,4 +151,19 @@ esp_err_t DEV_I2C_Write_Nbyte(i2c_master_dev_handle_t dev_handle, uint8_t *pdata
  */
 esp_err_t DEV_I2C_Read_Nbyte(i2c_master_dev_handle_t dev_handle, uint8_t Cmd, uint8_t *pdata, uint8_t len);
 
+/**
+ * @brief Scan a range of I2C addresses and return the devices that acknowledge.
+ *
+ * @param start_addr Inclusive start address (0x08–0x77).
+ * @param end_addr   Inclusive end address.
+ * @param buffer     Optional output buffer storing each detected address.
+ * @param buffer_len Size of @p buffer in entries.
+ * @param found_count Optional pointer receiving the number of detected addresses.
+ *
+ * @return ESP_OK when the scan completed (even if zero devices were found),
+ *         ESP_ERR_NOT_FOUND when the range completed without acknowledgements,
+ *         or a propagated error if the bus could not be initialised/recovered.
+ */
+esp_err_t DEV_I2C_Scan(uint8_t start_addr, uint8_t end_addr, uint8_t *buffer, size_t buffer_len, size_t *found_count);
+
 #endif

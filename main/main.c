@@ -15,6 +15,7 @@
 #include "rgb_lcd_port.h" // Header for Waveshare RGB LCD driver
 
 #include "can.h"
+#include "ch422g.h"
 #include "driver/gpio.h" // GPIO definitions for wake-up source
 #include "driver/ledc.h" // LEDC for backlight PWM
 #include "esp_lcd_panel_ops.h"
@@ -115,8 +116,10 @@ static void sd_cs_selftest(void) {
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
     s_sd_cs_ready = true;
+    bool uses_direct_cs = false;
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-    if (sd_uses_direct_cs()) {
+    uses_direct_cs = sd_uses_direct_cs();
+    if (uses_direct_cs) {
       ESP_LOGI(TAG,
                "Ligne CS microSD pilotée directement par GPIO%d.",
                CONFIG_STORAGE_SD_GPIO_CS_NUM);
@@ -134,12 +137,22 @@ static void sd_cs_selftest(void) {
 #endif
     }
 #endif
+    if (!uses_direct_cs) {
+      ESP_LOGI(TAG,
+               "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
+               ch422g_get_address(), CONFIG_I2C_MASTER_SDA_GPIO,
+               CONFIG_I2C_MASTER_SCL_GPIO);
+    }
     menu_header_update();
     return;
   }
 
   ESP_LOGE(TAG, "Autotest ligne CS SD impossible: %s",
            esp_err_to_name(s_sd_cs_last_err));
+  int sda_level = gpio_get_level(CONFIG_I2C_MASTER_SDA_GPIO);
+  int scl_level = gpio_get_level(CONFIG_I2C_MASTER_SCL_GPIO);
+  ESP_LOGW(TAG, "Bus levels: SDA=%d SCL=%d (0=bas, 1=haut).", sda_level,
+           scl_level);
   if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
     ESP_LOGE(TAG,
              "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "

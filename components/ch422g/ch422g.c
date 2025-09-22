@@ -3,13 +3,109 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
+#include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "i2c.h"
 
 #define TAG "ch422g"
 #define CH422G_XFER_TIMEOUT_MS 50
+#define CH422G_PROBE_TIMEOUT_MS 100
+#define CH422G_SCAN_MIN_ADDR 0x20u
+#define CH422G_SCAN_MAX_ADDR 0x23u
+#define CH422G_RETRY_DELAY_MS 12
 
 static i2c_master_dev_handle_t s_dev = NULL;
+static uint8_t s_addr = CH422G_DEFAULT_ADDR;
 static uint8_t s_shadow = 0xFFu;
+
+static bool ch422g_scheduler_started(void)
+{
+    return xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED;
+}
+
+static void ch422g_retry_delay(void)
+{
+    if (ch422g_scheduler_started()) {
+        vTaskDelay(pdMS_TO_TICKS(CH422G_RETRY_DELAY_MS));
+        esp_err_t wdt_ret = esp_task_wdt_reset();
+        if (wdt_ret != ESP_OK && wdt_ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "esp_task_wdt_reset failed during retry delay: %s", esp_err_to_name(wdt_ret));
+        }
+    } else {
+        esp_rom_delay_us(CH422G_RETRY_DELAY_MS * 1000);
+    }
+}
+
+static esp_err_t ch422g_probe_address(uint8_t addr)
+{
+    DEV_I2C_Port port = DEV_I2C_Init();
+    if (port.bus == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t ret = ESP_FAIL;
+    const int max_attempts = 2;
+
+    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+        ret = i2c_master_probe(port.bus, addr, CH422G_PROBE_TIMEOUT_MS);
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+
+        bool recoverable = (ret == ESP_ERR_TIMEOUT) || (ret == ESP_ERR_INVALID_STATE);
+        if (!recoverable || attempt == max_attempts) {
+            break;
+        }
+
+        ESP_LOGW(TAG,
+                 "I2C probe 0x%02X attempt %d/%d failed (%s). Recovering bus before retry.",
+                 addr, attempt, max_attempts, esp_err_to_name(ret));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(DEV_I2C_Bus_Recover());
+        port = DEV_I2C_Init();
+        if (port.bus == NULL) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        ch422g_retry_delay();
+    }
+
+    return ret;
+}
+
+esp_err_t ch422g_scan(uint8_t start_addr, uint8_t end_addr, uint8_t *out_addr)
+{
+    if (start_addr > end_addr) {
+        uint8_t tmp = start_addr;
+        start_addr = end_addr;
+        end_addr = tmp;
+    }
+
+    esp_err_t last_err = ESP_ERR_NOT_FOUND;
+    uint8_t detected = 0;
+
+    for (uint16_t addr = start_addr; addr <= end_addr; ++addr) {
+        if (addr < 0x08 || addr > 0x77) {
+            continue;
+        }
+
+        esp_err_t ret = ch422g_probe_address((uint8_t)addr);
+        if (ret == ESP_OK) {
+            detected = (uint8_t)addr;
+            if (out_addr != NULL) {
+                *out_addr = detected;
+            }
+            return ESP_OK;
+        }
+
+        last_err = ret;
+        ch422g_retry_delay();
+    }
+
+    if (last_err == ESP_OK || last_err == ESP_ERR_NOT_FOUND) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return last_err;
+}
 
 static esp_err_t ch422g_write_shadow(void)
 {
@@ -22,6 +118,11 @@ uint8_t ch422g_exio_shadow_get(void)
     return s_shadow;
 }
 
+uint8_t ch422g_get_address(void)
+{
+    return s_addr;
+}
+
 esp_err_t ch422g_init(void)
 {
     if (s_dev != NULL) {
@@ -31,30 +132,32 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
-    esp_err_t ret = ESP_FAIL;
-    const int max_attempts = 3;
-    for (int attempt = 1; attempt <= max_attempts; ++attempt) {
-        ret = DEV_I2C_Probe(CH422G_DEFAULT_ADDR);
-        if (ret == ESP_OK) {
-            break;
-        }
-        if (attempt < max_attempts) {
-            ESP_LOGW(TAG,
-                     "CH422G probe attempt %d/%d failed (%s), retrying...",
-                     attempt, max_attempts, esp_err_to_name(ret));
-            esp_rom_delay_us(2000);
-        }
+    uint8_t detected_addr = CH422G_DEFAULT_ADDR;
+    esp_err_t ret = ch422g_scan(CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, &detected_addr);
+    if (ret == ESP_ERR_NOT_FOUND &&
+        (CH422G_DEFAULT_ADDR < CH422G_SCAN_MIN_ADDR || CH422G_DEFAULT_ADDR > CH422G_SCAN_MAX_ADDR)) {
+        ret = ch422g_scan(CH422G_DEFAULT_ADDR, CH422G_DEFAULT_ADDR, &detected_addr);
     }
+
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "No ACK from CH422G at 0x%02X: %s. Check 3V3 supply, SDA=%d,"
-                 " SCL=%d and external pull-ups (2.2k–4.7kΩ).",
-                 CH422G_DEFAULT_ADDR, esp_err_to_name(ret),
-                 CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+                 "No ACK from CH422G between 0x%02X and 0x%02X (configured 0x%02X): %s. "
+                 "Check 3V3 supply, SDA=%d, SCL=%d and external pull-ups (2.2k–4.7kΩ).",
+                 CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, CH422G_DEFAULT_ADDR,
+                 esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
         return ret;
     }
 
-    ret = DEV_I2C_Set_Slave_Addr(&s_dev, CH422G_DEFAULT_ADDR);
+    s_addr = detected_addr;
+
+    if (s_addr != CH422G_DEFAULT_ADDR) {
+        ESP_LOGW(TAG,
+                 "CH422G responded on 0x%02X instead of configured 0x%02X. Verify A0/A1 straps "
+                 "or update CONFIG_CH422G_I2C_ADDRESS.",
+                 s_addr, CH422G_DEFAULT_ADDR);
+    }
+
+    ret = DEV_I2C_Set_Slave_Addr(&s_dev, s_addr);
     ESP_RETURN_ON_ERROR(ret, TAG, "attach CH422G");
 
     /* Force all EXIO outputs high so that downstream peripherals stay
@@ -62,7 +165,7 @@ esp_err_t ch422g_init(void)
     s_shadow = 0xFFu;
     ret = ch422g_write_shadow();
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "CH422G ready on 0x%02X", CH422G_DEFAULT_ADDR);
+        ESP_LOGI(TAG, "CH422G ready on 0x%02X", s_addr);
     } else {
         ESP_LOGE(TAG, "Failed to initialise CH422G outputs: %s", esp_err_to_name(ret));
     }
@@ -83,9 +186,9 @@ esp_err_t ch422g_exio_set(uint8_t exio_index, bool level)
         s_shadow &= (uint8_t)~mask;
     }
 
-    esp_err_t ret = ch422g_write_shadow();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to update EXIO%u: %s", (unsigned)exio_index, esp_err_to_name(ret));
+    esp_err_t update_ret = ch422g_write_shadow();
+    if (update_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to update EXIO%u: %s", (unsigned)exio_index, esp_err_to_name(update_ret));
     }
-    return ret;
+    return update_ret;
 }
