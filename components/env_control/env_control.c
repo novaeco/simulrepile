@@ -364,6 +364,7 @@ static void controller_timer_cb(TimerHandle_t timer)
     time_t now = time(NULL);
     struct tm tm_now = {0};
     localtime_r(&now, &tm_now);
+    bool fallback_mode = sensors_is_using_simulation_fallback();
     size_t available_channels = sensors_get_channel_count();
 
     xSemaphoreTake(s_ctrl.lock, portMAX_DELAY);
@@ -391,6 +392,11 @@ static void controller_timer_cb(TimerHandle_t timer)
         float temp = channel_valid ? sensors_read_temperature_channel(terr->cfg.sensor_channel) : NAN;
         float hum = channel_valid ? sensors_read_humidity_channel(terr->cfg.sensor_channel) : NAN;
         float lux = channel_valid ? sensors_read_lux_channel(terr->cfg.sensor_channel) : NAN;
+        if (fallback_mode) {
+            temp = NAN;
+            hum = NAN;
+            lux = NAN;
+        }
         terr->state.temperature_c = temp;
         terr->state.humidity_pct = hum;
         terr->state.light_lux = lux;

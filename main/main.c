@@ -343,6 +343,19 @@ static void menu_btn_real_cb(lv_event_t *e) {
       lv_obj_center(mbox);
       return;
     }
+    if (err != ESP_OK) {
+      lv_obj_t *mbox = lv_msgbox_create(NULL);
+      lv_msgbox_add_title(mbox, "Erreur");
+      char msg[96];
+      snprintf(msg,
+               sizeof(msg),
+               "Initialisation capteurs échouée (%s)",
+               esp_err_to_name(err));
+      lv_msgbox_add_text(mbox, msg);
+      lv_msgbox_add_close_button(mbox);
+      lv_obj_center(mbox);
+      return;
+    }
     err = reptile_actuators_init();
     if (err == ESP_ERR_NOT_FOUND) {
       sensors_deinit();
@@ -353,8 +366,31 @@ static void menu_btn_real_cb(lv_event_t *e) {
       lv_obj_center(mbox);
       return;
     }
+    if (err != ESP_OK) {
+      sensors_deinit();
+      lv_obj_t *mbox = lv_msgbox_create(NULL);
+      lv_msgbox_add_title(mbox, "Erreur");
+      char msg[96];
+      snprintf(msg,
+               sizeof(msg),
+               "Initialisation actionneurs échouée (%s)",
+               esp_err_to_name(err));
+      lv_msgbox_add_text(mbox, msg);
+      lv_msgbox_add_close_button(mbox);
+      lv_obj_center(mbox);
+      return;
+    }
     save_last_mode(APP_MODE_REAL);
     reptile_real_start(panel_handle, tp_handle);
+    if (sensors_is_using_simulation_fallback()) {
+      lv_obj_t *warn = lv_msgbox_create(NULL);
+      lv_msgbox_add_title(warn, "Attention");
+      lv_msgbox_add_text(warn,
+                         "Aucun capteur physique détecté.\n"
+                         "Lecture en mode simulation.");
+      lv_msgbox_add_close_button(warn);
+      lv_obj_center(warn);
+    }
   }
 }
 
