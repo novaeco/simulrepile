@@ -20,10 +20,48 @@
 #include <stddef.h>
 
 /* Pin Definitions */
-#define LED_GPIO_PIN     GPIO_NUM_6  /* GPIO pin connected to the LED */
-#define SERVO_FEED_PIN   GPIO_NUM_17 /* Servo control pin for feeding */
-#define WATER_PUMP_PIN   GPIO_NUM_18 /* Pump control pin for watering */
-#define HEAT_RES_PIN     GPIO_NUM_19 /* Heating resistor control pin */
+#define LED_GPIO_PIN     GPIO_NUM_6   /* GPIO pin connected to the LED */
+#define SERVO_FEED_PIN   GPIO_NUM_NC  /* Servo feed driven via CH422G EXIO */
+#define WATER_PUMP_PIN   GPIO_NUM_NC  /* Pump output handled by CH422G EXIO */
+#define HEAT_RES_PIN     GPIO_NUM_NC  /* Heating output handled by CH422G EXIO */
+
+#ifndef SERVO_FEED_EXIO
+#define SERVO_FEED_EXIO  5            /* CH422G EXIO line energising the feeder */
+#endif
+
+#ifndef WATER_PUMP_EXIO
+#define WATER_PUMP_EXIO  6            /* CH422G EXIO line controlling the pump */
+#endif
+
+#ifndef HEAT_RES_EXIO
+#define HEAT_RES_EXIO    7            /* CH422G EXIO line controlling the heater */
+#endif
+
+#if SERVO_FEED_EXIO < 0 || SERVO_FEED_EXIO > 8
+#error "SERVO_FEED_EXIO must be within 0..8 (0 disables the feeder output)"
+#endif
+#if WATER_PUMP_EXIO < 1 || WATER_PUMP_EXIO > 8
+#error "WATER_PUMP_EXIO must be within 1..8"
+#endif
+#if HEAT_RES_EXIO < 1 || HEAT_RES_EXIO > 8
+#error "HEAT_RES_EXIO must be within 1..8"
+#endif
+#if SERVO_FEED_EXIO > 0 && SERVO_FEED_EXIO == WATER_PUMP_EXIO
+#error "SERVO_FEED_EXIO conflicts with WATER_PUMP_EXIO"
+#endif
+#if SERVO_FEED_EXIO > 0 && SERVO_FEED_EXIO == HEAT_RES_EXIO
+#error "SERVO_FEED_EXIO conflicts with HEAT_RES_EXIO"
+#endif
+#if WATER_PUMP_EXIO == HEAT_RES_EXIO
+#error "WATER_PUMP_EXIO conflicts with HEAT_RES_EXIO"
+#endif
+#ifdef CONFIG_CH422G_EXIO_SD_CS
+#if CONFIG_CH422G_EXIO_SD_CS == WATER_PUMP_EXIO || \
+    CONFIG_CH422G_EXIO_SD_CS == HEAT_RES_EXIO || \
+    (SERVO_FEED_EXIO > 0 && CONFIG_CH422G_EXIO_SD_CS == SERVO_FEED_EXIO)
+#error "Actuator EXIO lines conflict with SD card CS line"
+#endif
+#endif
 
 /* Default pulse widths (in milliseconds) applied to monostable actuators */
 #define REPTILE_GPIO_HEAT_PULSE_MS 5000u
