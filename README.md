@@ -167,7 +167,9 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 - `CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS` : active les résistances internes de
   tirage pour consolider les pull-ups externes sur SDA/SCL.
 - `CONFIG_CH422G_I2C_ADDRESS` / `CONFIG_CH422G_EXIO_SD_CS` : adresse 7 bits de
-  l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD.
+  l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD. Le
+  firmware scanne automatiquement la plage 0x20–0x23 puis l'adresse configurée
+  afin de tenir compte des straps A0/A1 ou d'un module de rechange.
 - `CONFIG_STORAGE_SD_USE_GPIO_CS` + `CONFIG_STORAGE_SD_GPIO_CS_NUM` : bypass du
   CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
 - `CONFIG_STORAGE_SD_GPIO_FALLBACK` : bascule automatiquement la CS sur le GPIO
@@ -193,6 +195,18 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 Une procédure complète de diagnostic (mesures matérielles, réglages `menuconfig`,
 recâblage du fallback et messages attendus dans `idf.py monitor`) est disponible
 dans [`docs/troubleshooting/ch422g.md`](docs/troubleshooting/ch422g.md).
+
+Pour isoler un défaut matériel, un firmware minimal d'analyse I²C est fourni
+dans `tools/i2c_scanner`. Depuis ce dossier :
+
+```bash
+idf.py set-target esp32s3
+idf.py -p COM9 build flash monitor
+```
+
+Le scanner journalise en continu l'état logique de SDA/SCL, indique les adresses
+détectées sur le bus et surligne explicitement la présence du CH422G entre
+0x20 et 0x23.
 
 ## Menu de démarrage et modes d'exécution
 Au reset, le firmware présente un tableau de bord structuré : en-tête flex affichant le logo, l'heure

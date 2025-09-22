@@ -27,6 +27,17 @@ extern "C" {
 esp_err_t ch422g_init(void);
 
 /**
+ * @brief Scan a range of 7-bit addresses looking for a CH422G acknowledgement.
+ *
+ * @param start_addr Inclusive start of the range (0x08–0x77).
+ * @param end_addr   Inclusive end of the range.
+ * @param out_addr   Optional pointer that will receive the first responding address.
+ *
+ * @return ESP_OK when at least one address acknowledged, ESP_ERR_NOT_FOUND otherwise.
+ */
+esp_err_t ch422g_scan(uint8_t start_addr, uint8_t end_addr, uint8_t *out_addr);
+
+/**
  * @brief Update a single EXIO output level.
  *
  * @param exio_index Index in the range [1,8] matching the EXIO number printed on the silkscreen.
@@ -38,6 +49,11 @@ esp_err_t ch422g_exio_set(uint8_t exio_index, bool level);
  * @brief Read the last written shadow register.
  */
 uint8_t ch422g_exio_shadow_get(void);
+
+/**
+ * @brief Return the runtime-detected 7-bit I2C address of the expander.
+ */
+uint8_t ch422g_get_address(void);
 
 #ifdef __cplusplus
 }

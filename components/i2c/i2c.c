@@ -406,3 +406,72 @@ esp_err_t DEV_I2C_Read_Nbyte(i2c_master_dev_handle_t dev_handle, uint8_t Cmd, ui
     }
     return ret;
 }
+
+esp_err_t DEV_I2C_Scan(uint8_t start_addr, uint8_t end_addr, uint8_t *buffer, size_t buffer_len, size_t *found_count)
+{
+    if (start_addr > end_addr) {
+        uint8_t tmp = start_addr;
+        start_addr = end_addr;
+        end_addr = tmp;
+    }
+    if (buffer == NULL && buffer_len > 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    DEV_I2C_Port port = DEV_I2C_Init();
+    if (port.bus == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t count = 0;
+    esp_err_t last_err = ESP_ERR_NOT_FOUND;
+    for (uint16_t addr = start_addr; addr <= end_addr; ++addr) {
+        if (addr < 0x08 || addr > 0x77) {
+            continue;
+        }
+
+        esp_err_t ret = i2c_master_probe(port.bus, addr, 50);
+        if (ret == ESP_OK) {
+            if (buffer != NULL && count < buffer_len) {
+                buffer[count] = (uint8_t)addr;
+            }
+            count++;
+        } else if (ret == ESP_ERR_INVALID_STATE || ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG,
+                     "I2C scan: bus error while probing 0x%02X (%s). Attempting recovery.",
+                     (unsigned)addr, esp_err_to_name(ret));
+            esp_err_t rec_ret = DEV_I2C_Bus_Recover();
+            if (rec_ret != ESP_OK) {
+                return rec_ret;
+            }
+            port = DEV_I2C_Init();
+            if (port.bus == NULL) {
+                return ESP_ERR_INVALID_STATE;
+            }
+            ret = i2c_master_probe(port.bus, addr, 50);
+            if (ret == ESP_OK) {
+                if (buffer != NULL && count < buffer_len) {
+                    buffer[count] = (uint8_t)addr;
+                }
+                count++;
+            } else {
+                last_err = ret;
+            }
+        } else {
+            last_err = ret;
+        }
+    }
+
+    if (found_count != NULL) {
+        *found_count = count;
+    }
+
+    if (count == 0) {
+        if (last_err == ESP_ERR_NOT_FOUND || last_err == ESP_OK) {
+            return ESP_ERR_NOT_FOUND;
+        }
+        return last_err;
+    }
+
+    return ESP_OK;
+}
