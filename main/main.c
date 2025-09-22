@@ -116,33 +116,22 @@ static void sd_cs_selftest(void) {
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
     s_sd_cs_ready = true;
-    bool uses_direct_cs = false;
-#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-    uses_direct_cs = sd_uses_direct_cs();
-    if (uses_direct_cs) {
-      ESP_LOGI(TAG,
-               "Ligne CS microSD pilotée directement par GPIO%d.",
-               CONFIG_STORAGE_SD_GPIO_CS_NUM);
-#if !CONFIG_STORAGE_SD_USE_GPIO_CS
-      ESP_LOGW(TAG,
-               "Fallback GPIO activé : CH422G indisponible au boot. Les accès SD "
-               "utiliseront la liaison directe jusqu'à réparation.");
-#endif
-    } else {
-#ifdef CONFIG_CH422G_EXIO_SD_CS
-      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G EXIO%d.",
-               CONFIG_CH422G_EXIO_SD_CS);
+#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+    ESP_LOGI(TAG,
+             "Ligne CS microSD pilotée directement par GPIO%d.",
+             CONFIG_SD_FALLBACK_CS_GPIO);
 #else
-      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G.");
+#ifdef CONFIG_CH422G_EXIO_SD_CS
+    ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G EXIO%d.",
+             CONFIG_CH422G_EXIO_SD_CS);
+#else
+    ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G.");
 #endif
-    }
+    ESP_LOGI(TAG,
+             "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
+             ch422g_get_address(), CONFIG_I2C_MASTER_SDA_GPIO,
+             CONFIG_I2C_MASTER_SCL_GPIO);
 #endif
-    if (!uses_direct_cs) {
-      ESP_LOGI(TAG,
-               "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
-               ch422g_get_address(), CONFIG_I2C_MASTER_SDA_GPIO,
-               CONFIG_I2C_MASTER_SCL_GPIO);
-    }
     menu_header_update();
     return;
   }
@@ -154,20 +143,16 @@ static void sd_cs_selftest(void) {
   ESP_LOGW(TAG, "Bus levels: SDA=%d SCL=%d (0=bas, 1=haut).", sda_level,
            scl_level);
   if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
+#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+    ESP_LOGE(TAG,
+             "GPIO%d ne répond pas. Vérifiez le câblage direct de la CS microSD et "
+             "la configuration menuconfig.",
+             CONFIG_SD_FALLBACK_CS_GPIO);
+#else
     ESP_LOGE(TAG,
              "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
              "SCL=GPIO%d et les résistances de tirage 2.2–4.7 kΩ.",
              CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
-#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-  } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE &&
-             sd_fallback_due_to_ch422g()) {
-    ESP_LOGW(TAG,
-             "Fallback CS direct GPIO%d actif sans liaison détectée. Reliez EXIO%u "
-             "à GPIO%d puis activez Component config → Storage / SD card → "
-             "Automatically mount the fallback CS pour autoriser le montage "
-             "automatique.",
-             CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-             CONFIG_STORAGE_SD_GPIO_CS_NUM);
 #endif
   } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE) {
     ESP_LOGE(TAG,
@@ -175,18 +160,12 @@ static void sd_cs_selftest(void) {
              "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
   }
 
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-  ESP_LOGW(TAG, "Vérifiez la configuration GPIO CS (%d) et l'état du câblage.",
-           CONFIG_STORAGE_SD_GPIO_CS_NUM);
-#elif CONFIG_STORAGE_SD_GPIO_FALLBACK
   ESP_LOGW(TAG,
-           "Fallback GPIO%d configuré : connectez le fil CS direct ou rétablissez "
-           "le CH422G pour retrouver la microSD.",
-           CONFIG_STORAGE_SD_GPIO_CS_NUM);
+           "Le firmware continuera sans carte SD tant que la ligne CS ne "
+#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+           "répond pas ou que le câblage direct n'est pas réparé.");
 #else
-  ESP_LOGW(TAG,
-           "Le firmware continuera sans carte SD tant que le bus CH422G ne "
-           "répond pas ou qu'aucun fallback GPIO n'est configuré.");
+           "répond pas ou qu'un dépannage CH422G est nécessaire.");
 #endif
   menu_header_update();
 }
@@ -232,28 +211,8 @@ static void menu_header_update(void) {
   if (menu_header_sd_label) {
     char sd_text[96];
     lv_color_t sd_color = lv_color_hex(0x2F4F43);
-    const char *cs_hint = "";
-    bool forced_fallback = false;
-#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-    forced_fallback = sd_fallback_due_to_ch422g();
-    if (sd_uses_direct_cs()) {
-      if (forced_fallback) {
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-        cs_hint = " \u00b7 GPIO (!)";
-#else
-        cs_hint = " \u00b7 GPIO fallback (!)";
-#endif
-      } else {
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-        cs_hint = " \u00b7 GPIO";
-#else
-        cs_hint = " \u00b7 GPIO fallback";
-#endif
-      }
-    } else {
-      cs_hint = forced_fallback ? " \u00b7 CH422G (!)" : " \u00b7 CH422G";
-    }
-#endif
+    const char *cs_hint = sd_uses_direct_cs() ? " \u00b7 GPIO"
+                                              : " \u00b7 CH422G";
     if (!s_sd_cs_ready) {
       const char *err = (s_sd_cs_last_err != ESP_OK)
                             ? esp_err_to_name(s_sd_cs_last_err)
@@ -264,13 +223,11 @@ static void menu_header_update(void) {
     } else if (sd_is_mounted()) {
       snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD prête%s",
                cs_hint);
-      sd_color = forced_fallback ? lv_color_hex(0xB27B16)
-                                 : lv_color_hex(0x2F4F43);
+      sd_color = lv_color_hex(0x2F4F43);
     } else {
       snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD en attente%s",
                cs_hint);
-      sd_color = forced_fallback ? lv_color_hex(0xB27B16)
-                                 : lv_color_hex(0xA46A2D);
+      sd_color = lv_color_hex(0xA46A2D);
     }
     lv_label_set_text(menu_header_sd_label, sd_text);
     lv_obj_set_style_text_color(menu_header_sd_label, sd_color, 0);
@@ -477,39 +434,20 @@ static void wait_for_sd_card(void) {
   }
 
   if (!s_sd_cs_ready) {
-#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-    if (sd_fallback_due_to_ch422g()) {
-      ESP_LOGE(TAG,
-               "Attente SD annulée : fallback GPIO%d inactif tant que le pont EXIO%u→GPIO%d "
-               "n'est pas câblé (%s).",
-               CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-               CONFIG_STORAGE_SD_GPIO_CS_NUM, esp_err_to_name(s_sd_cs_last_err));
-      char screen_msg[192];
-      snprintf(screen_msg, sizeof(screen_msg),
-               "Fallback GPIO%d requis\nRelier EXIO%u→GPIO%d puis activer\n"
-               "l'auto-mount dans menuconfig.",
-               CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-               CONFIG_STORAGE_SD_GPIO_CS_NUM);
-      show_error_screen(screen_msg);
-      if (lvgl_port_lock(-1)) {
-        char hint[192];
-        snprintf(hint, sizeof(hint),
-                 "CS direct sur GPIO%d inactif. Relier EXIO%u→GPIO%d et activer"
-                 " l'option d'auto-mount du fallback.",
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
-        menu_hint_append(hint);
-        lvgl_port_unlock();
-      }
-      menu_header_update();
-      return;
-    }
-#endif
     ESP_LOGE(TAG,
              "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
-             "CH422G ou activez le fallback GPIO dans menuconfig.",
+#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+             "direct (GPIO%d) ou vérifiez le câblage.",
+             esp_err_to_name(s_sd_cs_last_err), CONFIG_SD_FALLBACK_CS_GPIO);
+#else
+             "CH422G.",
              esp_err_to_name(s_sd_cs_last_err));
+#endif
+#if CONFIG_SD_USE_FALLBACK_GPIO_CS
+    show_error_screen("CS microSD directe indisponible\nVérifier le câblage GPIO");
+#else
     show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
+#endif
     menu_header_update();
     return;
   }
@@ -549,38 +487,6 @@ static void wait_for_sd_card(void) {
     vTaskDelay(pdMS_TO_TICKS(500));
     if (++attempts >= max_attempts) {
       restart_required = true;
-#if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-      if (sd_fallback_due_to_ch422g()) {
-        restart_required = false;
-        ESP_LOGE(TAG,
-                 "Fallback GPIO%d actif sans câblage détecté. Relier EXIO%u (SD_CS) à "
-                 "GPIO%d puis activer Component config → Storage / SD card → "
-                 "Automatically mount the fallback CS, ou laisser l'option "
-                 "désactivée pour éviter les WDT.",
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
-        s_sd_cs_ready = false;
-        s_sd_cs_last_err = err;
-        if (lvgl_port_lock(-1)) {
-          char hint[192];
-          snprintf(hint, sizeof(hint),
-                   "Fallback CS direct sur GPIO%d.\nRelier EXIO%u→GPIO%d puis "
-                   "activer l'option d'auto-mount dans menuconfig.",
-                   CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-                   CONFIG_STORAGE_SD_GPIO_CS_NUM);
-          menu_hint_append(hint);
-          lvgl_port_unlock();
-        }
-        char screen_msg[192];
-        snprintf(screen_msg, sizeof(screen_msg),
-                 "Fallback GPIO%d actif\nCâbler EXIO%u→GPIO%d puis activer\n"
-                 "l'auto-mount dans menuconfig.",
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
-                 CONFIG_STORAGE_SD_GPIO_CS_NUM);
-        show_error_screen(screen_msg);
-        break;
-      }
-#endif
       show_error_screen("Carte SD absente - redémarrage");
       vTaskDelay(pdMS_TO_TICKS(2000));
       break;
@@ -712,6 +618,7 @@ void app_main() {
 
   // Initialize SD card at boot for early log availability
   sd_cs_selftest();
+#if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
     esp_err_t sd_ret = sd_mount(&s_sd_card);
     if (sd_ret == ESP_OK) {
@@ -725,6 +632,13 @@ void app_main() {
              "Initial SD init skipped: autotest CS échoué (%s)",
              esp_err_to_name(s_sd_cs_last_err));
   }
+#else
+  if (!s_sd_cs_ready) {
+    ESP_LOGW(TAG,
+             "Initial SD init skipped: autotest CS échoué (%s)",
+             esp_err_to_name(s_sd_cs_last_err));
+  }
+#endif
 
   // Initialize the GT911 touch screen controller
   esp_err_t tp_ret = touch_gt911_init(&tp_handle);

@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "esp_err.h"
+#include "sdkconfig.h"
 #include "sdmmc_cmd.h"
 
 #ifdef __cplusplus
@@ -11,7 +12,11 @@ extern "C" {
 #endif
 
 /**\n * @brief Default mount point used by the storage driver.\n */
+#ifdef CONFIG_SD_MOUNT_POINT
+#define SD_MOUNT_POINT CONFIG_SD_MOUNT_POINT
+#else
 #define SD_MOUNT_POINT "/sdcard"
+#endif
 
 /* Backwards compatibility with legacy modules that relied on the old macro */
 #ifndef MOUNT_POINT
