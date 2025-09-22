@@ -235,14 +235,14 @@ static void menu_header_update(void) {
     const char *cs_hint = "";
     bool forced_fallback = false;
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
+    forced_fallback = sd_fallback_due_to_ch422g();
     if (sd_uses_direct_cs()) {
-      if (sd_fallback_due_to_ch422g()) {
+      if (forced_fallback) {
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
         cs_hint = " \u00b7 GPIO (!)";
 #else
         cs_hint = " \u00b7 GPIO fallback (!)";
 #endif
-        forced_fallback = true;
       } else {
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
         cs_hint = " \u00b7 GPIO";
@@ -251,7 +251,7 @@ static void menu_header_update(void) {
 #endif
       }
     } else {
-      cs_hint = " \u00b7 CH422G";
+      cs_hint = forced_fallback ? " \u00b7 CH422G (!)" : " \u00b7 CH422G";
     }
 #endif
     if (!s_sd_cs_ready) {
@@ -442,7 +442,7 @@ static void wait_for_sd_card(void) {
 
   if (!s_sd_cs_ready) {
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-    if (sd_fallback_due_to_ch422g() && sd_uses_direct_cs()) {
+    if (sd_fallback_due_to_ch422g()) {
       ESP_LOGE(TAG,
                "Attente SD annulée : fallback GPIO%d inactif tant que le pont EXIO%u→GPIO%d "
                "n'est pas câblé (%s).",
@@ -514,7 +514,7 @@ static void wait_for_sd_card(void) {
     if (++attempts >= max_attempts) {
       restart_required = true;
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
-      if (sd_uses_direct_cs() && sd_fallback_due_to_ch422g()) {
+      if (sd_fallback_due_to_ch422g()) {
         restart_required = false;
         ESP_LOGE(TAG,
                  "Fallback GPIO%d actif sans câblage détecté. Relier EXIO%u (SD_CS) à "
