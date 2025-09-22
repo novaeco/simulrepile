@@ -1,44 +1,41 @@
 menu "Storage / SD card"
 
-config STORAGE_SD_USE_GPIO_CS
-    bool "Use direct GPIO for SD card CS instead of CH422G"
-    default n
-    help
-        Enable this option only when the SD card chip-select line is wired
-        directly to an ESP32-S3 GPIO. The driver will never touch the CH422G
-        expander when this mode is selected.
-
-config STORAGE_SD_GPIO_FALLBACK
-    bool "Allow automatic GPIO CS fallback when CH422G probe fails"
-    depends on !STORAGE_SD_USE_GPIO_CS
+config SD_AUTOMOUNT
+    bool "Automatically mount the SD card at boot"
     default y
     help
-        When enabled, the storage driver will automatically configure the
-        fallback GPIO defined below if the CH422G expander cannot be reached at
-        boot. This is useful when the expander is absent, temporarily
-        miswired or when the firmware needs to continue operating while the
-        bus is repaired.
+        Lorsque cette option est activée, l'application tente de monter la
+        carte microSD au démarrage afin de rendre les journaux et profils
+        LVGL immédiatement disponibles. Désactiver l'option pour reporter le
+        montage à une étape ultérieure de l'initialisation.
 
-config STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
-    bool "Automatically mount the SD card when the fallback CS is engaged"
-    depends on STORAGE_SD_GPIO_FALLBACK
+config SD_MOUNT_POINT
+    string "Mount point for the SD card"
+    default "/sdcard"
+    help
+        Point de montage FAT exposé dans le VFS une fois la carte initialisée.
+        Adapter si l'application doit publier le volume sous un répertoire
+        différent.
+
+config SD_USE_FALLBACK_GPIO_CS
+    bool "Bypass CH422G and drive SD card CS from an ESP32-S3 GPIO"
     default n
     help
-        Enable this option only when the CH422G expander is permanently
-        unavailable *and* the CS line has been hard-wired from EXIO to the
-        fallback GPIO. Leaving this disabled keeps the firmware from blocking
-        inside esp_vfs_fat_sdspi_mount() when no working CS path exists,
-        preventing watchdog resets. Once the wiring is in place, enable the
-        option to let the firmware attempt the direct-GPIO mount automatically.
+        Active un chemin de repli matériel pour les installations où
+        l'extenseur CH422G est absent ou irréparable. La ligne chip-select
+        microSD doit alors être câblée en permanence vers la broche GPIO
+        indiquée ci-dessous (EXIO4→GPIO34 sur la carte Waveshare 7B).
 
-config STORAGE_SD_GPIO_CS_NUM
-    int "GPIO number for the SD card CS fallback"
-    depends on STORAGE_SD_USE_GPIO_CS || STORAGE_SD_GPIO_FALLBACK
+config SD_FALLBACK_CS_GPIO
+    int "Fallback GPIO number controlling SD card CS"
+    depends on SD_USE_FALLBACK_GPIO_CS
     range 0 48
     default 34
     help
-        Physical GPIO used to drive the SD card chip-select when bypassing the
-        CH422G expander. Waveshare spare headers expose GPIO34 which is safe to
-        use without conflicting with the RGB data bus.
+        Numéro de GPIO employé pour piloter la ligne CS du lecteur microSD
+        lorsque le CH422G est contourné. Sur la Waveshare ESP32-S3 Touch LCD
+        7B, la broche 34 est accessible sur le connecteur d'extension et ne
+        rentre pas en conflit avec le bus RGB.
 
 endmenu
+

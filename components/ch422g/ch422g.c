@@ -15,13 +15,14 @@
 #define CH422G_XFER_TIMEOUT_MS 50
 #define CH422G_PROBE_TIMEOUT_MS 100
 #define CH422G_SCAN_MIN_ADDR 0x20u
-#define CH422G_SCAN_MAX_ADDR 0x23u
+#define CH422G_SCAN_MAX_ADDR 0x27u
 #define CH422G_RETRY_DELAY_MS 12
 
 static i2c_master_dev_handle_t s_dev = NULL;
 static uint8_t s_addr = CH422G_DEFAULT_ADDR;
 static uint8_t s_shadow = 0xFFu;
 static bool s_diag_logged = false;
+static bool s_input_mode_warned = false;
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -220,6 +221,25 @@ static esp_err_t ch422g_write_shadow(void)
     return i2c_master_transmit(s_dev, payload, sizeof(payload), CH422G_XFER_TIMEOUT_MS);
 }
 
+esp_err_t ch422g_pin_mode(uint8_t exio_index, ch422g_pin_mode_t mode)
+{
+    ESP_RETURN_ON_FALSE(exio_index >= 1u && exio_index <= 8u, ESP_ERR_INVALID_ARG, TAG,
+                        "invalid EXIO%u", (unsigned)exio_index);
+
+    if (mode != CH422G_PIN_MODE_OUTPUT) {
+        if (!s_input_mode_warned) {
+            ESP_LOGW(TAG,
+                     "EXIO%u requested in input mode but the current driver only supports "
+                     "push-pull outputs. Ignoring request.",
+                     (unsigned)exio_index);
+            s_input_mode_warned = true;
+        }
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    return ch422g_init();
+}
+
 uint8_t ch422g_exio_shadow_get(void)
 {
     return s_shadow;
@@ -240,10 +260,11 @@ esp_err_t ch422g_init(void)
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
     uint8_t detected_addr = CH422G_DEFAULT_ADDR;
-    esp_err_t ret = ch422g_scan(CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, &detected_addr);
-    if (ret == ESP_ERR_NOT_FOUND &&
-        (CH422G_DEFAULT_ADDR < CH422G_SCAN_MIN_ADDR || CH422G_DEFAULT_ADDR > CH422G_SCAN_MAX_ADDR)) {
-        ret = ch422g_scan(CH422G_DEFAULT_ADDR, CH422G_DEFAULT_ADDR, &detected_addr);
+    esp_err_t ret = ch422g_probe_address(CH422G_DEFAULT_ADDR);
+    if (ret == ESP_OK) {
+        detected_addr = CH422G_DEFAULT_ADDR;
+    } else {
+        ret = ch422g_scan(CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, &detected_addr);
     }
 
     if (ret != ESP_OK) {
@@ -264,7 +285,7 @@ esp_err_t ch422g_init(void)
     if (s_addr != CH422G_DEFAULT_ADDR) {
         ESP_LOGW(TAG,
                  "CH422G responded on 0x%02X instead of configured 0x%02X. Verify A0/A1 straps "
-                 "or update CONFIG_CH422G_I2C_ADDRESS.",
+                 "or update CONFIG_CH422G_I2C_ADDR.",
                  s_addr, CH422G_DEFAULT_ADDR);
     }
 
