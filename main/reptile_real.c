@@ -11,6 +11,8 @@
 #include "logging.h"
 #include "ui_theme.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 #include <ctype.h>
 #include <inttypes.h>
 #include <math.h>
@@ -29,6 +31,8 @@
 #define COLOR_STATUS_OK lv_color_hex(0x2E7D32)
 #define COLOR_STATUS_MANUAL lv_color_hex(0xFF8F00)
 #define COLOR_STATUS_ALARM lv_color_hex(0xC62828)
+
+static const char *TAG = "reptile_real";
 
 typedef struct terrarium_ui {
     size_t index;
@@ -86,6 +90,7 @@ static void fill_chart_buffers(lv_coord_t *temp_buffer,
                                size_t buffer_len,
                                size_t start_index,
                                size_t sample_count);
+static bool ensure_history_buffer(void);
 
 static lv_obj_t *screen;
 static lv_obj_t *feed_status_label;
@@ -101,7 +106,8 @@ static lv_obj_t *manual_toast;
 static lv_timer_t *manual_toast_timer;
 
 static terrarium_ui_t s_ui[REPTILE_ENV_MAX_TERRARIUMS];
-static reptile_env_history_entry_t s_history_buf[REPTILE_ENV_HISTORY_LENGTH];
+static reptile_env_history_entry_t *s_history_buf;
+static size_t s_history_capacity;
 static reptile_env_terrarium_state_t s_last_states[REPTILE_ENV_MAX_TERRARIUMS];
 static bool s_state_valid[REPTILE_ENV_MAX_TERRARIUMS];
 
@@ -607,9 +613,59 @@ static void fill_chart_buffers(lv_coord_t *temp_buffer,
     }
 }
 
+static bool ensure_history_buffer(void)
+{
+    if (s_history_buf) {
+        return true;
+    }
+
+    const size_t desired = REPTILE_ENV_HISTORY_LENGTH;
+    const size_t min_capacity = CHART_POINT_COUNT > SPARKLINE_POINT_COUNT
+                                    ? CHART_POINT_COUNT
+                                    : SPARKLINE_POINT_COUNT;
+    static const uint32_t caps_priority[] = {
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT,
+    };
+
+    size_t entries = desired;
+    while (entries >= min_capacity) {
+        for (size_t i = 0; i < sizeof(caps_priority) / sizeof(caps_priority[0]); ++i) {
+            reptile_env_history_entry_t *buf = heap_caps_calloc(entries, sizeof(*buf), caps_priority[i]);
+            if (buf) {
+                s_history_buf = buf;
+                s_history_capacity = entries;
+                if (entries < desired) {
+                    ESP_LOGW(TAG,
+                             "Tampon historique réduit à %zu échantillons (demande %zu)",
+                             entries,
+                             desired);
+                }
+                return true;
+            }
+        }
+        if (entries == min_capacity) {
+            break;
+        }
+        entries /= 2;
+        if (entries < min_capacity) {
+            entries = min_capacity;
+        }
+    }
+
+    ESP_LOGE(TAG,
+             "Allocation du tampon historique impossible (%zu échantillons)",
+             (size_t)REPTILE_ENV_HISTORY_LENGTH);
+    return false;
+}
+
 static void update_chart(terrarium_ui_t *ui, size_t index)
 {
-    size_t count = reptile_env_get_history(index, s_history_buf, REPTILE_ENV_HISTORY_LENGTH);
+    if (!s_history_buf && !ensure_history_buffer()) {
+        return;
+    }
+    size_t capacity = s_history_capacity ? s_history_capacity : REPTILE_ENV_HISTORY_LENGTH;
+    size_t count = reptile_env_get_history(index, s_history_buf, capacity);
     size_t start = 0;
     if (count > CHART_POINT_COUNT) {
         start = count - CHART_POINT_COUNT;
@@ -1068,6 +1124,10 @@ void reptile_real_start(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t tp)
 {
     (void)panel;
     (void)tp;
+
+    if (!ensure_history_buffer()) {
+        ESP_LOGE(TAG, "Historique non disponible: mémoire insuffisante");
+    }
 
     if (!lvgl_port_lock(-1)) {
         return;
