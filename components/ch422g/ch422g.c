@@ -1,5 +1,8 @@
 #include "ch422g.h"
 
+#include <stdio.h>
+
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
@@ -18,6 +21,101 @@
 static i2c_master_dev_handle_t s_dev = NULL;
 static uint8_t s_addr = CH422G_DEFAULT_ADDR;
 static uint8_t s_shadow = 0xFFu;
+static bool s_diag_logged = false;
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#endif
+
+#define GT911_ADDR_PRIMARY 0x5Du
+#define GT911_ADDR_BACKUP 0x14u
+
+static void ch422g_log_bus_snapshot(void)
+{
+    uint8_t detected[16] = {0};
+    size_t found = 0;
+    esp_err_t scan_ret = DEV_I2C_Scan(0x08u, 0x77u, detected, ARRAY_SIZE(detected), &found);
+
+    if (scan_ret == ESP_OK || scan_ret == ESP_ERR_NOT_FOUND) {
+        int sda_level = gpio_get_level(CONFIG_I2C_MASTER_SDA_GPIO);
+        int scl_level = gpio_get_level(CONFIG_I2C_MASTER_SCL_GPIO);
+
+        if (found == 0) {
+            ESP_LOGW(TAG,
+                     "I2C scan (0x08-0x77): aucun périphérique n'a répondu. SDA=%d SCL=%d.",
+                     sda_level, scl_level);
+            return;
+        }
+
+        size_t limit = found;
+        if (limit > ARRAY_SIZE(detected)) {
+            limit = ARRAY_SIZE(detected);
+        }
+
+        char list[ARRAY_SIZE(detected) * 6];
+        list[0] = '\0';
+        size_t offset = 0;
+        bool has_gt911 = false;
+        bool has_ch422g_candidate = false;
+
+        for (size_t i = 0; i < limit; ++i) {
+            uint8_t addr = detected[i];
+            if (offset < sizeof(list)) {
+                int written = snprintf(list + offset, sizeof(list) - offset, "0x%02X%s", addr,
+                                       (i + 1 < limit) ? " " : "");
+                if (written < 0) {
+                    list[0] = '\0';
+                    break;
+                }
+                if ((size_t)written >= sizeof(list) - offset) {
+                    offset = sizeof(list) - 1;
+                    break;
+                } else {
+                    offset += (size_t)written;
+                }
+            }
+
+            if (addr >= CH422G_SCAN_MIN_ADDR && addr <= CH422G_SCAN_MAX_ADDR) {
+                has_ch422g_candidate = true;
+            }
+            if (addr == GT911_ADDR_PRIMARY || addr == GT911_ADDR_BACKUP) {
+                has_gt911 = true;
+            }
+        }
+
+        if (limit < found && offset < sizeof(list)) {
+            (void)snprintf(list + offset, sizeof(list) - offset, " …");
+        }
+
+        ESP_LOGW(TAG,
+                 "I2C scan (0x08-0x77): %zu périphérique(s) répondent (%s).",
+                 found, list[0] ? list : "-");
+        ESP_LOGW(TAG,
+                 "Niveaux du bus après scan: SDA=%d SCL=%d (0=bas, 1=haut).",
+                 sda_level, scl_level);
+
+        if (!has_ch422g_candidate) {
+            ESP_LOGW(TAG,
+                     "Aucun accusé de réception sur la plage CH422G 0x%02X–0x%02X.",
+                     CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR);
+        }
+
+        if (has_gt911) {
+            ESP_LOGW(TAG,
+                     "Le contrôleur tactile GT911 reste visible (0x%02X/0x%02X) : le bus est actif, la panne vise l'extenseur.",
+                     GT911_ADDR_PRIMARY, GT911_ADDR_BACKUP);
+        }
+
+        if (found > limit) {
+            ESP_LOGW(TAG,
+                     "Liste tronquée aux %zu premières adresses sur %zu détectées.",
+                     limit, found);
+        }
+        return;
+    }
+
+    ESP_LOGW(TAG, "I2C scan diagnostic impossible: %s", esp_err_to_name(scan_ret));
+}
 
 static bool ch422g_scheduler_started(void)
 {
@@ -154,6 +252,10 @@ esp_err_t ch422g_init(void)
                  "Check 3V3 supply, SDA=%d, SCL=%d and external pull-ups (2.2k–4.7kΩ).",
                  CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, CH422G_DEFAULT_ADDR,
                  esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+        if (!s_diag_logged) {
+            ch422g_log_bus_snapshot();
+            s_diag_logged = true;
+        }
         return ret;
     }
 
@@ -175,6 +277,7 @@ esp_err_t ch422g_init(void)
     ret = ch422g_write_shadow();
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "CH422G ready on 0x%02X", s_addr);
+        s_diag_logged = false;
     } else {
         ESP_LOGE(TAG, "Failed to initialise CH422G outputs: %s", esp_err_to_name(ret));
     }
