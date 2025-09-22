@@ -19,7 +19,7 @@
 #define CH422G_RETRY_DELAY_MS 12
 
 static i2c_master_dev_handle_t s_dev = NULL;
-static uint8_t s_addr = CH422G_DEFAULT_ADDR;
+static uint8_t s_addr = CH422G_I2C_ADDR_DEFAULT;
 static uint8_t s_shadow = 0xFFu;
 static bool s_diag_logged = false;
 static bool s_input_mode_warned = false;
@@ -259,10 +259,10 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
-    uint8_t detected_addr = CH422G_DEFAULT_ADDR;
-    esp_err_t ret = ch422g_probe_address(CH422G_DEFAULT_ADDR);
+    uint8_t detected_addr = CH422G_I2C_ADDR_DEFAULT;
+    esp_err_t ret = ch422g_probe_address(CH422G_I2C_ADDR_DEFAULT);
     if (ret == ESP_OK) {
-        detected_addr = CH422G_DEFAULT_ADDR;
+        detected_addr = CH422G_I2C_ADDR_DEFAULT;
     } else {
         ret = ch422g_scan(CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, &detected_addr);
     }
@@ -271,7 +271,7 @@ esp_err_t ch422g_init(void)
         ESP_LOGE(TAG,
                  "No ACK from CH422G between 0x%02X and 0x%02X (configured 0x%02X): %s. "
                  "Check 3V3 supply, SDA=%d, SCL=%d and external pull-ups (2.2k–4.7kΩ).",
-                 CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, CH422G_DEFAULT_ADDR,
+                 CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, CH422G_I2C_ADDR_DEFAULT,
                  esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
         if (!s_diag_logged) {
             ch422g_log_bus_snapshot();
@@ -282,11 +282,11 @@ esp_err_t ch422g_init(void)
 
     s_addr = detected_addr;
 
-    if (s_addr != CH422G_DEFAULT_ADDR) {
+    if (s_addr != CH422G_I2C_ADDR_DEFAULT) {
         ESP_LOGW(TAG,
                  "CH422G responded on 0x%02X instead of configured 0x%02X. Verify A0/A1 straps "
                  "or update CONFIG_CH422G_I2C_ADDR.",
-                 s_addr, CH422G_DEFAULT_ADDR);
+                 s_addr, CH422G_I2C_ADDR_DEFAULT);
     }
 
     ret = DEV_I2C_Set_Slave_Addr(&s_dev, s_addr);

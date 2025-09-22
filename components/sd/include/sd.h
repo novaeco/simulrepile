@@ -7,6 +7,26 @@
 #include "sdkconfig.h"
 #include "sdmmc_cmd.h"
 
+#ifndef CONFIG_SD_SPI_MOSI_IO
+#define CONFIG_SD_SPI_MOSI_IO 11
+#endif
+
+#ifndef CONFIG_SD_SPI_MISO_IO
+#define CONFIG_SD_SPI_MISO_IO 13
+#endif
+
+#ifndef CONFIG_SD_SPI_SCLK_IO
+#define CONFIG_SD_SPI_SCLK_IO 12
+#endif
+
+#ifndef CONFIG_SD_FALLBACK_CS_GPIO
+#define CONFIG_SD_FALLBACK_CS_GPIO 34
+#endif
+
+#ifndef CONFIG_SD_USE_FALLBACK_GPIO_CS
+#define CONFIG_SD_USE_FALLBACK_GPIO_CS 1
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

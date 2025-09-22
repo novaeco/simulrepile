@@ -37,15 +37,16 @@ static void gpio_sim_int(int32_t Pin, gpio_isr_t isr_handler)
 
 static void gpio_sim_write(uint16_t Pin, uint8_t Value)
 {
-    s_levels[Pin & 0xFF] = Value;
-    if (Pin == HEAT_RES_PIN) {
-        s_heater_state[0] = Value;
+    const uint8_t stored_level = Value ? 1u : 0u;
+    s_levels[Pin & 0xFF] = stored_level;
+    if ((int)Pin == HEAT_RES_PIN) {
+        s_heater_state[0] = (stored_level != 0);
     }
-    if (Pin == WATER_PUMP_PIN) {
-        s_pump_state[0] = Value;
+    if ((int)Pin == WATER_PUMP_PIN) {
+        s_pump_state[0] = (stored_level != 0);
     }
-    if (Pin == LED_GPIO_PIN) {
-        s_uv_state[0] = Value;
+    if ((int)Pin == LED_GPIO_PIN) {
+        s_uv_state[0] = (stored_level != 0);
     }
 }
 
