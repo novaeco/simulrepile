@@ -22,7 +22,7 @@
  */
 #define LVGL_PORT_TASK_MAX_DELAY_MS (500)    // The maximum delay of the LVGL timer task, in milliseconds
 #define LVGL_PORT_TASK_MIN_DELAY_MS (10)    // The minimum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_STACK_SIZE   (6 * 1024) // The stack size of the LVGL timer task, in bytes
+#define LVGL_PORT_TASK_STACK_SIZE   (12 * 1024) // FreeRTOS stack depth (words), ≈48 kB for Xtensa
 #define LVGL_PORT_TASK_PRIORITY     (2)        // The priority of the LVGL timer task
 #define LVGL_PORT_TASK_CORE         (-1)            // The core of the LVGL timer task,
 // `-1` means the don't specify the core
