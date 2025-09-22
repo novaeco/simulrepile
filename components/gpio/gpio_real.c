@@ -31,8 +31,8 @@ typedef struct {
 
 static const reptile_channel_hw_t s_hw_map[] = {
     {
-        .heater = {.bus = REPTILE_OUTPUT_GPIO, .active_high = true, .signal.gpio = HEAT_RES_PIN},
-        .pump = {.bus = REPTILE_OUTPUT_GPIO, .active_high = true, .signal.gpio = WATER_PUMP_PIN},
+        .heater = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = HEAT_RES_EXIO},
+        .pump = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = WATER_PUMP_EXIO},
         .uv = {.bus = REPTILE_OUTPUT_GPIO, .active_high = true, .signal.gpio = LED_GPIO_PIN},
     },
     {
@@ -41,6 +41,20 @@ static const reptile_channel_hw_t s_hw_map[] = {
         .uv = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = 3},
     },
 };
+
+#if SERVO_FEED_EXIO > 0
+static const reptile_output_t s_feed_output = {
+    .bus = REPTILE_OUTPUT_CH422,
+    .active_high = false,
+    .signal.exio = SERVO_FEED_EXIO,
+};
+#else
+static const reptile_output_t s_feed_output = {
+    .bus = REPTILE_OUTPUT_NONE,
+    .active_high = false,
+    .signal.exio = 0,
+};
+#endif
 
 static const size_t s_hw_channel_count = sizeof(s_hw_map) / sizeof(s_hw_map[0]);
 
@@ -165,10 +179,29 @@ static void gpio_real_feed(size_t channel)
         ESP_LOGW(TAG, "Feed actuator not mapped for terrarium %zu", channel);
         return;
     }
-    gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
-    gpio_real_write(SERVO_FEED_PIN, 1);
+    if (!actuator_available(&s_feed_output)) {
+        ESP_LOGW(TAG, "Feed actuator unavailable for terrarium %zu", channel);
+        return;
+    }
+
+    esp_err_t err = actuator_drive(&s_feed_output, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Failed to enable feeder channel %zu: %s",
+                 channel,
+                 esp_err_to_name(err));
+        return;
+    }
+
     vTaskDelay(pdMS_TO_TICKS(1000));
-    gpio_real_write(SERVO_FEED_PIN, 0);
+
+    err = actuator_drive(&s_feed_output, false);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Failed to disable feeder channel %zu: %s",
+                 channel,
+                 esp_err_to_name(err));
+    }
 }
 
 static void gpio_real_water(size_t channel)
@@ -228,10 +261,8 @@ static void gpio_real_uv(size_t channel, bool on)
 
 static esp_err_t gpio_real_init(void)
 {
-    gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
-    gpio_real_write(SERVO_FEED_PIN, 0);
-
-    bool need_ch422 = false;
+    bool need_ch422 = (actuator_available(&s_feed_output) &&
+                       s_feed_output.bus == REPTILE_OUTPUT_CH422);
     for (size_t i = 0; i < s_hw_channel_count; ++i) {
         const reptile_channel_hw_t *hw = &s_hw_map[i];
         const reptile_output_t *outputs[] = {&hw->heater, &hw->pump, &hw->uv};
@@ -257,6 +288,10 @@ static esp_err_t gpio_real_init(void)
         configure_idle_state(&hw->heater);
         configure_idle_state(&hw->pump);
         configure_idle_state(&hw->uv);
+    }
+
+    if (actuator_available(&s_feed_output)) {
+        configure_idle_state(&s_feed_output);
     }
 
     return ESP_OK;
@@ -286,8 +321,14 @@ static void gpio_real_deinit(void)
         }
     }
 
-    gpio_real_write(SERVO_FEED_PIN, 0);
-    gpio_real_mode(SERVO_FEED_PIN, GPIO_MODE_INPUT);
+    if (actuator_available(&s_feed_output)) {
+        esp_err_t err = actuator_drive(&s_feed_output, false);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG,
+                     "Failed to release feeder channel: %s",
+                     esp_err_to_name(err));
+        }
+    }
 }
 
 const actuator_driver_t gpio_real_driver = {

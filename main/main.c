@@ -703,14 +703,6 @@ void app_main() {
 
   backlight_init();
 
-  /* Configure reptile control outputs */
-  DEV_GPIO_Mode(SERVO_FEED_PIN, GPIO_MODE_OUTPUT);
-  DEV_Digital_Write(SERVO_FEED_PIN, 0);
-  DEV_GPIO_Mode(WATER_PUMP_PIN, GPIO_MODE_OUTPUT);
-  DEV_Digital_Write(WATER_PUMP_PIN, 0);
-  DEV_GPIO_Mode(HEAT_RES_PIN, GPIO_MODE_OUTPUT);
-  DEV_Digital_Write(HEAT_RES_PIN, 0);
-
   // Initialize CAN bus (125 kbps)
   const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_125KBITS();
   const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
