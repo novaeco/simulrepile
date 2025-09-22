@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,7 @@ float sensors_read_humidity_channel(size_t channel);
 float sensors_read_lux_channel(size_t channel);
 size_t sensors_get_channel_count(void);
 void sensors_deinit(void);
+bool sensors_is_using_simulation_fallback(void);
 
 #ifdef __cplusplus
 }
