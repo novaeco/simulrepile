@@ -4,6 +4,5 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.5)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-include_directories($ENV{IDF_PATH}/components/esp_system/include)
 add_compile_options("-Wno-attributes")
-project(13_LVGL_TRANSPLANT)
+project(simulrepile)

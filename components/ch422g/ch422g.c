@@ -1,5 +1,6 @@
 #include "ch422g.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "driver/gpio.h"
@@ -21,8 +22,8 @@
 static i2c_master_dev_handle_t s_dev = NULL;
 static uint8_t s_addr = CH422G_I2C_ADDR_DEFAULT;
 static uint8_t s_shadow = 0xFFu;
+static uint8_t s_direction = 0xFFu;
 static bool s_diag_logged = false;
-static bool s_input_mode_warned = false;
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -221,23 +222,41 @@ static esp_err_t ch422g_write_shadow(void)
     return i2c_master_transmit(s_dev, payload, sizeof(payload), CH422G_XFER_TIMEOUT_MS);
 }
 
+static esp_err_t ch422g_write_direction(void)
+{
+    uint8_t payload[2] = {CH422G_REG_CONFIG, s_direction};
+    return i2c_master_transmit(s_dev, payload, sizeof(payload), CH422G_XFER_TIMEOUT_MS);
+}
+
 esp_err_t ch422g_pin_mode(uint8_t exio_index, ch422g_pin_mode_t mode)
 {
     ESP_RETURN_ON_FALSE(exio_index >= 1u && exio_index <= 8u, ESP_ERR_INVALID_ARG, TAG,
                         "invalid EXIO%u", (unsigned)exio_index);
 
-    if (mode != CH422G_PIN_MODE_OUTPUT) {
-        if (!s_input_mode_warned) {
-            ESP_LOGW(TAG,
-                     "EXIO%u requested in input mode but the current driver only supports "
-                     "push-pull outputs. Ignoring request.",
-                     (unsigned)exio_index);
-            s_input_mode_warned = true;
-        }
-        return ESP_ERR_NOT_SUPPORTED;
+    ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "initialise");
+
+    uint8_t mask = 1u << (exio_index - 1u);
+    uint8_t prev_dir = s_direction;
+
+    if (mode == CH422G_PIN_MODE_OUTPUT) {
+        s_direction |= mask;
+    } else {
+        s_direction &= (uint8_t)~mask;
     }
 
-    return ch422g_init();
+    if (s_direction == prev_dir) {
+        return ESP_OK;
+    }
+
+    esp_err_t ret = ch422g_write_direction();
+    if (ret != ESP_OK) {
+        s_direction = prev_dir;
+        ESP_LOGE(TAG, "Failed to configure EXIO%u %s: %s",
+                 (unsigned)exio_index,
+                 (mode == CH422G_PIN_MODE_OUTPUT) ? "OUTPUT" : "INPUT",
+                 esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 uint8_t ch422g_exio_shadow_get(void)
@@ -292,6 +311,13 @@ esp_err_t ch422g_init(void)
     ret = DEV_I2C_Set_Slave_Addr(&s_dev, s_addr);
     ESP_RETURN_ON_ERROR(ret, TAG, "attach CH422G");
 
+    s_direction = 0xFFu;
+    ret = ch422g_write_direction();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialise CH422G direction register: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     /* Force all EXIO outputs high so that downstream peripherals stay
      * deselected until explicitly toggled. */
     s_shadow = 0xFFu;
@@ -313,6 +339,10 @@ esp_err_t ch422g_exio_set(uint8_t exio_index, bool level)
     ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "initialise");
 
     uint8_t mask = 1u << (exio_index - 1u);
+    if ((s_direction & mask) == 0u) {
+        ESP_LOGW(TAG, "EXIO%u configured as input; skipping output update", (unsigned)exio_index);
+        return ESP_ERR_INVALID_STATE;
+    }
     if (level) {
         s_shadow |= mask;
     } else {

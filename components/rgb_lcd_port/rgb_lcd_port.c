@@ -145,17 +145,43 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
  */
 void wavesahre_rgb_lcd_display_window(int16_t Xstart, int16_t Ystart, int16_t Xend, int16_t Yend, uint8_t *Image)
 {
+    if (Image == NULL) {
+        ESP_LOGE(TAG, "Display window failed: null image buffer");
+        return;
+    }
+
     // Ensure Xstart is within valid range, clip Xend to the screen width if necessary
-    if (Xstart < 0) Xstart = 0;
-    else if (Xend > EXAMPLE_LCD_H_RES) Xend = EXAMPLE_LCD_H_RES;
+    if (Xend < 0 || Yend < 0) {
+        ESP_LOGW(TAG, "Display window outside screen: (%d,%d)-(%d,%d)", Xstart, Ystart, Xend, Yend);
+        return;
+    }
+
+    if (Xstart < 0) {
+        Xstart = 0;
+    }
+    if (Ystart < 0) {
+        Ystart = 0;
+    }
+    if (Xstart >= EXAMPLE_LCD_H_RES || Ystart >= EXAMPLE_LCD_V_RES) {
+        ESP_LOGW(TAG, "Display window start outside screen: (%d,%d)", Xstart, Ystart);
+        return;
+    }
+    if (Xend > EXAMPLE_LCD_H_RES) {
+        Xend = EXAMPLE_LCD_H_RES;
+    }
+    if (Yend > EXAMPLE_LCD_V_RES) {
+        Yend = EXAMPLE_LCD_V_RES;
+    }
 
     // Ensure Ystart is within valid range, clip Yend to the screen height if necessary
-    if (Ystart < 0) Ystart = 0;
-    else if (Yend > EXAMPLE_LCD_V_RES) Yend = EXAMPLE_LCD_V_RES;
-
-    // Calculate the width and height of the cropped region
     int crop_width = Xend - Xstart;
     int crop_height = Yend - Ystart;
+
+    if (crop_width <= 0 || crop_height <= 0) {
+        ESP_LOGW(TAG, "Display window invalid dimensions: start=(%d,%d) end=(%d,%d)",
+                 Xstart, Ystart, Xend, Yend);
+        return;
+    }
 
     // Ensure reusable buffer is available and large enough
     size_t required_size = crop_width * crop_height * 2;
@@ -185,7 +211,8 @@ void wavesahre_rgb_lcd_display_window(int16_t Xstart, int16_t Ystart, int16_t Xe
  * @brief Display a full-screen image on the RGB LCD.
  *
  * This function replaces the entire LCD screen content with the image data
- * provided. It assumes the display resolution is 800x480.
+ * provided. It assumes the display resolution configured in `EXAMPLE_LCD_H_RES`
+ * and `EXAMPLE_LCD_V_RES` (1024x600 by default).
  *
  * @param Image Pointer to the image data buffer.
  */
@@ -219,7 +246,13 @@ void waveshare_rgb_lcd_restart()
  */
 void wavesahre_rgb_lcd_bl_on()
 {
-    esp_err_t ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 1);  // Backlight ON configuration
+    esp_err_t ret = IO_EXTENSION_Init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Backlight init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 1);  // Backlight ON configuration
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Backlight ON failed: %s", esp_err_to_name(ret));
     }
@@ -235,7 +268,13 @@ void wavesahre_rgb_lcd_bl_on()
  */
 void wavesahre_rgb_lcd_bl_off()
 {
-    esp_err_t ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 0);  // Backlight OFF configuration
+    esp_err_t ret = IO_EXTENSION_Init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Backlight init failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 0);  // Backlight OFF configuration
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Backlight OFF failed: %s", esp_err_to_name(ret));
     }

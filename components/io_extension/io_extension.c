@@ -102,11 +102,17 @@ esp_err_t IO_EXTENSION_Output(uint8_t pin, uint8_t value)
         ESP_LOGE(TAG, "IO_EXTENSION address is NULL");
         return ESP_ERR_INVALID_STATE;
     }
+    if (pin >= 8) {
+        ESP_LOGE(TAG, "Invalid IO_EXTENSION pin index %u", pin);
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint8_t mask = (uint8_t)(1u << pin);
+    value = value ? 1u : 0u;
     // Update the output value based on the pin and value
-    if (value == 1)
-        IO_EXTENSION.Last_io_value |= (1 << pin); // Set the pin high
+    if (value == 1u)
+        IO_EXTENSION.Last_io_value |= mask; // Set the pin high
     else
-        IO_EXTENSION.Last_io_value &= (~(1 << pin)); // Set the pin low
+        IO_EXTENSION.Last_io_value &= (uint8_t)~mask; // Set the pin low
 
     uint8_t data[2] = {IO_EXTENSION_IO_OUTPUT_ADDR, IO_EXTENSION.Last_io_value}; // Prepare the data to write to the output register
     // Write the 8-bit value to the IO output register

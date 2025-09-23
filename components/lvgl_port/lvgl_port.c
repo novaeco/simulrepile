@@ -139,7 +139,12 @@ static void lvgl_port_task(void *arg)
             }
         }
 #endif
-        vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
+        TickType_t wait_ticks = pdMS_TO_TICKS(task_delay_ms);
+#if LVGL_PORT_AVOID_TEAR_ENABLE
+        (void)ulTaskNotifyTake(pdTRUE, wait_ticks);
+#else
+        vTaskDelay(wait_ticks);
+#endif
     }
 }
 
@@ -212,6 +217,11 @@ void lvgl_port_unlock(void)
 bool lvgl_port_notify_rgb_vsync(void)
 {
     BaseType_t need_yield = pdFALSE;
+#if LVGL_PORT_AVOID_TEAR_ENABLE
+    if (lvgl_task_handle != NULL) {
+        vTaskNotifyGiveFromISR(lvgl_task_handle, &need_yield);
+    }
+#endif
     return (need_yield == pdTRUE);
 }
 

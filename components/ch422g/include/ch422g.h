@@ -20,6 +20,7 @@ extern "C" {
 
 #define CH422G_I2C_ADDR_DEFAULT ((uint8_t)CONFIG_CH422G_I2C_ADDR)
 #define CH422G_REG_EXIO 0x01u
+#define CH422G_REG_CONFIG 0x02u
 
 typedef enum {
     CH422G_PIN_MODE_INPUT = 0,
@@ -35,8 +36,8 @@ esp_err_t ch422g_init(void);
  * @brief Configure the direction of an EXIO pin.
  *
  * @param exio_index Index in the range [1,8] matching the EXIO silkscreen.
- * @param mode       Requested direction. Only ::CH422G_PIN_MODE_OUTPUT is
- *                   currently supported; inputs return ::ESP_ERR_NOT_SUPPORTED.
+ * @param mode       Requested direction. Both push-pull output and input modes
+ *                   are supported.
  */
 esp_err_t ch422g_pin_mode(uint8_t exio_index, ch422g_pin_mode_t mode);
 
