@@ -64,10 +64,10 @@
 
 typedef struct {
     esp_err_t (*init)(void);
-    void (*gpio_mode)(uint16_t pin, uint16_t mode);
-    void (*gpio_int)(int32_t pin, gpio_isr_t isr_handler);
-    void (*digital_write)(uint16_t pin, uint8_t value);
-    uint8_t (*digital_read)(uint16_t pin);
+    void (*gpio_mode)(gpio_num_t pin, gpio_mode_t mode);
+    void (*gpio_int)(gpio_num_t pin, gpio_isr_t isr_handler);
+    void (*digital_write)(gpio_num_t pin, uint8_t value);
+    uint8_t (*digital_read)(gpio_num_t pin);
     void (*feed)(size_t channel);
     void (*water)(size_t channel);
     void (*heat)(size_t channel);
@@ -76,10 +76,10 @@ typedef struct {
     size_t channel_count;
 } actuator_driver_t;
 
-void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode);
-void DEV_GPIO_INT(int32_t Pin, gpio_isr_t isr_handler);
-void DEV_Digital_Write(uint16_t Pin, uint8_t Value);
-uint8_t DEV_Digital_Read(uint16_t Pin);
+void DEV_GPIO_Mode(gpio_num_t Pin, gpio_mode_t Mode);
+void DEV_GPIO_INT(gpio_num_t Pin, gpio_isr_t isr_handler);
+void DEV_Digital_Write(gpio_num_t Pin, uint8_t Value);
+uint8_t DEV_Digital_Read(gpio_num_t Pin);
 void reptile_feed_gpio(void);
 void reptile_water_gpio(void);
 void reptile_heat_gpio(void);
