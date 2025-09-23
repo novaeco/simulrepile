@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 static inline uint16_t rgb_from_palette(const RGBQUAD *palette, size_t palette_size, uint8_t index)
 {
@@ -117,7 +118,7 @@ UBYTE GUI_ReadBmp(UWORD Xstart, UWORD Ystart, const char *path)
     int32_t height = top_down ? -height_raw : height_raw;
 
     if (width <= 0 || height <= 0) {
-        Debug("Unsupported BMP dimensions %d x %d in %s\n", width, height_raw, path);
+        Debug("Unsupported BMP dimensions %" PRId32 " x %" PRId32 " in %s\n", width, height_raw, path);
         fclose(fp);
         return 0;
     }
@@ -129,7 +130,7 @@ UBYTE GUI_ReadBmp(UWORD Xstart, UWORD Ystart, const char *path)
             used = 1u << info_header.bBitCount;
         }
         if (used > 256u) {
-            Debug("Palette too large (%u entries) in %s\n", used, path);
+            Debug("Palette too large (%" PRIu32 " entries) in %s\n", used, path);
             fclose(fp);
             return 0;
         }
@@ -171,7 +172,7 @@ UBYTE GUI_ReadBmp(UWORD Xstart, UWORD Ystart, const char *path)
 
     for (int32_t row = 0; row < height; ++row) {
         if (fread(row_buffer, 1, row_bytes, fp) != row_bytes) {
-            Debug("Incomplete BMP row %d in %s\n", row, path);
+            Debug("Incomplete BMP row %" PRId32 " in %s\n", row, path);
             free(row_buffer);
             fclose(fp);
             return 0;
