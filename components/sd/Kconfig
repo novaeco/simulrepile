@@ -51,7 +51,7 @@ config SD_USE_FALLBACK_GPIO_CS
         CH422G, le bus I²C ne pouvant être sollicité depuis les callbacks ISR
         du driver SDSPI.
 
-config SD_FALLBACK_CS_GPIO
+config SD_SPI_CS_IO
     int "GPIO utilisé pour la ligne CS microSD"
     range 0 48
     default 34
@@ -59,6 +59,13 @@ config SD_FALLBACK_CS_GPIO
         Numéro de GPIO employé pour piloter la ligne CS du lecteur microSD.
         Sur la Waveshare ESP32-S3 Touch LCD 7B, la broche 34 est accessible sur
         le connecteur d'extension et ne rentre pas en conflit avec le bus RGB.
+
+config SD_FALLBACK_CS_GPIO
+    int
+    default SD_SPI_CS_IO
+    help
+        Alias rétrocompatible. Utiliser SD_SPI_CS_IO pour configurer la broche
+        CS du bus SDSPI.
 
 endmenu
 
