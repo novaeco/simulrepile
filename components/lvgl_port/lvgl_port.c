@@ -14,6 +14,7 @@ extern void sleep_timer_arm(bool arm);
 static const char *TAG = "lv_port";
 static SemaphoreHandle_t lvgl_mux;
 static TaskHandle_t lvgl_task_handle = NULL;
+static lv_indev_t *s_touch_indev = NULL;
 static bool s_touch_active = false;
 
 /**
@@ -153,6 +154,7 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
     if (tp_handle) {
         lv_indev_t *indev = indev_init(tp_handle);
         assert(indev);
+        s_touch_indev = indev;
     }
 
     lvgl_mux = xSemaphoreCreateRecursiveMutex();
@@ -166,6 +168,31 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
         return ESP_FAIL;
     }
 
+    return ESP_OK;
+}
+
+esp_err_t lvgl_port_attach_touch(esp_lcd_touch_handle_t tp_handle)
+{
+    if (!lvgl_mux) {
+        ESP_LOGE(TAG, "lvgl_port_init must be called before attaching touch");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!tp_handle) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_touch_indev) {
+        ESP_LOGW(TAG, "Touch input device already attached");
+        return ESP_OK;
+    }
+
+    lv_indev_t *indev = indev_init(tp_handle);
+    if (!indev) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_touch_indev = indev;
     return ESP_OK;
 }
 

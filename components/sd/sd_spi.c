@@ -6,6 +6,7 @@
 #include "esp_vfs_fat.h"
 #include "driver/spi_master.h"
 #include "sdmmc_cmd.h"
+#include "esp_idf_version.h"
 
 // En IDF 5.5, le header SDSPI peut être "driver/sdspi_host.h" ou "esp_driver_sdspi.h"
 #if __has_include("driver/sdspi_host.h")
@@ -29,8 +30,13 @@ esp_err_t sd_mount(void)
 
     // Hôte SDSPI (isolé sur SPI3 pour éviter tout conflit avec le LCD RGB)
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
+    const spi_host_device_t spi_host = SPI3_HOST;
     host.max_freq_khz = 400;  // init lente et robuste (augmentable après validation)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+    host.host_id = spi_host;
+#else
+    host.slot = spi_host;
+#endif
 
     // Broches SPI: se déclarent ici (PAS dans sdspi_device_config_t)
     spi_bus_config_t buscfg = {
@@ -42,11 +48,11 @@ esp_err_t sd_mount(void)
         .max_transfer_sz = 4096,
     };
     bool bus_acquired = false;
-    esp_err_t err = spi_bus_initialize((spi_host_device_t)host.slot, &buscfg, SPI_DMA_CH_AUTO);
+    esp_err_t err = spi_bus_initialize(spi_host, &buscfg, SPI_DMA_CH_AUTO);
     if (err == ESP_OK) {
         bus_acquired = true;
     } else if (err == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "SPI%d déjà initialisé, on réutilise", (int)host.slot + 1);
+        ESP_LOGW(TAG, "SPI%d déjà initialisé, on réutilise", (int)spi_host + 1);
     } else {
         ESP_RETURN_ON_ERROR(err, TAG, "spi_bus_initialize");
     }
@@ -54,7 +60,7 @@ esp_err_t sd_mount(void)
     // Slot/device SDSPI : seulement CS + host_id en IDF 5.5
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = CONFIG_SD_FALLBACK_CS_GPIO;           // 34 (GPIO natif)
-    slot_config.host_id = (spi_host_device_t)host.slot;         // associer l'hôte
+    slot_config.host_id = spi_host;         // associer l'hôte
 
     const esp_vfs_fat_mount_config_t mount_config = {
         .format_if_mount_failed = false,
@@ -62,17 +68,16 @@ esp_err_t sd_mount(void)
         .allocation_unit_size = 16 * 1024,
     };
 
-    ESP_LOGI(TAG, "Bus SPI%d (host=%d) MOSI=%d MISO=%d SCLK=%d CS=%d",
-             (int)host.slot + 1, (int)host.slot,
+    ESP_LOGI("sd", "SDSPI host=SPI3 MOSI=%d MISO=%d SCLK=%d CS=%d",
              CONFIG_SD_SPI_MOSI_IO, CONFIG_SD_SPI_MISO_IO,
              CONFIG_SD_SPI_SCLK_IO, CONFIG_SD_FALLBACK_CS_GPIO);
 
     esp_err_t ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &s_card);
     if (ret != ESP_OK) {
         if (bus_acquired) {
-            esp_err_t free_ret = spi_bus_free((spi_host_device_t)host.slot);
+            esp_err_t free_ret = spi_bus_free(spi_host);
             if (free_ret != ESP_OK) {
-                ESP_LOGW(TAG, "Libération SPI%d échouée: %s", (int)host.slot + 1, esp_err_to_name(free_ret));
+                ESP_LOGW(TAG, "Libération SPI%d échouée: %s", (int)spi_host + 1, esp_err_to_name(free_ret));
             }
         }
         ESP_RETURN_ON_ERROR(ret, TAG, "esp_vfs_fat_sdspi_mount");
@@ -82,7 +87,7 @@ esp_err_t sd_mount(void)
 #define SD_OCR_SDHC_CAP (1U << 30) // bit 30 (High Capacity: SDHC/SDXC)
 #endif
     const char *type_str = (s_card->ocr & SD_OCR_SDHC_CAP) ? "SDHC/SDXC" : "SDSC";
-    ESP_LOGI(TAG, "Carte SD: %s, CSD/CID OK", type_str);
+    ESP_LOGI("sd", "Carte détectée: %s", type_str);
 
     return ESP_OK;
 }
