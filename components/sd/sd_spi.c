@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 #include "driver/spi_master.h"
-#include "esp_driver_sdspi.h"
+#include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_vfs_fat.h"
 #include "esp_log.h"
@@ -55,6 +55,7 @@ esp_err_t sd_mount(void)
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+        host.slot = spi_host;
         host.max_freq_khz = (attempt == 0) ? 20000 : 12000;
 
         spi_bus_config_t bus_cfg = sdspi_bus_config();
@@ -93,10 +94,12 @@ esp_err_t sd_mount(void)
             s_card = NULL;
         }
 
-        esp_err_t free_ret = spi_bus_free(spi_host);
-        s_spi_bus_owned = false;
-        if (free_ret != ESP_OK && free_ret != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "spi_bus_free(SPI%d) a échoué: %s", spi_host + 1, esp_err_to_name(free_ret));
+        if (bus_owned) {
+            esp_err_t free_ret = spi_bus_free(spi_host);
+            s_spi_bus_owned = false;
+            if (free_ret != ESP_OK) {
+                ESP_LOGW(TAG, "spi_bus_free(SPI%d) a échoué: %s", spi_host + 1, esp_err_to_name(free_ret));
+            }
         }
 
         if ((ret == ESP_ERR_TIMEOUT || ret == ESP_FAIL) && attempt == 0) {
