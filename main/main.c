@@ -13,6 +13,7 @@
 
 #include "gt911.h"        // Header for touch screen operations (GT911)
 #include "rgb_lcd_port.h" // Header for Waveshare RGB LCD driver
+#include "ch422g.h"       // I2C expander for backlight/VCOM control
 
 #include "can.h"
 #include "driver/gpio.h" // GPIO definitions for wake-up source
@@ -80,6 +81,8 @@ enum {
 
 // Active-low GPIO sampled at boot to optionally fast-start the last mode
 #define QUICK_START_BTN GPIO_NUM_0
+
+static void init_task(void *pvParameter);
 
 static void save_last_mode(uint8_t mode) {
   nvs_handle_t nvs;
@@ -558,35 +561,85 @@ cleanup:
 }
 
 // Main application function
-void app_main() {
+void app_main(void) {
   esp_reset_reason_t rr = esp_reset_reason();
   ESP_LOGI(TAG, "Reset reason: %d", rr);
 
-  // Initialize NVS flash storage with error handling for page issues
+  BaseType_t rc = xTaskCreatePinnedToCore(init_task, "init_task", 16384, NULL,
+                                          tskIDLE_PRIORITY + 1, NULL, 0);
+  if (rc != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create init_task");
+    esp_system_abort("init_task");
+  }
+}
+
+static void init_task(void *pvParameter) {
+  (void)pvParameter;
+
+  ESP_LOGI(TAG, "T0 init_task start");
+  vTaskDelay(pdMS_TO_TICKS(50));
+
   esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     ESP_ERROR_CHECK(nvs_flash_erase());
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
 
-  // Load persisted application settings
   settings_init();
 
-  // Initialize SD card at boot for early log availability
+  ESP_LOGI(TAG, "T1 LCD init start");
+  panel_handle = waveshare_esp32_s3_rgb_lcd_init();
+  if (!panel_handle) {
+    ESP_LOGE(TAG, "Failed to initialize RGB LCD panel");
+    goto exit;
+  }
+  backlight_init();
+  esp_err_t lvgl_ret = lvgl_port_init(panel_handle, NULL);
+  if (lvgl_ret != ESP_OK) {
+    ESP_LOGE(TAG, "LVGL port init failed: %s", esp_err_to_name(lvgl_ret));
+  }
+  ESP_LOGI(TAG, "T1 LCD init done");
+  vTaskDelay(pdMS_TO_TICKS(10));
+  if (lvgl_ret != ESP_OK) {
+    goto exit;
+  }
+
+  ESP_LOGI(TAG, "T2 GT911 init start");
+  esp_err_t tp_ret = touch_gt911_init(&tp_handle);
+  if (tp_ret == ESP_OK) {
+    esp_err_t attach_ret = lvgl_port_attach_touch(tp_handle);
+    if (attach_ret != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to attach GT911 touch to LVGL: %s", esp_err_to_name(attach_ret));
+    }
+  } else {
+    ESP_LOGE(TAG, "Failed to initialize GT911 touch controller: %s", esp_err_to_name(tp_ret));
+  }
+  ESP_LOGI(TAG, "T2 GT911 init done (status=%s)", esp_err_to_name(tp_ret));
+  vTaskDelay(pdMS_TO_TICKS(10));
+  if (tp_ret != ESP_OK) {
+    goto exit;
+  }
+
+  ESP_LOGI(TAG, "T3 CH422G init start");
+  esp_err_t ch_ret = ch422g_init();
+  if (ch_ret != ESP_OK) {
+    ESP_LOGE(TAG, "CH422G init failed: %s", esp_err_to_name(ch_ret));
+  }
+  ESP_LOGI(TAG, "T3 CH422G init done (status=%s)", esp_err_to_name(ch_ret));
+  vTaskDelay(pdMS_TO_TICKS(10));
+
+  ESP_LOGI(TAG, "T4 SD init start");
   sd_cs_selftest();
 #if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
-    ESP_EARLY_LOGI("BOOT", "M1: avant sd_mount()");
     esp_err_t sd_ret = sd_mount();
-    ESP_EARLY_LOGI("BOOT", "M2: apres sd_mount() err=%d", (int)sd_ret);
     if (sd_ret == ESP_OK) {
       s_sd_card = sd_get_card();
       sd_write_selftest();
     } else {
-      ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
       s_sd_card = NULL;
+      ESP_LOGW(TAG, "Initial SD init failed: %s", esp_err_to_name(sd_ret));
     }
   } else {
     ESP_LOGW(TAG,
@@ -600,21 +653,9 @@ void app_main() {
              esp_err_to_name(s_sd_cs_last_err));
   }
 #endif
+  ESP_LOGI(TAG, "T4 SD init done (mounted=%d)", sd_is_mounted());
+  vTaskDelay(pdMS_TO_TICKS(10));
 
-  // Initialize the GT911 touch screen controller
-  esp_err_t tp_ret = touch_gt911_init(&tp_handle);
-  if (tp_ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to initialize GT911 touch controller: %s",
-             esp_err_to_name(tp_ret));
-    return;
-  }
-
-  // Initialize the Waveshare ESP32-S3 RGB LCD hardware
-  panel_handle = waveshare_esp32_s3_rgb_lcd_init();
-
-  backlight_init();
-
-  // Initialize CAN bus (125 kbps)
   const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_125KBITS();
   const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
   const twai_general_config_t g_config =
@@ -623,18 +664,13 @@ void app_main() {
     ESP_LOGW(TAG, "CAN indisponible – fonctionnalité désactivée");
   }
 
-  // Initialize LVGL with the panel and touch handles
-  ESP_ERROR_CHECK(lvgl_port_init(panel_handle, tp_handle));
   ui_theme_init();
 
-  // Initialize SD card (retry until available)
   wait_for_sd_card();
 
   ESP_LOGI(TAG, "Display LVGL demos");
 
-  // Lock the mutex because LVGL APIs are not thread-safe
   if (lvgl_port_lock(-1)) {
-    // Create main menu screen
     menu_screen = lv_obj_create(NULL);
     ui_theme_apply_screen(menu_screen);
     lv_obj_set_style_pad_all(menu_screen, 32, 0);
@@ -813,4 +849,8 @@ void app_main() {
 
     lvgl_port_unlock();
   }
+
+exit:
+  ESP_LOGI(TAG, "T9 init_task done");
+  vTaskDelete(NULL);
 }

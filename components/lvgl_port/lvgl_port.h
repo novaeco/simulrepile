@@ -124,6 +124,19 @@
 esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle_t tp_handle);
 
 /**
+ * @brief Attach a touch input device after LVGL core has been initialised.
+ *
+ * @param[in] tp_handle Touch panel handle returned by esp_lcd_touch_new_*.
+ *
+ * @return
+ *      - ESP_OK on success or if the device was already attached
+ *      - ESP_ERR_INVALID_ARG if tp_handle is NULL
+ *      - ESP_ERR_INVALID_STATE if lvgl_port_init was not called yet
+ *      - ESP_ERR_NO_MEM if LVGL could not allocate the indev object
+ */
+esp_err_t lvgl_port_attach_touch(esp_lcd_touch_handle_t tp_handle);
+
+/**
  * @brief Take LVGL mutex
  *
  * @param[in] timeout_ms: Timeout in [ms]. 0 will block indefinitely.
