@@ -14,10 +14,10 @@
 #include "gt911.h"        // Header for touch screen operations (GT911)
 #include "rgb_lcd_port.h" // Header for Waveshare RGB LCD driver
 #include "ch422g.h"       // I2C expander for backlight/VCOM control
+#include "io_extension.h"
 
 #include "can.h"
 #include "driver/gpio.h" // GPIO definitions for wake-up source
-#include "driver/ledc.h" // LEDC for backlight PWM
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_sleep.h"    // Light-sleep configuration
@@ -55,6 +55,9 @@ static const char *TAG = "main"; // Tag for logging
 
 static lv_timer_t *sleep_timer; // Inactivity timer handle
 static bool sleep_enabled;      // Runtime sleep state
+static bool backlight_ready;
+static bool lvgl_ready;
+static uint8_t backlight_percent = 100;
 
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static esp_lcd_touch_handle_t tp_handle = NULL;
@@ -163,7 +166,7 @@ static void sd_write_selftest(void) {
   ESP_LOGI(TAG, "SD selftest.txt written");
 }
 
-static void menu_header_update(void) {
+static void menu_header_update_locked(void) {
   if (menu_header_time_label) {
     time_t now = time(NULL);
     struct tm info;
@@ -212,6 +215,18 @@ static void menu_header_update(void) {
     lv_label_set_text(menu_header_sleep_label, text);
     lv_obj_set_style_text_color(menu_header_sleep_label, color, 0);
   }
+}
+
+static void menu_header_update(void) {
+  if (!lvgl_ready) {
+    return;
+  }
+  if (!lvgl_port_lock(100)) {
+    ESP_LOGW(TAG, "LVGL busy, skipping menu header refresh");
+    return;
+  }
+  menu_header_update_locked();
+  lvgl_port_unlock();
 }
 
 static void menu_header_timer_cb(lv_timer_t *timer) {
@@ -351,7 +366,7 @@ void sleep_set_enabled(bool enabled) {
 
 bool sleep_is_enabled(void) { return sleep_enabled; }
 
-static void menu_hint_append(const char *message) {
+static void menu_hint_append_locked(const char *message) {
   if (!menu_quick_hint_label || !message || message[0] == '\0') {
     return;
   }
@@ -365,6 +380,24 @@ static void menu_hint_append(const char *message) {
     lv_label_set_text(menu_quick_hint_label, message);
   }
   lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void menu_hint_append(const char *message) {
+  if (!message || message[0] == '\0') {
+    return;
+  }
+
+  if (!lvgl_ready) {
+    return;
+  }
+
+  if (!lvgl_port_lock(100)) {
+    ESP_LOGW(TAG, "LVGL busy, skipping hint update");
+    return;
+  }
+
+  menu_hint_append_locked(message);
+  lvgl_port_unlock();
 }
 
 static void show_error_screen(const char *msg) {
@@ -468,39 +501,38 @@ static void wait_for_sd_card(void) {
   }
 }
 
-#define BL_PIN GPIO_NUM_16
-#define BL_LEDC_TIMER LEDC_TIMER_0
-#define BL_LEDC_CHANNEL LEDC_CHANNEL_0
-#define BL_LEDC_MODE LEDC_LOW_SPEED_MODE
-#define BL_LEDC_FREQ_HZ 5000
-#define BL_LEDC_DUTY_RES LEDC_TIMER_13_BIT
-#define BL_DUTY_MAX ((1 << BL_LEDC_DUTY_RES) - 1)
+static void backlight_apply(uint8_t percent)
+{
+  if (!backlight_ready) {
+    return;
+  }
 
-static uint32_t bl_duty = BL_DUTY_MAX;
+  if (percent > 100) {
+    percent = 100;
+  }
 
-static void backlight_init(void) {
-  ledc_timer_config_t timer_cfg = {
-      .speed_mode = BL_LEDC_MODE,
-      .duty_resolution = BL_LEDC_DUTY_RES,
-      .timer_num = BL_LEDC_TIMER,
-      .freq_hz = BL_LEDC_FREQ_HZ,
-      .clk_cfg = LEDC_AUTO_CLK,
-  };
-  ESP_ERROR_CHECK(ledc_timer_config(&timer_cfg));
+  esp_err_t ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, percent > 0);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Backlight gate update failed: %s", esp_err_to_name(ret));
+  }
 
-  ledc_channel_config_t ch_cfg = {
-      .gpio_num = BL_PIN,
-      .speed_mode = BL_LEDC_MODE,
-      .channel = BL_LEDC_CHANNEL,
-      .intr_type = LEDC_INTR_DISABLE,
-      .timer_sel = BL_LEDC_TIMER,
-      .duty = 0,
-      .hpoint = 0,
-  };
-  ESP_ERROR_CHECK(ledc_channel_config(&ch_cfg));
+  ret = IO_EXTENSION_Pwm_Output(percent);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Backlight PWM update failed: %s", esp_err_to_name(ret));
+  }
+}
 
-  ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, bl_duty);
-  ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+static void backlight_init(void)
+{
+  esp_err_t ret = IO_EXTENSION_Init();
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "IO extension init failed for backlight: %s", esp_err_to_name(ret));
+    backlight_ready = false;
+    return;
+  }
+
+  backlight_ready = true;
+  backlight_apply(backlight_percent);
 }
 
 static void sleep_timer_cb(lv_timer_t *timer) {
@@ -514,8 +546,16 @@ static void sleep_timer_cb(lv_timer_t *timer) {
   }
 
   esp_lcd_panel_disp_on_off(panel_handle, false);
-  ledc_stop(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0);
-  gpio_set_level(BL_PIN, 0);
+  if (backlight_ready) {
+    esp_err_t ret = IO_EXTENSION_Pwm_Output(0);
+    if (ret != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to stop backlight PWM: %s", esp_err_to_name(ret));
+    }
+    ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 0);
+    if (ret != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to gate backlight: %s", esp_err_to_name(ret));
+    }
+  }
 
   esp_sleep_wakeup_cause_t cause = ESP_SLEEP_WAKEUP_UNDEFINED;
   logging_pause();
@@ -540,8 +580,9 @@ static void sleep_timer_cb(lv_timer_t *timer) {
 
 cleanup:
   esp_lcd_panel_disp_on_off(panel_handle, true);
-  ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, bl_duty);
-  ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+  if (backlight_ready) {
+    backlight_apply(backlight_percent);
+  }
 
   if (cause == ESP_SLEEP_WAKEUP_EXT1) {
     wait_for_sd_card();
@@ -614,6 +655,7 @@ static void init_task(void *pvParameter) {
   }
   backlight_init();
   esp_err_t lvgl_ret = lvgl_port_init(panel_handle, NULL);
+  lvgl_ready = (lvgl_ret == ESP_OK);
   if (lvgl_ret != ESP_OK) {
     ESP_LOGE(TAG, "LVGL port init failed: %s", esp_err_to_name(lvgl_ret));
   }
