@@ -18,6 +18,7 @@
 #include "driver/gpio.h" // GPIO definitions for wake-up source
 #include "driver/ledc.h" // LEDC for backlight PWM
 #include "esp_lcd_panel_ops.h"
+#include "esp_log.h"
 #include "esp_sleep.h"    // Light-sleep configuration
 #include "esp_system.h"   // Reset reason API
 #include "esp_task_wdt.h" // Watchdog timer API
@@ -577,7 +578,9 @@ void app_main() {
   sd_cs_selftest();
 #if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
+    ESP_EARLY_LOGI("BOOT", "M1: avant sd_mount()");
     esp_err_t sd_ret = sd_mount();
+    ESP_EARLY_LOGI("BOOT", "M2: apres sd_mount() err=%d", (int)sd_ret);
     if (sd_ret == ESP_OK) {
       s_sd_card = sd_get_card();
       sd_write_selftest();
