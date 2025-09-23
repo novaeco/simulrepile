@@ -280,7 +280,7 @@ esp_err_t DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Ad
     }
 
     if (*dev_handle != NULL) {
-        esp_err_t rm_ret = i2c_master_bus_rm_device(handle.bus, *dev_handle);
+        esp_err_t rm_ret = i2c_master_bus_rm_device(*dev_handle);
         if (rm_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to remove existing I2C device: %s", esp_err_to_name(rm_ret));
             return rm_ret;
