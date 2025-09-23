@@ -16,6 +16,7 @@ idf_component_register(
         logging
         can
         gpio
+        ch422g
     PRIV_REQUIRES
         image
         sensors
