@@ -1,7 +1,8 @@
 # Interface microSD SDSPI — ESP32-S3 Touch LCD 7B
 
-Ce projet force l'utilisation d'un bus SDSPI natif pour la carte microSD du
-module Waveshare ESP32-S3 Touch LCD 7B. Le contrôleur CH422G ne doit **jamais**
+Cet environnement force l'utilisation d'un bus SDSPI natif **dédié** (SPI3_HOST)
+pour la carte microSD du module Waveshare ESP32-S3 Touch LCD 7B. Le contrôleur
+CH422G ne doit **jamais**
 piloter la ligne `CS` de la microSD, car le driver SDSPI déclenche des callbacks
 d'interruption pendant les transferts. Toute tentative de bascule `CS` via le
 bus I²C engendre des délais importants, fait échouer `sdmmc_card_init` avec le
@@ -18,7 +19,8 @@ de conserver la commande du rétroéclairage, du VCOM et des multiplexeurs USB.
 
 ## Séquence d'initialisation
 
-1. Initialisation du bus SPI2 avec `MOSI=11`, `MISO=13`, `SCLK=12` et `CS=34`.
+1. Initialisation du bus SPI3 (FSPI dédié) avec `MOSI=11`, `MISO=13`,
+   `SCLK=12` et `CS=34`.
 2. Fréquence d'amorçage bridée à **400 kHz** pour garantir la détection même
    avec des nappes longues ou des cartes récalcitrantes.
 3. Montage automatique en lecture/écriture sous `/sdcard` via VFS FAT.
