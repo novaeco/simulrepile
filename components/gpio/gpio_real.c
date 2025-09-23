@@ -58,13 +58,17 @@ static const reptile_output_t s_feed_output = {
 
 static const size_t s_hw_channel_count = sizeof(s_hw_map) / sizeof(s_hw_map[0]);
 
-static void gpio_real_mode(uint16_t Pin, uint16_t Mode)
+static void gpio_real_mode(gpio_num_t Pin, gpio_mode_t Mode)
 {
+    if (Pin < 0) {
+        return;
+    }
+
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.pin_bit_mask = 1ULL << Pin;
 
-    if (Mode == 0 || Mode == GPIO_MODE_INPUT) {
+    if (Mode == GPIO_MODE_DISABLE || Mode == GPIO_MODE_INPUT) {
         io_conf.mode = GPIO_MODE_INPUT;
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
     } else if (Mode == GPIO_MODE_INPUT_OUTPUT) {
@@ -78,8 +82,12 @@ static void gpio_real_mode(uint16_t Pin, uint16_t Mode)
     gpio_config(&io_conf);
 }
 
-static void gpio_real_int(int32_t Pin, gpio_isr_t isr_handler)
+static void gpio_real_int(gpio_num_t Pin, gpio_isr_t isr_handler)
 {
+    if (Pin < 0) {
+        return;
+    }
+
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     io_conf.mode = GPIO_MODE_INPUT;
@@ -98,13 +106,19 @@ static void gpio_real_int(int32_t Pin, gpio_isr_t isr_handler)
     gpio_isr_handler_add(Pin, isr_handler, (void *)Pin);
 }
 
-static void gpio_real_write(uint16_t Pin, uint8_t Value)
+static void gpio_real_write(gpio_num_t Pin, uint8_t Value)
 {
+    if (Pin < 0) {
+        return;
+    }
     gpio_set_level(Pin, Value);
 }
 
-static uint8_t gpio_real_read(uint16_t Pin)
+static uint8_t gpio_real_read(gpio_num_t Pin)
 {
+    if (Pin < 0) {
+        return 0u;
+    }
     return gpio_get_level(Pin);
 }
 

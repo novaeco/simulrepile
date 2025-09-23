@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "driver/spi_master.h"
@@ -13,9 +14,37 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "sd.h"
+
+#ifndef CONFIG_SD_SPI_MAX_FREQ_KHZ
+#define CONFIG_SD_SPI_MAX_FREQ_KHZ 20000
+#endif
+
+#ifndef CONFIG_SD_SPI_RETRY_FREQ_KHZ
+#define CONFIG_SD_SPI_RETRY_FREQ_KHZ 12000
+#endif
+
 static const char *TAG = "sd";
 static sdmmc_card_t *s_card = NULL;
 static bool s_spi_bus_owned = false;
+
+static inline uint32_t sdspi_select_frequency(int attempt)
+{
+    uint32_t primary = CONFIG_SD_SPI_MAX_FREQ_KHZ;
+    uint32_t fallback = CONFIG_SD_SPI_RETRY_FREQ_KHZ;
+
+    if (primary == 0) {
+        primary = 20000;
+    }
+    if (fallback == 0) {
+        fallback = primary;
+    }
+    if (fallback > primary) {
+        fallback = primary;
+    }
+
+    return (attempt == 0) ? primary : fallback;
+}
 
 static inline spi_bus_config_t sdspi_bus_config(void) {
     spi_bus_config_t cfg = {
@@ -56,7 +85,7 @@ esp_err_t sd_mount(void)
     for (int attempt = 0; attempt < 2; ++attempt) {
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         host.slot = spi_host;
-        host.max_freq_khz = (attempt == 0) ? 20000 : 12000;
+        host.max_freq_khz = sdspi_select_frequency(attempt);
 
         spi_bus_config_t bus_cfg = sdspi_bus_config();
         bool bus_owned = false;
@@ -74,7 +103,11 @@ esp_err_t sd_mount(void)
         slot_cfg.gpio_cs = CONFIG_SD_SPI_CS_IO;
         slot_cfg.host_id = spi_host;
 
-        ESP_LOGI(TAG, "Tentative %d: fréquence SDSPI %d kHz", attempt + 1, host.max_freq_khz);
+        ESP_LOGI(TAG,
+                 "Tentative %d: fréquence SDSPI %d kHz (point de montage %s)",
+                 attempt + 1,
+                 host.max_freq_khz,
+                 mount_point);
 
         esp_err_t ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_cfg, &mount_cfg, &s_card);
         if (ret == ESP_OK) {
@@ -120,7 +153,8 @@ esp_err_t sd_unmount(void)
         return ESP_OK;
     }
 
-    ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card));
+    const char *mount_point = SD_MOUNT_POINT;
+    ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(mount_point, s_card));
     s_card = NULL;
 
     if (s_spi_bus_owned) {

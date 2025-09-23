@@ -25,7 +25,7 @@ esp_err_t reptile_actuators_init(void)
     return ESP_OK;
 }
 
-void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode)
+void DEV_GPIO_Mode(gpio_num_t Pin, gpio_mode_t Mode)
 {
     gpio_select_driver();
     if (s_driver && s_driver->gpio_mode) {
@@ -33,7 +33,7 @@ void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode)
     }
 }
 
-void DEV_GPIO_INT(int32_t Pin, gpio_isr_t isr_handler)
+void DEV_GPIO_INT(gpio_num_t Pin, gpio_isr_t isr_handler)
 {
     gpio_select_driver();
     if (s_driver && s_driver->gpio_int) {
@@ -41,7 +41,7 @@ void DEV_GPIO_INT(int32_t Pin, gpio_isr_t isr_handler)
     }
 }
 
-void DEV_Digital_Write(uint16_t Pin, uint8_t Value)
+void DEV_Digital_Write(gpio_num_t Pin, uint8_t Value)
 {
     gpio_select_driver();
     if (s_driver && s_driver->digital_write) {
@@ -49,7 +49,7 @@ void DEV_Digital_Write(uint16_t Pin, uint8_t Value)
     }
 }
 
-uint8_t DEV_Digital_Read(uint16_t Pin)
+uint8_t DEV_Digital_Read(gpio_num_t Pin)
 {
     gpio_select_driver();
     if (s_driver && s_driver->digital_read) {

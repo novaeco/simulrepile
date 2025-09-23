@@ -2,17 +2,37 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include <stdbool.h>
 #include <string.h>
 
 static const char *TAG = "gpio_sim";
-static uint8_t s_levels[256];
+
+#ifndef CONFIG_SOC_GPIO_PIN_COUNT
+#define CONFIG_SOC_GPIO_PIN_COUNT 49
+#endif
+
+#define SIM_GPIO_LEVEL_COUNT CONFIG_SOC_GPIO_PIN_COUNT
+
+static uint8_t s_levels[SIM_GPIO_LEVEL_COUNT];
 
 #define SIM_MAX_CHANNELS 4
 
 static bool s_heater_state[SIM_MAX_CHANNELS];
 static bool s_pump_state[SIM_MAX_CHANNELS];
 static bool s_uv_state[SIM_MAX_CHANNELS];
+
+static bool sim_gpio_index(gpio_num_t pin, size_t *index)
+{
+    if (pin >= 0 && pin < SIM_GPIO_LEVEL_COUNT) {
+        if (index) {
+            *index = (size_t)pin;
+        }
+        return true;
+    }
+
+    return false;
+}
 
 static bool sim_channel_valid(size_t channel)
 {
@@ -23,36 +43,42 @@ static bool sim_channel_valid(size_t channel)
     return false;
 }
 
-static void gpio_sim_mode(uint16_t Pin, uint16_t Mode)
+static void gpio_sim_mode(gpio_num_t Pin, gpio_mode_t Mode)
 {
     (void)Pin;
     (void)Mode;
 }
 
-static void gpio_sim_int(int32_t Pin, gpio_isr_t isr_handler)
+static void gpio_sim_int(gpio_num_t Pin, gpio_isr_t isr_handler)
 {
     (void)Pin;
     (void)isr_handler;
 }
 
-static void gpio_sim_write(uint16_t Pin, uint8_t Value)
+static void gpio_sim_write(gpio_num_t Pin, uint8_t Value)
 {
+    size_t index = 0;
+    if (!sim_gpio_index(Pin, &index)) {
+        ESP_LOGV(TAG, "GPIO virtuel %d hors plage ignoré", Pin);
+        return;
+    }
+
     const uint8_t stored_level = Value ? 1u : 0u;
-    s_levels[Pin & 0xFF] = stored_level;
-    if ((int)Pin == HEAT_RES_PIN) {
-        s_heater_state[0] = (stored_level != 0);
-    }
-    if ((int)Pin == WATER_PUMP_PIN) {
-        s_pump_state[0] = (stored_level != 0);
-    }
-    if ((int)Pin == LED_GPIO_PIN) {
+    s_levels[index] = stored_level;
+
+    if (Pin == LED_GPIO_PIN) {
         s_uv_state[0] = (stored_level != 0);
     }
 }
 
-static uint8_t gpio_sim_read(uint16_t Pin)
+static uint8_t gpio_sim_read(gpio_num_t Pin)
 {
-    return s_levels[Pin & 0xFF];
+    size_t index = 0;
+    if (!sim_gpio_index(Pin, &index)) {
+        return 0u;
+    }
+
+    return s_levels[index];
 }
 
 bool gpio_sim_get_heater_state(void)
