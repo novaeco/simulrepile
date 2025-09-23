@@ -42,10 +42,12 @@ extern "C" {
 /**
  * @brief Default mount point used by the SD driver.
  */
-#ifdef CONFIG_SD_MOUNT_POINT
+#ifndef CONFIG_SD_MOUNT_POINT
+#define CONFIG_SD_MOUNT_POINT "/sdcard"
+#endif
+
+#ifndef SD_MOUNT_POINT
 #define SD_MOUNT_POINT CONFIG_SD_MOUNT_POINT
-#else
-#define SD_MOUNT_POINT "/sdcard"
 #endif
 
 /* Backwards compatibility with legacy modules that relied on the old macro */

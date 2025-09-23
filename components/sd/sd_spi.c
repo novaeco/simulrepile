@@ -14,6 +14,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "sdkconfig.h"
+#ifndef CONFIG_SD_MOUNT_POINT
+#define CONFIG_SD_MOUNT_POINT "/sdcard"
+#endif
+#ifndef SD_MOUNT_POINT
+#define SD_MOUNT_POINT CONFIG_SD_MOUNT_POINT
+#endif
+
 #include "sd.h"
 
 #ifndef CONFIG_SD_SPI_MAX_FREQ_KHZ
@@ -27,6 +35,7 @@
 static const char *TAG = "sd";
 static sdmmc_card_t *s_card = NULL;
 static bool s_spi_bus_owned = false;
+static spi_host_device_t s_host_id = SPI3_HOST;
 
 static inline uint32_t sdspi_select_frequency(int attempt)
 {
@@ -66,7 +75,6 @@ esp_err_t sd_mount(void)
     }
 
     const char *mount_point = SD_MOUNT_POINT;
-    const spi_host_device_t spi_host = SPI3_HOST;
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
         .format_if_mount_failed = false,
         .max_files = 5,
@@ -84,24 +92,24 @@ esp_err_t sd_mount(void)
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-        host.slot = spi_host;
+        host.slot = SPI3_HOST;
         host.max_freq_khz = sdspi_select_frequency(attempt);
 
         spi_bus_config_t bus_cfg = sdspi_bus_config();
         bool bus_owned = false;
-        esp_err_t err = spi_bus_initialize(spi_host, &bus_cfg, SPI_DMA_CH_AUTO);
+        esp_err_t err = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
         if (err == ESP_OK) {
             bus_owned = true;
         } else if (err == ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "SPI%d déjà initialisé, tentative %d", spi_host + 1, attempt + 1);
+            ESP_LOGW(TAG, "SPI%d déjà initialisé, tentative %d", host.slot + 1, attempt + 1);
         } else {
-            ESP_LOGE(TAG, "spi_bus_initialize(SPI%d) a échoué: %s", spi_host + 1, esp_err_to_name(err));
+            ESP_LOGE(TAG, "spi_bus_initialize(SPI%d) a échoué: %s", host.slot + 1, esp_err_to_name(err));
             return err;
         }
 
         sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
         slot_cfg.gpio_cs = CONFIG_SD_SPI_CS_IO;
-        slot_cfg.host_id = spi_host;
+        slot_cfg.host_id = host.slot;
 
         ESP_LOGI(TAG,
                  "Tentative %d: fréquence SDSPI %d kHz (point de montage %s)",
@@ -112,6 +120,7 @@ esp_err_t sd_mount(void)
         esp_err_t ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_cfg, &mount_cfg, &s_card);
         if (ret == ESP_OK) {
             s_spi_bus_owned = bus_owned;
+            s_host_id = host.slot;
             const bool is_sdhc = (s_card->ocr & (1u << 30)) != 0;
             ESP_LOGI(TAG, "Carte détectée: %s", is_sdhc ? "SDHC/SDXC" : "SDSC");
             return ESP_OK;
@@ -128,10 +137,10 @@ esp_err_t sd_mount(void)
         }
 
         if (bus_owned) {
-            esp_err_t free_ret = spi_bus_free(spi_host);
+            esp_err_t free_ret = spi_bus_free(host.slot);
             s_spi_bus_owned = false;
             if (free_ret != ESP_OK) {
-                ESP_LOGW(TAG, "spi_bus_free(SPI%d) a échoué: %s", spi_host + 1, esp_err_to_name(free_ret));
+                ESP_LOGW(TAG, "spi_bus_free(SPI%d) a échoué: %s", host.slot + 1, esp_err_to_name(free_ret));
             }
         }
 
@@ -154,16 +163,30 @@ esp_err_t sd_unmount(void)
     }
 
     const char *mount_point = SD_MOUNT_POINT;
-    ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(mount_point, s_card));
-    s_card = NULL;
-
-    if (s_spi_bus_owned) {
-        ESP_ERROR_CHECK(spi_bus_free(SPI3_HOST));
-        s_spi_bus_owned = false;
+    esp_err_t err = esp_vfs_fat_sdcard_unmount(mount_point, s_card);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Impossible de démonter %s: %s", mount_point, esp_err_to_name(err));
+    } else {
+        s_card = NULL;
     }
 
-    ESP_LOGI(TAG, "SD démontée");
-    return ESP_OK;
+    if (s_spi_bus_owned) {
+        esp_err_t free_ret = spi_bus_free(s_host_id);
+        if (free_ret != ESP_OK) {
+            ESP_LOGW(TAG, "spi_bus_free(SPI%d) a échoué: %s", s_host_id + 1, esp_err_to_name(free_ret));
+            if (err == ESP_OK) {
+                err = free_ret;
+            }
+        } else {
+            s_spi_bus_owned = false;
+            s_host_id = SPI3_HOST;
+        }
+    }
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "SD démontée");
+    }
+    return err;
 }
 
 sdmmc_card_t *sd_get_card(void)

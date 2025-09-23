@@ -16,7 +16,7 @@ static const char *TAG = "gpio_sim";
 
 static uint8_t s_levels[SIM_GPIO_LEVEL_COUNT];
 
-#define SIM_MAX_CHANNELS 4
+#define SIM_MAX_CHANNELS ((size_t)4)
 
 static bool s_heater_state[SIM_MAX_CHANNELS];
 static bool s_pump_state[SIM_MAX_CHANNELS];
@@ -24,9 +24,10 @@ static bool s_uv_state[SIM_MAX_CHANNELS];
 
 static bool sim_gpio_index(gpio_num_t pin, size_t *index)
 {
-    if (pin >= 0 && pin < SIM_GPIO_LEVEL_COUNT) {
+    const int pin_num = (int)pin;
+    if (pin_num >= 0 && pin_num < (int)SIM_GPIO_LEVEL_COUNT) {
         if (index) {
-            *index = (size_t)pin;
+            *index = (size_t)pin_num;
         }
         return true;
     }
@@ -59,7 +60,7 @@ static void gpio_sim_write(gpio_num_t Pin, uint8_t Value)
 {
     size_t index = 0;
     if (!sim_gpio_index(Pin, &index)) {
-        ESP_LOGV(TAG, "GPIO virtuel %d hors plage ignoré", Pin);
+        ESP_LOGV(TAG, "GPIO virtuel %d hors plage ignoré", (int)Pin);
         return;
     }
 

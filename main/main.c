@@ -577,7 +577,23 @@ static void init_task(void *pvParameter) {
   (void)pvParameter;
 
   ESP_LOGI(TAG, "T0 init_task start");
-  vTaskDelay(pdMS_TO_TICKS(50));
+  vTaskDelay(pdMS_TO_TICKS(100));
+
+  bool wdt_registered = false;
+  esp_err_t wdt_err = esp_task_wdt_add(NULL);
+  if (wdt_err == ESP_OK) {
+    wdt_registered = true;
+  } else if (wdt_err != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "init_task: impossible d'ajouter la tâche au WDT (%s)",
+             esp_err_to_name(wdt_err));
+  }
+
+#define INIT_TASK_WDT_FEED()                                                  \
+  do {                                                                        \
+    if (wdt_registered) {                                                     \
+      esp_task_wdt_reset();                                                   \
+    }                                                                         \
+  } while (0)
 
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -585,8 +601,10 @@ static void init_task(void *pvParameter) {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  INIT_TASK_WDT_FEED();
 
   settings_init();
+  INIT_TASK_WDT_FEED();
 
   ESP_LOGI(TAG, "T1 LCD init start");
   panel_handle = waveshare_esp32_s3_rgb_lcd_init();
@@ -600,6 +618,7 @@ static void init_task(void *pvParameter) {
     ESP_LOGE(TAG, "LVGL port init failed: %s", esp_err_to_name(lvgl_ret));
   }
   ESP_LOGI(TAG, "T1 LCD init done");
+  INIT_TASK_WDT_FEED();
   vTaskDelay(pdMS_TO_TICKS(10));
   if (lvgl_ret != ESP_OK) {
     goto exit;
@@ -616,6 +635,7 @@ static void init_task(void *pvParameter) {
     ESP_LOGE(TAG, "Failed to initialize GT911 touch controller: %s", esp_err_to_name(tp_ret));
   }
   ESP_LOGI(TAG, "T2 GT911 init done (status=%s)", esp_err_to_name(tp_ret));
+  INIT_TASK_WDT_FEED();
   vTaskDelay(pdMS_TO_TICKS(10));
   if (tp_ret != ESP_OK) {
     goto exit;
@@ -627,6 +647,7 @@ static void init_task(void *pvParameter) {
     ESP_LOGE(TAG, "CH422G init failed: %s", esp_err_to_name(ch_ret));
   }
   ESP_LOGI(TAG, "T3 CH422G init done (status=%s)", esp_err_to_name(ch_ret));
+  INIT_TASK_WDT_FEED();
   vTaskDelay(pdMS_TO_TICKS(10));
 
   ESP_LOGI(TAG, "T4 SD init start");
@@ -654,6 +675,7 @@ static void init_task(void *pvParameter) {
   }
 #endif
   ESP_LOGI(TAG, "T4 SD init done (mounted=%d)", sd_is_mounted());
+  INIT_TASK_WDT_FEED();
   vTaskDelay(pdMS_TO_TICKS(10));
 
   const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_125KBITS();
@@ -663,14 +685,18 @@ static void init_task(void *pvParameter) {
   if (can_init(t_config, f_config, g_config) != ESP_OK) {
     ESP_LOGW(TAG, "CAN indisponible – fonctionnalité désactivée");
   }
+  INIT_TASK_WDT_FEED();
 
   ui_theme_init();
+  INIT_TASK_WDT_FEED();
 
   wait_for_sd_card();
+  INIT_TASK_WDT_FEED();
 
   ESP_LOGI(TAG, "Display LVGL demos");
 
   if (lvgl_port_lock(-1)) {
+    INIT_TASK_WDT_FEED();
     menu_screen = lv_obj_create(NULL);
     ui_theme_apply_screen(menu_screen);
     lv_obj_set_style_pad_all(menu_screen, 32, 0);
@@ -731,6 +757,7 @@ static void init_task(void *pvParameter) {
     menu_header_sleep_label = lv_label_create(status_box);
     ui_theme_apply_caption(menu_header_sleep_label);
     lv_obj_set_style_text_align(menu_header_sleep_label, LV_TEXT_ALIGN_RIGHT, 0);
+    INIT_TASK_WDT_FEED();
 
     lv_obj_t *nav_grid = lv_obj_create(menu_screen);
     lv_obj_remove_style_all(nav_grid);
@@ -756,6 +783,7 @@ static void init_task(void *pvParameter) {
                              "Profils terrariums, calendriers et calibrations",
                              LV_SYMBOL_SETTINGS, UI_THEME_NAV_ICON_SYMBOL,
                              menu_btn_settings_cb, NULL);
+    INIT_TASK_WDT_FEED();
 
     menu_quick_hint_label = lv_label_create(menu_screen);
     ui_theme_apply_caption(menu_quick_hint_label);
@@ -823,6 +851,7 @@ static void init_task(void *pvParameter) {
     }
 
     lv_scr_load(menu_screen);
+    INIT_TASK_WDT_FEED();
 
     if (quick_start_requested && has_persisted_mode) {
       ESP_LOGI(TAG, "Démarrage rapide demandé");
@@ -848,9 +877,19 @@ static void init_task(void *pvParameter) {
     }
 
     lvgl_port_unlock();
+    INIT_TASK_WDT_FEED();
   }
 
 exit:
+  if (wdt_registered) {
+    esp_err_t del_err = esp_task_wdt_delete(NULL);
+    if (del_err != ESP_OK && del_err != ESP_ERR_INVALID_STATE) {
+      ESP_LOGW(TAG, "init_task: impossible de se retirer du WDT (%s)",
+               esp_err_to_name(del_err));
+    }
+  }
+#undef INIT_TASK_WDT_FEED
   ESP_LOGI(TAG, "T9 init_task done");
+  vTaskDelay(pdMS_TO_TICKS(1));
   vTaskDelete(NULL);
 }
