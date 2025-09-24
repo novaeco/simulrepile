@@ -178,36 +178,48 @@ typedef struct {
   bool detached;
 } idle_wdt_guard_t;
 
-static idle_wdt_guard_t idle_wdt_guard_detach_for_current_core(void) {
+static TaskHandle_t idle_task_handle_for_cpu(int cpu_index) {
+#if !defined(INCLUDE_xTaskGetIdleTaskHandle)
+#define INCLUDE_xTaskGetIdleTaskHandle 0
+#endif
+
+#if INCLUDE_xTaskGetIdleTaskHandle == 1
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  if (cpu_index < 0 || cpu_index >= CONFIG_FREERTOS_NUMBER_OF_CORES) {
+    return NULL;
+  }
+  return xTaskGetIdleTaskHandleForCPU((BaseType_t)cpu_index);
+#else
+  (void)cpu_index;
+  return xTaskGetIdleTaskHandle();
+#endif
+#else
+  (void)cpu_index;
+  return NULL;
+#endif
+}
+
+static idle_wdt_guard_t idle_wdt_guard_detach_for_cpu(int cpu_index) {
   idle_wdt_guard_t guard = {
-      .idle_handle = NULL,
-      .cpu_index = 0,
+      .idle_handle = idle_task_handle_for_cpu(cpu_index),
+      .cpu_index = cpu_index,
       .detached = false,
   };
 
-#if defined(INCLUDE_xTaskGetIdleTaskHandle) && (INCLUDE_xTaskGetIdleTaskHandle == 1)
-#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
-  BaseType_t core = xPortGetCoreID();
-  guard.cpu_index = (int)core;
-  guard.idle_handle = xTaskGetIdleTaskHandleForCPU(core);
-#else
-  guard.cpu_index = 0;
-  guard.idle_handle = xTaskGetIdleTaskHandle();
-#endif
-#else
-  return guard;
-#endif
-
   if (!guard.idle_handle) {
+    ESP_LOGD(TAG,
+             "Idle task handle indisponible pour CPU%d – surveillance WDT non "
+             "désactivée",
+             cpu_index);
     return guard;
   }
 
   esp_err_t status = esp_task_wdt_status(guard.idle_handle);
   if (status == ESP_OK) {
     esp_err_t ret = esp_task_wdt_delete(guard.idle_handle);
-    if (ret == ESP_OK) {
+    if (ret == ESP_OK || ret == ESP_ERR_NOT_FOUND) {
       guard.detached = true;
-    } else if (ret != ESP_ERR_INVALID_STATE && ret != ESP_ERR_NOT_FOUND) {
+    } else if (ret != ESP_ERR_INVALID_STATE) {
       ESP_LOGW(TAG,
                "Impossible de désinscrire l'idle task CPU%d du WDT: %s",
                guard.cpu_index, esp_err_to_name(ret));
@@ -221,21 +233,25 @@ static idle_wdt_guard_t idle_wdt_guard_detach_for_current_core(void) {
   return guard;
 }
 
+static idle_wdt_guard_t idle_wdt_guard_detach_for_current_core(void) {
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  return idle_wdt_guard_detach_for_cpu((int)xPortGetCoreID());
+#else
+  return idle_wdt_guard_detach_for_cpu(0);
+#endif
+}
+
 static void idle_wdt_guard_restore(const idle_wdt_guard_t *guard) {
   if (!guard || !guard->detached || !guard->idle_handle) {
     return;
   }
 
-#if defined(INCLUDE_xTaskGetIdleTaskHandle) && (INCLUDE_xTaskGetIdleTaskHandle == 1)
   esp_err_t ret = esp_task_wdt_add(guard->idle_handle);
   if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE && ret != ESP_ERR_INVALID_ARG) {
     ESP_LOGW(TAG,
              "Impossible de réinscrire l'idle task CPU%d au WDT: %s",
              guard->cpu_index, esp_err_to_name(ret));
   }
-#else
-  (void)guard;
-#endif
 }
 
 static void sd_mount_task(void *param) {
@@ -402,11 +418,28 @@ static esp_err_t sd_mount_with_watchdog(bool *wdt_registered,
   const BaseType_t task_core = tskNO_AFFINITY;
 #endif
 
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  idle_wdt_guard_t idle_guards[CONFIG_FREERTOS_NUMBER_OF_CORES];
+  for (int cpu = 0; cpu < CONFIG_FREERTOS_NUMBER_OF_CORES; ++cpu) {
+    idle_guards[cpu] = idle_wdt_guard_detach_for_cpu(cpu);
+  }
+#else
+  idle_wdt_guard_t idle_guards[1];
+  idle_guards[0] = idle_wdt_guard_detach_for_cpu(0);
+#endif
+
   BaseType_t rc = xTaskCreatePinnedToCore(sd_mount_task, "sd_mount", 4096, &ctx,
                                           tskIDLE_PRIORITY + 1, NULL, task_core);
   if (rc != pdPASS) {
     ESP_LOGE(TAG,
              "Impossible de créer la tâche sd_mount (rc=%ld)", (long)rc);
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+    for (int cpu = 0; cpu < CONFIG_FREERTOS_NUMBER_OF_CORES; ++cpu) {
+      idle_wdt_guard_restore(&idle_guards[cpu]);
+    }
+#else
+    idle_wdt_guard_restore(&idle_guards[0]);
+#endif
     return ESP_ERR_NO_MEM;
   }
 
@@ -416,6 +449,14 @@ static esp_err_t sd_mount_with_watchdog(bool *wdt_registered,
   }
 
   task_wdt_feed_if_registered(wdt_registered, wdt_added_here, "sd_mount");
+
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  for (int cpu = 0; cpu < CONFIG_FREERTOS_NUMBER_OF_CORES; ++cpu) {
+    idle_wdt_guard_restore(&idle_guards[cpu]);
+  }
+#else
+  idle_wdt_guard_restore(&idle_guards[0]);
+#endif
 
   return ctx.result;
 }
