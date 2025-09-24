@@ -253,7 +253,66 @@ static void sd_mount_task(void *param) {
   vTaskDelete(NULL);
 }
 
-static void task_wdt_feed_if_registered(bool *registered, const char *context) {
+static bool task_wdt_register_current(bool *registered, bool *added_here,
+                                     const char *context) {
+  if (!registered) {
+    return false;
+  }
+
+  if (*registered) {
+    return true;
+  }
+
+  esp_err_t status = esp_task_wdt_status(NULL);
+  if (status == ESP_OK) {
+    *registered = true;
+    return true;
+  }
+
+  if (status == ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG,
+             "%s: WDT tâche non initialisé (%s) – keepalive indisponible",
+             context ? context : "WDT", esp_err_to_name(status));
+    return false;
+  }
+
+  if (status != ESP_ERR_NOT_FOUND) {
+    ESP_LOGW(TAG, "%s: statut WDT inattendu avant enregistrement (%s)",
+             context ? context : "WDT", esp_err_to_name(status));
+  }
+
+  esp_err_t add_ret = esp_task_wdt_add(NULL);
+  if (add_ret == ESP_OK) {
+    *registered = true;
+    if (added_here) {
+      *added_here = true;
+    }
+    return true;
+  }
+
+  if (add_ret == ESP_ERR_INVALID_STATE) {
+    esp_err_t verify = esp_task_wdt_status(NULL);
+    if (verify == ESP_OK) {
+      *registered = true;
+      return true;
+    }
+    ESP_LOGW(TAG, "%s: WDT tâche indisponible (%s)",
+             context ? context : "WDT", esp_err_to_name(add_ret));
+    return false;
+  }
+
+  if (add_ret == ESP_ERR_INVALID_ARG) {
+    *registered = true;
+    return true;
+  }
+
+  ESP_LOGW(TAG, "%s: impossible d'enregistrer la tâche auprès du WDT (%s)",
+           context ? context : "WDT", esp_err_to_name(add_ret));
+  return false;
+}
+
+static void task_wdt_feed_if_registered(bool *registered, bool *added_here,
+                                        const char *context) {
   if (!registered || !*registered) {
     return;
   }
@@ -263,10 +322,26 @@ static void task_wdt_feed_if_registered(bool *registered, const char *context) {
     return;
   }
 
-  if (reset_ret == ESP_ERR_NOT_FOUND || reset_ret == ESP_ERR_INVALID_STATE) {
+  if (reset_ret == ESP_ERR_NOT_FOUND) {
+    ESP_LOGW(TAG,
+             "%s: tâche non inscrite auprès du WDT (%s) – tentative de réinscription",
+             context ? context : "WDT", esp_err_to_name(reset_ret));
+    *registered = false;
+    if (task_wdt_register_current(registered, added_here, context)) {
+      esp_err_t retry = esp_task_wdt_reset();
+      if (retry != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "%s: rafraîchissement WDT impossible après réinscription (%s)",
+                 context ? context : "WDT", esp_err_to_name(retry));
+      }
+    }
+    return;
+  }
+
+  if (reset_ret == ESP_ERR_INVALID_STATE) {
     *registered = false;
     ESP_LOGW(TAG,
-             "%s: tâche non inscrite auprès du WDT (%s) – keepalive suspendu",
+             "%s: WDT tâche non initialisé (%s) – keepalive suspendu",
              context ? context : "WDT", esp_err_to_name(reset_ret));
     return;
   }
@@ -275,7 +350,8 @@ static void task_wdt_feed_if_registered(bool *registered, const char *context) {
            context ? context : "WDT", esp_err_to_name(reset_ret));
 }
 
-static esp_err_t sd_mount_with_watchdog(bool *wdt_registered) {
+static esp_err_t sd_mount_with_watchdog(bool *wdt_registered,
+                                        bool *wdt_added_here) {
   sd_mount_task_ctx_t ctx = {
       .waiter = xTaskGetCurrentTaskHandle(),
       .result = ESP_FAIL,
@@ -297,10 +373,10 @@ static esp_err_t sd_mount_with_watchdog(bool *wdt_registered) {
 
   const TickType_t wait_ticks = pdMS_TO_TICKS(500);
   while (ulTaskNotifyTake(pdTRUE, wait_ticks) == 0) {
-    task_wdt_feed_if_registered(wdt_registered, "sd_mount");
+    task_wdt_feed_if_registered(wdt_registered, wdt_added_here, "sd_mount");
   }
 
-  task_wdt_feed_if_registered(wdt_registered, "sd_mount");
+  task_wdt_feed_if_registered(wdt_registered, wdt_added_here, "sd_mount");
 
   return ctx.result;
 }
@@ -585,38 +661,21 @@ static void wait_for_sd_card(void) {
     return;
   }
 
-  esp_err_t wdt_status = esp_task_wdt_status(NULL);
-  if (wdt_status == ESP_OK) {
-    wdt_registered = true;
-  } else if (wdt_status == ESP_ERR_INVALID_STATE) {
-    ESP_LOGW(TAG,
-             "wait_for_sd: WDT tâche non initialisé (%s) – pas de supervision",
-             esp_err_to_name(wdt_status));
-  } else {
-    esp_err_t wdt_ret = esp_task_wdt_add(NULL);
-    if (wdt_ret == ESP_OK) {
-      wdt_registered = true;
-      wdt_added_here = true;
-    } else if (wdt_ret == ESP_ERR_INVALID_ARG) {
-      wdt_registered = true;
-    } else if (wdt_ret == ESP_ERR_INVALID_STATE) {
-      ESP_LOGW(TAG,
-               "wait_for_sd: WDT tâche non initialisé (%s) – pas de supervision",
-               esp_err_to_name(wdt_ret));
-    } else {
-      ESP_LOGW(TAG, "Impossible d'enregistrer le WDT tâche: %s",
-               esp_err_to_name(wdt_ret));
-    }
+  if (!task_wdt_register_current(&wdt_registered, &wdt_added_here,
+                                 "wait_for_sd")) {
+    wdt_registered = false;
   }
 
   while (true) {
-    task_wdt_feed_if_registered(&wdt_registered, "wait_for_sd");
-    err = sd_mount_with_watchdog(&wdt_registered);
+    task_wdt_feed_if_registered(&wdt_registered, &wdt_added_here,
+                                "wait_for_sd");
+    err = sd_mount_with_watchdog(&wdt_registered, &wdt_added_here);
     if (err == ESP_OK) {
       s_sd_card = sd_get_card();
       hide_error_screen();
       sd_write_selftest();
-      task_wdt_feed_if_registered(&wdt_registered, "wait_for_sd");
+      task_wdt_feed_if_registered(&wdt_registered, &wdt_added_here,
+                                  "wait_for_sd");
       if (wdt_added_here) {
         esp_err_t del_ret = esp_task_wdt_delete(NULL);
         if (del_ret == ESP_OK || del_ret == ESP_ERR_NOT_FOUND) {
@@ -632,9 +691,6 @@ static void wait_for_sd_card(void) {
           ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
                    esp_err_to_name(del_ret));
         }
-        if (!wdt_registered) {
-          task_wdt_feed_if_registered(&wdt_registered, "wait_for_sd");
-        }
       }
       menu_header_update();
       return;
@@ -645,7 +701,8 @@ static void wait_for_sd_card(void) {
     show_error_screen("Insérer une carte SD valide");
     menu_header_update();
     vTaskDelay(pdMS_TO_TICKS(500));
-    task_wdt_feed_if_registered(&wdt_registered, "wait_for_sd");
+    task_wdt_feed_if_registered(&wdt_registered, &wdt_added_here,
+                                "wait_for_sd");
     if (++attempts >= max_attempts) {
       restart_required = true;
       show_error_screen("Carte SD absente - redémarrage");
@@ -797,25 +854,18 @@ static void init_task(void *pvParameter) {
   vTaskDelay(pdMS_TO_TICKS(100));
 
   bool wdt_registered = false;
-  esp_err_t wdt_err = esp_task_wdt_add(NULL);
-  if (wdt_err == ESP_OK) {
-    wdt_registered = true;
-  } else if (wdt_err == ESP_ERR_INVALID_ARG) {
-    /* La tâche est déjà inscrite auprès du WDT (CONFIG_ESP_TASK_WDT_INIT). */
-    wdt_registered = true;
-    ESP_LOGD(TAG, "init_task déjà enregistré auprès du WDT");
-  } else if (wdt_err == ESP_ERR_INVALID_STATE) {
-    ESP_LOGW(TAG,
-             "init_task: le WDT tâche n'est pas initialisé (%s) – keepalive désactivé",
-             esp_err_to_name(wdt_err));
+  bool wdt_added_here = false;
+  if (task_wdt_register_current(&wdt_registered, &wdt_added_here, "init_task")) {
+    if (wdt_registered && !wdt_added_here) {
+      ESP_LOGD(TAG, "init_task déjà enregistré auprès du WDT");
+    }
   } else {
-    ESP_LOGW(TAG, "init_task: impossible d'ajouter la tâche au WDT (%s)",
-             esp_err_to_name(wdt_err));
+    wdt_registered = false;
   }
 
 #define INIT_TASK_WDT_FEED()                                                  \
   do {                                                                        \
-    task_wdt_feed_if_registered(&wdt_registered, "init_task");               \
+    task_wdt_feed_if_registered(&wdt_registered, NULL, "init_task");         \
   } while (0)
 
   esp_err_t ret = nvs_flash_init();
@@ -880,7 +930,7 @@ static void init_task(void *pvParameter) {
 #if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
     INIT_TASK_WDT_FEED();
-    esp_err_t sd_ret = sd_mount_with_watchdog(&wdt_registered);
+    esp_err_t sd_ret = sd_mount_with_watchdog(&wdt_registered, NULL);
     if (sd_ret == ESP_OK) {
       s_sd_card = sd_get_card();
       sd_write_selftest();
