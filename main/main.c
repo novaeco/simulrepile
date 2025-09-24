@@ -24,6 +24,7 @@
 #include "esp_system.h"   // Reset reason API
 #include "esp_task_wdt.h" // Watchdog timer API
 #include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "freertos/task.h"
 #include "gpio.h" // Custom GPIO wrappers for reptile control
 #include "sensors.h"      // Sensor initialization
@@ -171,6 +172,72 @@ typedef struct {
   esp_err_t result;
 } sd_mount_task_ctx_t;
 
+typedef struct {
+  TaskHandle_t idle_handle;
+  int cpu_index;
+  bool detached;
+} idle_wdt_guard_t;
+
+static idle_wdt_guard_t idle_wdt_guard_detach_for_current_core(void) {
+  idle_wdt_guard_t guard = {
+      .idle_handle = NULL,
+      .cpu_index = 0,
+      .detached = false,
+  };
+
+#if defined(INCLUDE_xTaskGetIdleTaskHandle) && (INCLUDE_xTaskGetIdleTaskHandle == 1)
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  BaseType_t core = xPortGetCoreID();
+  guard.cpu_index = (int)core;
+  guard.idle_handle = xTaskGetIdleTaskHandleForCPU(core);
+#else
+  guard.cpu_index = 0;
+  guard.idle_handle = xTaskGetIdleTaskHandle();
+#endif
+#else
+  return guard;
+#endif
+
+  if (!guard.idle_handle) {
+    return guard;
+  }
+
+  esp_err_t status = esp_task_wdt_status(guard.idle_handle);
+  if (status == ESP_OK) {
+    esp_err_t ret = esp_task_wdt_delete(guard.idle_handle);
+    if (ret == ESP_OK) {
+      guard.detached = true;
+    } else if (ret != ESP_ERR_INVALID_STATE && ret != ESP_ERR_NOT_FOUND) {
+      ESP_LOGW(TAG,
+               "Impossible de désinscrire l'idle task CPU%d du WDT: %s",
+               guard.cpu_index, esp_err_to_name(ret));
+    }
+  } else if (status != ESP_ERR_INVALID_STATE && status != ESP_ERR_NOT_FOUND) {
+    ESP_LOGW(TAG,
+             "Statut inattendu du WDT pour l'idle task CPU%d: %s",
+             guard.cpu_index, esp_err_to_name(status));
+  }
+
+  return guard;
+}
+
+static void idle_wdt_guard_restore(const idle_wdt_guard_t *guard) {
+  if (!guard || !guard->detached || !guard->idle_handle) {
+    return;
+  }
+
+#if defined(INCLUDE_xTaskGetIdleTaskHandle) && (INCLUDE_xTaskGetIdleTaskHandle == 1)
+  esp_err_t ret = esp_task_wdt_add(guard->idle_handle);
+  if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG,
+             "Impossible de réinscrire l'idle task CPU%d au WDT: %s",
+             guard->cpu_index, esp_err_to_name(ret));
+  }
+#else
+  (void)guard;
+#endif
+}
+
 static void sd_mount_task(void *param) {
   sd_mount_task_ctx_t *ctx = (sd_mount_task_ctx_t *)param;
   if (!ctx) {
@@ -178,7 +245,10 @@ static void sd_mount_task(void *param) {
     return;
   }
 
+  idle_wdt_guard_t idle_guard = idle_wdt_guard_detach_for_current_core();
   ctx->result = sd_mount();
+  idle_wdt_guard_restore(&idle_guard);
+
   xTaskNotifyGive(ctx->waiter);
   vTaskDelete(NULL);
 }
