@@ -862,6 +862,7 @@ static void init_task(void *pvParameter) {
     }
   } else {
     wdt_registered = false;
+  }
 
   esp_err_t wdt_err = esp_task_wdt_add(NULL);
   if (wdt_err == ESP_OK) {
