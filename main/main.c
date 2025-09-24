@@ -457,11 +457,16 @@ static esp_err_t sd_mount_with_watchdog(bool *wdt_registered,
   task_wdt_self_guard_t waiter_guard =
       task_wdt_guard_detach_current("sd_mount_waiter");
   bool prev_added_here = (wdt_added_here && *wdt_added_here);
+  bool waiter_still_registered =
+      (waiter_guard.was_registered && !waiter_guard.detached);
   if (wdt_registered) {
-    *wdt_registered = false;
+    *wdt_registered = waiter_still_registered;
   }
   if (wdt_added_here) {
-    *wdt_added_here = false;
+    *wdt_added_here = waiter_still_registered ? prev_added_here : false;
+  }
+  if (waiter_still_registered) {
+    task_wdt_feed_if_registered(wdt_registered, wdt_added_here, "sd_mount");
   }
 
   sd_mount_task_ctx_t ctx = {
