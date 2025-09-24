@@ -166,6 +166,57 @@ static void sd_write_selftest(void) {
   ESP_LOGI(TAG, "SD selftest.txt written");
 }
 
+typedef struct {
+  TaskHandle_t waiter;
+  esp_err_t result;
+} sd_mount_task_ctx_t;
+
+static void sd_mount_task(void *param) {
+  sd_mount_task_ctx_t *ctx = (sd_mount_task_ctx_t *)param;
+  if (!ctx) {
+    vTaskDelete(NULL);
+    return;
+  }
+
+  ctx->result = sd_mount();
+  xTaskNotifyGive(ctx->waiter);
+  vTaskDelete(NULL);
+}
+
+static esp_err_t sd_mount_with_watchdog(bool wdt_registered) {
+  sd_mount_task_ctx_t ctx = {
+      .waiter = xTaskGetCurrentTaskHandle(),
+      .result = ESP_FAIL,
+  };
+
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+  const BaseType_t task_core = 1;
+#else
+  const BaseType_t task_core = tskNO_AFFINITY;
+#endif
+
+  BaseType_t rc = xTaskCreatePinnedToCore(sd_mount_task, "sd_mount", 4096, &ctx,
+                                          tskIDLE_PRIORITY + 1, NULL, task_core);
+  if (rc != pdPASS) {
+    ESP_LOGE(TAG,
+             "Impossible de créer la tâche sd_mount (rc=%ld)", (long)rc);
+    return ESP_ERR_NO_MEM;
+  }
+
+  const TickType_t wait_ticks = pdMS_TO_TICKS(500);
+  while (ulTaskNotifyTake(pdTRUE, wait_ticks) == 0) {
+    if (wdt_registered) {
+      esp_task_wdt_reset();
+    }
+  }
+
+  if (wdt_registered) {
+    esp_task_wdt_reset();
+  }
+
+  return ctx.result;
+}
+
 static void menu_header_update_locked(void) {
   if (menu_header_time_label) {
     time_t now = time(NULL);
@@ -430,6 +481,7 @@ static void wait_for_sd_card(void) {
   int attempts = 0;
   const int max_attempts = 10;
   bool wdt_registered = false;
+  bool wdt_added_here = false;
   bool restart_required = false;
 
   if (sd_is_mounted()) {
@@ -445,30 +497,39 @@ static void wait_for_sd_card(void) {
     return;
   }
 
-  esp_err_t wdt_ret = esp_task_wdt_add(NULL);
-  if (wdt_ret == ESP_OK) {
+  esp_err_t wdt_status = esp_task_wdt_status(NULL);
+  if (wdt_status == ESP_OK) {
     wdt_registered = true;
   } else {
-    ESP_LOGW(TAG, "Impossible d'enregistrer le WDT tâche: %s",
-             esp_err_to_name(wdt_ret));
+    esp_err_t wdt_ret = esp_task_wdt_add(NULL);
+    if (wdt_ret == ESP_OK) {
+      wdt_registered = true;
+      wdt_added_here = true;
+    } else if (wdt_ret == ESP_ERR_INVALID_STATE) {
+      wdt_registered = true;
+    } else {
+      ESP_LOGW(TAG, "Impossible d'enregistrer le WDT tâche: %s",
+               esp_err_to_name(wdt_ret));
+    }
   }
 
   while (true) {
     if (wdt_registered) {
       esp_task_wdt_reset();
     }
-    err = sd_mount();
+    err = sd_mount_with_watchdog(wdt_registered);
     if (err == ESP_OK) {
       s_sd_card = sd_get_card();
       hide_error_screen();
       sd_write_selftest();
-      if (wdt_registered) {
+      if (wdt_added_here) {
         esp_err_t del_ret = esp_task_wdt_delete(NULL);
         if (del_ret != ESP_OK) {
           ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
                    esp_err_to_name(del_ret));
         }
         wdt_registered = false;
+        wdt_added_here = false;
       }
       menu_header_update();
       return;
@@ -488,7 +549,7 @@ static void wait_for_sd_card(void) {
     // Attendre indéfiniment jusqu'à insertion d'une carte valide
   }
 
-  if (wdt_registered) {
+  if (wdt_registered && wdt_added_here) {
     esp_err_t del_ret = esp_task_wdt_delete(NULL);
     if (del_ret != ESP_OK) {
       ESP_LOGW(TAG, "Impossible de se désinscrire du WDT tâche: %s",
@@ -696,7 +757,8 @@ static void init_task(void *pvParameter) {
   sd_cs_selftest();
 #if CONFIG_SD_AUTOMOUNT
   if (s_sd_cs_ready) {
-    esp_err_t sd_ret = sd_mount();
+    INIT_TASK_WDT_FEED();
+    esp_err_t sd_ret = sd_mount_with_watchdog(wdt_registered);
     if (sd_ret == ESP_OK) {
       s_sd_card = sd_get_card();
       sd_write_selftest();
