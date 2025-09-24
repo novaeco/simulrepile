@@ -245,9 +245,48 @@ static void sd_mount_task(void *param) {
     return;
   }
 
+  bool wdt_detached = false;
+#if CONFIG_ESP_TASK_WDT
+  esp_err_t wdt_status = esp_task_wdt_status(NULL);
+  if (wdt_status == ESP_OK) {
+    esp_err_t del_ret = esp_task_wdt_delete(NULL);
+    if (del_ret == ESP_OK) {
+      wdt_detached = true;
+    } else if (del_ret == ESP_ERR_NOT_FOUND || del_ret == ESP_ERR_INVALID_STATE) {
+      // Nothing to do if the watchdog is already disabled for this task
+    } else {
+      ESP_LOGW(TAG, "sd_mount_task: impossible de se retirer du WDT (%s)",
+               esp_err_to_name(del_ret));
+    }
+  } else if (wdt_status != ESP_ERR_NOT_FOUND && wdt_status != ESP_ERR_INVALID_STATE) {
+    ESP_LOGW(TAG, "sd_mount_task: statut WDT inattendu (%s)",
+             esp_err_to_name(wdt_status));
+  }
+#endif
+
   idle_wdt_guard_t idle_guard = idle_wdt_guard_detach_for_current_core();
   ctx->result = sd_mount();
   idle_wdt_guard_restore(&idle_guard);
+
+#if CONFIG_ESP_TASK_WDT
+  if (wdt_detached) {
+    esp_err_t add_ret = esp_task_wdt_add(NULL);
+    if (add_ret == ESP_OK) {
+      esp_err_t reset_ret = esp_task_wdt_reset();
+      if (reset_ret != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "sd_mount_task: rafraîchissement WDT impossible après réinscription (%s)",
+                 esp_err_to_name(reset_ret));
+      }
+    } else if (add_ret == ESP_ERR_INVALID_STATE || add_ret == ESP_ERR_INVALID_ARG) {
+      // Watchdog disabled globally or already attached again: nothing else to do
+    } else {
+      ESP_LOGW(TAG,
+               "sd_mount_task: impossible de réinscrire la tâche au WDT (%s)",
+               esp_err_to_name(add_ret));
+    }
+  }
+#endif
 
   xTaskNotifyGive(ctx->waiter);
   vTaskDelete(NULL);
