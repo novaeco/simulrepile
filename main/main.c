@@ -857,29 +857,17 @@ static void init_task(void *pvParameter) {
 
   bool wdt_added_here = false;
   if (task_wdt_register_current(&wdt_registered, &wdt_added_here, "init_task")) {
+    /*
+     * task_wdt_register_current() gère à la fois le cas où la tâche est déjà
+     * inscrite (CONFIG_ESP_TASK_WDT_INIT) et l'inscription explicite si
+     * nécessaire. Ne surtout pas relancer esp_task_wdt_add() ici sinon le WDT
+     * retourne ESP_ERR_INVALID_ARG parce que la tâche est déjà enregistrée.
+     */
     if (wdt_registered && !wdt_added_here) {
       ESP_LOGD(TAG, "init_task déjà enregistré auprès du WDT");
     }
   } else {
     wdt_registered = false;
-  }
-
-  esp_err_t wdt_err = esp_task_wdt_add(NULL);
-  if (wdt_err == ESP_OK) {
-    wdt_registered = true;
-  } else if (wdt_err == ESP_ERR_INVALID_STATE) {
-    /*
-     * ESP_ERR_INVALID_STATE signifie que la tâche est déjà inscrite auprès du
-     * WDT (configuration CONFIG_ESP_TASK_WDT_INIT active). Dans ce cas il est
-     * impératif de considérer l'inscription comme effective afin de continuer
-     * à rafraîchir le chien de garde et d'éviter un reset prématuré.
-     */
-    wdt_registered = true;
-    ESP_LOGD(TAG, "init_task déjà enregistré auprès du WDT");
-  } else {
-    ESP_LOGW(TAG, "init_task: impossible d'ajouter la tâche au WDT (%s)",
-             esp_err_to_name(wdt_err));
-
   }
 
 #define INIT_TASK_WDT_FEED()                                                  \
