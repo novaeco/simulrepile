@@ -16,8 +16,52 @@
 #define CH422G_RETRY_DELAY_MS 12
 
 static i2c_master_dev_handle_t s_dev = NULL;
-static uint8_t s_addr = CH422G_DEFAULT_ADDR;
+static uint8_t s_addr;
 static uint8_t s_shadow = 0xFFu;
+
+static uint8_t ch422g_configured_addr(void)
+{
+    static uint8_t s_configured_addr;
+    static bool s_configured_addr_initialised = false;
+    static bool s_warned_8bit_address = false;
+    static bool s_warned_out_of_range = false;
+
+    if (!s_configured_addr_initialised) {
+        uint8_t configured = (uint8_t)CONFIG_CH422G_I2C_ADDRESS;
+
+        if (configured >= 0x40 && configured <= 0x47) {
+            uint8_t normalised = (uint8_t)(configured >> 1);
+            if (!s_warned_8bit_address) {
+                ESP_LOGW(TAG,
+                         "CONFIG_CH422G_I2C_ADDRESS=0x%02X corresponds to the 8-bit "
+                         "datasheet value; normalising to 7-bit address 0x%02X.",
+                         configured, normalised);
+                s_warned_8bit_address = true;
+            }
+            configured = normalised;
+        }
+
+        if ((configured < 0x08 || configured > 0x77) && !s_warned_out_of_range) {
+            uint8_t clamped = configured;
+            if (configured < 0x08) {
+                clamped = 0x08;
+            } else if (configured > 0x77) {
+                clamped = 0x77;
+            }
+            ESP_LOGW(TAG,
+                     "CONFIG_CH422G_I2C_ADDRESS=0x%02X lies outside the 7-bit range "
+                     "0x08–0x77. Clamping to 0x%02X.",
+                     configured, clamped);
+            configured = clamped;
+            s_warned_out_of_range = true;
+        }
+
+        s_configured_addr = configured & 0x7Fu;
+        s_configured_addr_initialised = true;
+    }
+
+    return s_configured_addr;
+}
 
 static bool ch422g_scheduler_started(void)
 {
@@ -129,6 +173,9 @@ uint8_t ch422g_exio_shadow_get(void)
 
 uint8_t ch422g_get_address(void)
 {
+    if (s_addr == 0u) {
+        return ch422g_configured_addr();
+    }
     return s_addr;
 }
 
@@ -141,29 +188,32 @@ esp_err_t ch422g_init(void)
     DEV_I2C_Port port = DEV_I2C_Init();
     ESP_RETURN_ON_FALSE(port.bus != NULL, ESP_ERR_INVALID_STATE, TAG, "I2C bus unavailable");
 
-    uint8_t detected_addr = CH422G_DEFAULT_ADDR;
+    uint8_t configured_addr = ch422g_configured_addr();
+    s_addr = configured_addr;
+
+    uint8_t detected_addr = configured_addr;
     esp_err_t ret = ch422g_scan(CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, &detected_addr);
     if (ret == ESP_ERR_NOT_FOUND &&
-        (CH422G_DEFAULT_ADDR < CH422G_SCAN_MIN_ADDR || CH422G_DEFAULT_ADDR > CH422G_SCAN_MAX_ADDR)) {
-        ret = ch422g_scan(CH422G_DEFAULT_ADDR, CH422G_DEFAULT_ADDR, &detected_addr);
+        (configured_addr < CH422G_SCAN_MIN_ADDR || configured_addr > CH422G_SCAN_MAX_ADDR)) {
+        ret = ch422g_scan(configured_addr, configured_addr, &detected_addr);
     }
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
                  "No ACK from CH422G between 0x%02X and 0x%02X (configured 0x%02X): %s. "
                  "Check 3V3 supply, SDA=%d, SCL=%d and external pull-ups (2.2k–4.7kΩ).",
-                 CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, CH422G_DEFAULT_ADDR,
+                 CH422G_SCAN_MIN_ADDR, CH422G_SCAN_MAX_ADDR, configured_addr,
                  esp_err_to_name(ret), CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
         return ret;
     }
 
     s_addr = detected_addr;
 
-    if (s_addr != CH422G_DEFAULT_ADDR) {
+    if (s_addr != configured_addr) {
         ESP_LOGW(TAG,
                  "CH422G responded on 0x%02X instead of configured 0x%02X. Verify A0/A1 straps "
                  "or update CONFIG_CH422G_I2C_ADDRESS.",
-                 s_addr, CH422G_DEFAULT_ADDR);
+                 s_addr, configured_addr);
     }
 
     ret = DEV_I2C_Set_Slave_Addr(&s_dev, s_addr);
@@ -189,6 +239,7 @@ esp_err_t ch422g_exio_set(uint8_t exio_index, bool level)
     ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "initialise");
 
     uint8_t mask = 1u << (exio_index - 1u);
+    uint8_t prev_shadow = s_shadow;
     if (level) {
         s_shadow |= mask;
     } else {
@@ -197,6 +248,7 @@ esp_err_t ch422g_exio_set(uint8_t exio_index, bool level)
 
     esp_err_t update_ret = ch422g_write_shadow();
     if (update_ret != ESP_OK) {
+        s_shadow = prev_shadow;
         ESP_LOGE(TAG, "Failed to update EXIO%u: %s", (unsigned)exio_index, esp_err_to_name(update_ret));
     }
     return update_ret;
