@@ -61,7 +61,7 @@ observés sur la version précédente.
 
 Les icônes terrarium (OK/alerte) et monnaie sont centralisées par
 `ui_theme_get_icon(UI_THEME_ICON_*)`, garantissant une cohérence d'usage.
-Toutes les scènes (`menu`, écrans Simulation/Économie/Réglementation, mode réel,
+Toutes les scènes (`menu`, écrans Simulation/Économie/Réglementation,
 paramètres) appliquent le style de fond via `ui_theme_apply_screen()` et les
 composants utilisent les helpers (`ui_theme_create_card`, `ui_theme_create_button`).
 
@@ -225,8 +225,6 @@ La capture vectorielle illustre la hiérarchie flex (en-tête, carte résumé, g
 
 - **Mode Simulation** : carte avec symbole ▶ et sous-libellé rappelant la simulation multislot,
   pointant vers `reptile_game_start`.
-- **Mode Réel** : carte illustrée par l'icône terrarium, activant les pilotes physiques `sensors_real`
-  et `gpio_real` puis `reptile_real_start`.
 - **Paramètres** : carte aux engrenages LVGL pour configurer terrariums, calendriers et calibrations
   (`settings_screen_show`).
 - **Quitter veille** : bouton secondaire qui appelle `sleep_set_enabled(false)` et met en pause le
@@ -237,21 +235,22 @@ précédent. Le menu de simulation dispose en outre d'un widget « Résumé se
 microSD, derniers événements) qui remplace l'ancien label unique et fournit un retour d'état
 immédiat lors des sauvegardes/chargements.
 
-## Automatisation des terrariums réels
-Le contrôleur d'environnement (`components/env_control/`) pilote désormais jusqu'à quatre
-terrariums physiques en parallèle :
+## Boucle d'automatisation simulée
+Le contrôleur d'environnement (`components/env_control/`) pilote la logique de quatre
+terrariums simulés en parallèle. Les mêmes algorithmes que sur le matériel réel sont conservés,
+mais toutes les mesures/actions transitent via `sensors_sim` et `gpio_sim` :
 
 - profils jour/nuit indépendants avec plages cibles température/humidité et hystérésis
   asymétriques (marche/arrêt) ;
 - planification de l'éclairage UV (heures d'allumage/extinction) avec possibilité de forcer
   manuellement un terrarium donné ;
 - prise en compte de l'horloge système pour basculer automatiquement entre profils et pour
-  horodater chaque acquisition ;
+  horodater chaque acquisition ;
 - suivi énergétique en Wh (chauffage, brumisation, UV) et gestion d'intervalles minimums entre
   deux cycles d'actionneurs afin de limiter l'usure.
 
-Chaque minute, un historique circulaire est alimenté pour alimenter les graphiques LVGL et les
-journaux CSV.
+Chaque minute, un historique circulaire est alimenté pour alimenter les graphiques LVGL et la
+journalisation CSV du mode simulation.
 
 ### Configuration persistante multi-terrariums
 L'écran de paramètres (`settings_screen_show`) a été refondu autour d'une colonne de navigation
@@ -273,40 +272,17 @@ de chaque terrarium (consignes jour/nuit, hystérésis, UV, intervalles minimaux
   NVS (`settings_save()`). Un modal prévient l'utilisateur en cas de fermeture avec des changements
   non sauvegardés.
 
-### Journalisation mode réel
-Un enregistreur dédié (`logging_real_start`) consigne, pour chaque terrarium et à chaque mise à
-jour, les mesures, consignes, états des actionneurs, drapeaux d'alarme et consommations
-électriques dans `/sdcard/real/<index>_<nom>.csv`. Les fichiers sont distincts de ceux utilisés en
-simulation et restent ouverts en écriture tant que le mode réel est actif. Ils peuvent être
-analysés a posteriori (ex. import dans un tableur ou un notebook Python).
-
-### Interface LVGL temps réel
-`main/reptile_real.c` refond totalement l'écran réel : jauges température/hygrométrie, graphiques
-glissants, boutons de forçage (chauffage, brumisation, UV), affichage des consommations et des
-alarmes. Les mises à jour sont thread-safe via `lvgl_port_lock()` et chaque terrarium dispose de
-son panneau dédié. Un bouton « Nourrir » global conserve la logique existante.
-
-### Schéma de dépendances
-```mermaid
-flowchart TD
-    App[Application] --> Sensors
-    App --> GPIO
-    Sensors --> sensors_real[Capteurs réels]
-    Sensors --> sensors_sim[Capteurs simulés]
-    GPIO --> gpio_real[GPIO réels]
-    GPIO --> gpio_sim[GPIO simulés]
-    sensors_real --> HW[(Matériel)]
-    gpio_real --> HW
-    sensors_sim -.->|aucun accès| HW
-    gpio_sim -.->|aucun accès| HW
-```
+### Journalisation simulation
+Le minuteur `logging_init` écrit toutes les minutes un CSV `/sdcard/reptile_log.csv` contenant
+slot actif, trésorerie et indicateurs de conformité du parc simulé. Le fichier est créé avec en-tête
+autoportant et les écritures sont vérifiées (`fflush` + `ferror`) pour remonter toute anomalie
+microSD dans le journal ESP-IDF.
 
 ### Chemins de sauvegarde et tests
-Le module `reptile_facility` enregistre un fichier par mode et par slot sous le
+Le module `reptile_facility` enregistre un fichier par slot sous le
 point de montage `MOUNT_POINT` (par défaut `/sdcard`). Exemple :
 
-- **Simulation** : `/sdcard/sim/slot_a.bin`, `/sdcard/sim/slot_b.bin`, …
-- **Réel** : `/sdcard/real/slot_a.bin`, `/sdcard/real/slot_b.bin`, …
+- `/sdcard/sim/slot_a.bin`, `/sdcard/sim/slot_b.bin`, …
 
 Pour valider la simulation sur un PC hôte, un binaire autonome peut être
 compilé grâce aux stubs présents dans `tests/include/` :
@@ -343,13 +319,6 @@ I (123) reptile_game: Initializing LVGL...
 I (456) reptile_game: Game started, touch to feed the reptile!
 ```
 L'écran LCD présente alors l'interface du jeu reptile avec interaction tactile.
-
-Pour vérifier rapidement la structure des journaux temps réel exportés sur microSD, le script
-`tests/validate_real_logs.py` peut être invoqué sur les fichiers CSV collectés :
-
-```sh
-python3 tests/validate_real_logs.py /chemin/vers/real/01_Terrarium.csv
-```
 
 ## Trame CAN
 Le firmware publie toutes les secondes l'état agrégé de l'élevage sur le bus

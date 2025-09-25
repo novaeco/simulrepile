@@ -25,7 +25,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gpio.h" // Custom GPIO wrappers for reptile control
-#include "sensors.h"      // Sensor initialization
 #include "logging.h"
 #include "lv_demos.h" // LVGL demo headers
 #include "lvgl.h"
@@ -34,7 +33,6 @@
 #include "nvs.h"          // NVS key-value API
 #include "nvs_flash.h"    // NVS flash for persistent storage
 #include "reptile_game.h" // Reptile game interface
-#include "reptile_real.h" // Real-world mode interface
 #include "sd.h"
 #include "sleep.h" // Sleep control interface
 #include "settings.h"     // Application settings
@@ -77,7 +75,6 @@ static esp_err_t s_sd_cs_last_err = ESP_OK;
 enum {
   APP_MODE_MENU = 0,
   APP_MODE_GAME = 1,
-  APP_MODE_REAL = 2,
   APP_MODE_SETTINGS = 3,
   APP_MODE_MENU_OVERRIDE = 0xFF,
 };
@@ -89,8 +86,7 @@ static void save_last_mode(uint8_t mode) {
   nvs_handle_t nvs;
   uint8_t persisted = APP_MODE_MENU_OVERRIDE;
 
-  if (mode == APP_MODE_GAME || mode == APP_MODE_REAL ||
-      mode == APP_MODE_SETTINGS) {
+  if (mode == APP_MODE_GAME || mode == APP_MODE_SETTINGS) {
     persisted = mode;
   } else if (mode == APP_MODE_MENU_OVERRIDE) {
     persisted = APP_MODE_MENU_OVERRIDE;
@@ -342,72 +338,6 @@ static void menu_btn_game_cb(lv_event_t *e) {
   game_mode_set(GAME_MODE_SIMULATION);
   save_last_mode(APP_MODE_GAME);
   start_game_mode();
-}
-
-static void menu_btn_real_cb(lv_event_t *e) {
-  (void)e;
-  game_mode_set(GAME_MODE_REAL);
-  reptile_game_stop();
-  sleep_timer_arm(false);
-  if (game_mode_get() == GAME_MODE_REAL) {
-    esp_err_t err = sensors_init();
-    if (err == ESP_ERR_NOT_FOUND) {
-      lv_obj_t *mbox = lv_msgbox_create(NULL);
-      lv_msgbox_add_title(mbox, "Erreur");
-      lv_msgbox_add_text(mbox, "Capteur non connecté");
-      lv_msgbox_add_close_button(mbox);
-      lv_obj_center(mbox);
-      return;
-    }
-    if (err != ESP_OK) {
-      lv_obj_t *mbox = lv_msgbox_create(NULL);
-      lv_msgbox_add_title(mbox, "Erreur");
-      char msg[96];
-      snprintf(msg,
-               sizeof(msg),
-               "Initialisation capteurs échouée (%s)",
-               esp_err_to_name(err));
-      lv_msgbox_add_text(mbox, msg);
-      lv_msgbox_add_close_button(mbox);
-      lv_obj_center(mbox);
-      return;
-    }
-    err = reptile_actuators_init();
-    if (err == ESP_ERR_NOT_FOUND) {
-      sensors_deinit();
-      lv_obj_t *mbox = lv_msgbox_create(NULL);
-      lv_msgbox_add_title(mbox, "Erreur");
-      lv_msgbox_add_text(mbox, "Capteur non connecté");
-      lv_msgbox_add_close_button(mbox);
-      lv_obj_center(mbox);
-      return;
-    }
-    if (err != ESP_OK) {
-      sensors_deinit();
-      lv_obj_t *mbox = lv_msgbox_create(NULL);
-      lv_msgbox_add_title(mbox, "Erreur");
-      char msg[96];
-      snprintf(msg,
-               sizeof(msg),
-               "Initialisation actionneurs échouée (%s)",
-               esp_err_to_name(err));
-      lv_msgbox_add_text(mbox, msg);
-      lv_msgbox_add_close_button(mbox);
-      lv_obj_center(mbox);
-      return;
-    }
-    save_last_mode(APP_MODE_REAL);
-    reptile_real_start(panel_handle, tp_handle);
-    if (sensors_is_using_simulation_fallback()) {
-      lv_obj_t *warn = lv_msgbox_create(NULL);
-      lv_msgbox_add_title(warn, "Attention");
-      lv_msgbox_add_text(warn,
-                         "Aucun capteur physique détecté.\n"
-                         "Lecture en mode simulation.");
-      lv_msgbox_add_close_button(warn);
-      lv_obj_center(warn);
-    }
-  }
 }
 
 static void menu_btn_settings_cb(lv_event_t *e) {
@@ -850,13 +780,6 @@ void app_main() {
                              LV_SYMBOL_PLAY, UI_THEME_NAV_ICON_SYMBOL,
                              menu_btn_game_cb, NULL);
 
-    const lv_image_dsc_t *real_icon =
-        ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK);
-    ui_theme_create_nav_card(nav_grid, "Mode Réel",
-                             "Capteurs physiques, automation expandeur IO et microSD",
-                             real_icon, UI_THEME_NAV_ICON_IMAGE, menu_btn_real_cb,
-                             NULL);
-
     ui_theme_create_nav_card(nav_grid, "Paramètres",
                              "Profils terrariums, calendriers et calibrations",
                              LV_SYMBOL_SETTINGS, UI_THEME_NAV_ICON_SYMBOL,
@@ -883,8 +806,7 @@ void app_main() {
       nvs_close(nvs);
 
       if (nvs_ret == ESP_OK &&
-          (last_mode == APP_MODE_GAME || last_mode == APP_MODE_REAL ||
-           last_mode == APP_MODE_SETTINGS)) {
+          (last_mode == APP_MODE_GAME || last_mode == APP_MODE_SETTINGS)) {
         has_persisted_mode = true;
       } else {
         last_mode = APP_MODE_MENU_OVERRIDE;
@@ -902,9 +824,6 @@ void app_main() {
       switch (last_mode) {
       case APP_MODE_GAME:
         last_mode_text = "Mode Jeu";
-        break;
-      case APP_MODE_REAL:
-        last_mode_text = "Mode Réel";
         break;
       case APP_MODE_SETTINGS:
         last_mode_text = "Paramètres";
@@ -934,12 +853,6 @@ void app_main() {
       switch (last_mode) {
       case APP_MODE_GAME:
         start_game_mode();
-        break;
-      case APP_MODE_REAL:
-        game_mode_set(GAME_MODE_REAL);
-        if (game_mode_get() == GAME_MODE_REAL) {
-          reptile_real_start(panel_handle, tp_handle);
-        }
         break;
       case APP_MODE_SETTINGS:
         settings_screen_show();

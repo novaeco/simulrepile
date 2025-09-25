@@ -5,8 +5,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    GAME_MODE_REAL = 0,
-    GAME_MODE_SIMULATION
+    GAME_MODE_SIMULATION = 0
 } game_mode_t;
 
 void game_mode_set(game_mode_t mode);
