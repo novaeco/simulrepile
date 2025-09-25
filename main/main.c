@@ -26,6 +26,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "gpio.h" // Custom GPIO wrappers for reptile control
+#include "sensors.h"      // Sensor initialization
 #include "logging.h"
 #include "lv_demos.h" // LVGL demo headers
 #include "lvgl.h"
@@ -34,6 +35,7 @@
 #include "nvs.h"          // NVS key-value API
 #include "nvs_flash.h"    // NVS flash for persistent storage
 #include "reptile_game.h" // Reptile game interface
+#include "reptile_real.h" // Real-world mode interface
 #include "sd.h"
 #include "sleep.h" // Sleep control interface
 #include "settings.h"     // Application settings
@@ -82,6 +84,7 @@ static TaskHandle_t s_sd_mount_task;
 enum {
   APP_MODE_MENU = 0,
   APP_MODE_GAME = 1,
+  APP_MODE_REAL = 2,
   APP_MODE_SETTINGS = 3,
   APP_MODE_MENU_OVERRIDE = 0xFF,
 };
@@ -93,7 +96,8 @@ static void save_last_mode(uint8_t mode) {
   nvs_handle_t nvs;
   uint8_t persisted = APP_MODE_MENU_OVERRIDE;
 
-  if (mode == APP_MODE_GAME || mode == APP_MODE_SETTINGS) {
+  if (mode == APP_MODE_GAME || mode == APP_MODE_REAL ||
+      mode == APP_MODE_SETTINGS) {
     persisted = mode;
   } else if (mode == APP_MODE_MENU_OVERRIDE) {
     persisted = APP_MODE_MENU_OVERRIDE;
@@ -114,6 +118,8 @@ static void menu_header_timer_cb(lv_timer_t *timer);
 static void menu_header_update(void);
 static void menu_hint_append(const char *message);
 static void sd_mount_worker(void *arg);
+static void show_message_box(const char *title, const char *text);
+static bool start_real_mode(void);
 
 static void sd_cs_selftest(void) {
   s_sd_cs_ready = false;
@@ -341,11 +347,77 @@ static void start_game_mode(void) {
   sleep_timer_arm(true);
 }
 
+static bool start_real_mode(void) {
+  game_mode_set(GAME_MODE_REAL);
+  reptile_game_stop();
+  sleep_timer_arm(false);
+
+  esp_err_t err = sensors_init();
+  if (err != ESP_OK) {
+    const char *msg = (err == ESP_ERR_NOT_FOUND)
+                          ? "Capteur non connecté"
+                          : NULL;
+    if (!msg) {
+      char buf[96];
+      snprintf(buf, sizeof(buf),
+               "Initialisation capteurs échouée (%s)", esp_err_to_name(err));
+      show_message_box("Erreur", buf);
+    } else {
+      show_message_box("Erreur", msg);
+    }
+    sensors_deinit();
+    game_mode_set(GAME_MODE_SIMULATION);
+    return false;
+  }
+
+  err = reptile_actuators_init();
+  if (err != ESP_OK) {
+    sensors_deinit();
+    const char *msg = (err == ESP_ERR_NOT_FOUND)
+                          ? "Actionneur ou expandeur IO absent"
+                          : NULL;
+    if (!msg) {
+      char buf[112];
+      snprintf(buf, sizeof(buf),
+               "Initialisation actionneurs échouée (%s)",
+               esp_err_to_name(err));
+      show_message_box("Erreur", buf);
+    } else {
+      show_message_box("Erreur", msg);
+    }
+    reptile_actuators_deinit();
+    game_mode_set(GAME_MODE_SIMULATION);
+    return false;
+  }
+
+  settings_apply();
+  save_last_mode(APP_MODE_REAL);
+  reptile_real_start(panel_handle, tp_handle);
+
+  if (sensors_is_using_simulation_fallback()) {
+    show_message_box("Attention",
+                     "Aucun capteur physique détecté.\nLecture en mode simulation.");
+    menu_hint_append(
+        "Capteurs physiques introuvables : données en mode simulation.");
+  }
+
+  menu_header_update();
+
+  return true;
+}
+
 static void menu_btn_game_cb(lv_event_t *e) {
   (void)e;
   game_mode_set(GAME_MODE_SIMULATION);
   save_last_mode(APP_MODE_GAME);
   start_game_mode();
+}
+
+static void menu_btn_real_cb(lv_event_t *e) {
+  (void)e;
+  if (!start_real_mode()) {
+    ESP_LOGW(TAG, "Lancement du mode réel annulé");
+  }
 }
 
 static void menu_btn_settings_cb(lv_event_t *e) {
@@ -392,6 +464,21 @@ static void menu_hint_append(const char *message) {
     lv_label_set_text(menu_quick_hint_label, message);
   }
   lv_obj_clear_flag(menu_quick_hint_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_message_box(const char *title, const char *text) {
+  lv_obj_t *mbox = lv_msgbox_create(NULL);
+  if (!mbox) {
+    return;
+  }
+  if (title && title[0] != '\0') {
+    lv_msgbox_add_title(mbox, title);
+  }
+  if (text && text[0] != '\0') {
+    lv_msgbox_add_text(mbox, text);
+  }
+  lv_msgbox_add_close_button(mbox);
+  lv_obj_center(mbox);
 }
 
 static void show_error_screen(const char *msg) {
@@ -859,6 +946,11 @@ void app_main() {
                              LV_SYMBOL_PLAY, UI_THEME_NAV_ICON_SYMBOL,
                              menu_btn_game_cb, NULL);
 
+    ui_theme_create_nav_card(nav_grid, "Mode Réel",
+                             "Surveillance capteurs & pilotage direct",
+                             LV_SYMBOL_HOME, UI_THEME_NAV_ICON_SYMBOL,
+                             menu_btn_real_cb, NULL);
+
     ui_theme_create_nav_card(nav_grid, "Paramètres",
                              "Profils terrariums, calendriers et calibrations",
                              LV_SYMBOL_SETTINGS, UI_THEME_NAV_ICON_SYMBOL,
@@ -885,7 +977,8 @@ void app_main() {
       nvs_close(nvs);
 
       if (nvs_ret == ESP_OK &&
-          (last_mode == APP_MODE_GAME || last_mode == APP_MODE_SETTINGS)) {
+          (last_mode == APP_MODE_GAME || last_mode == APP_MODE_REAL ||
+           last_mode == APP_MODE_SETTINGS)) {
         has_persisted_mode = true;
       } else {
         last_mode = APP_MODE_MENU_OVERRIDE;
@@ -903,6 +996,9 @@ void app_main() {
       switch (last_mode) {
       case APP_MODE_GAME:
         last_mode_text = "Mode Jeu";
+        break;
+      case APP_MODE_REAL:
+        last_mode_text = "Mode Réel";
         break;
       case APP_MODE_SETTINGS:
         last_mode_text = "Paramètres";
@@ -932,6 +1028,12 @@ void app_main() {
       switch (last_mode) {
       case APP_MODE_GAME:
         start_game_mode();
+        break;
+      case APP_MODE_REAL:
+        if (!start_real_mode()) {
+          ESP_LOGW(TAG,
+                   "Démarrage rapide du mode réel impossible : dépendances non disponibles");
+        }
         break;
       case APP_MODE_SETTINGS:
         settings_screen_show();

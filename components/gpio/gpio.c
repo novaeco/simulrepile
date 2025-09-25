@@ -1,6 +1,8 @@
 #include "gpio.h"
+#include "game_mode.h"
 #include "esp_log.h"
 
+extern const actuator_driver_t gpio_real_driver;
 extern const actuator_driver_t gpio_sim_driver;
 
 static const char *TAG = "gpio";
@@ -8,8 +10,12 @@ static const actuator_driver_t *s_driver = NULL;
 
 static inline void ensure_driver(void)
 {
-    if (!s_driver) {
-        s_driver = &gpio_sim_driver;
+    game_mode_t mode = game_mode_get();
+    const actuator_driver_t *expected =
+        (mode == GAME_MODE_SIMULATION) ? &gpio_sim_driver : &gpio_real_driver;
+
+    if (s_driver != expected) {
+        s_driver = expected;
     }
 }
 
