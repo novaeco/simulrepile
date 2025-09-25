@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="600" viewBox="0 0 1024 600">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F3EFE2"/>
+      <stop offset="100%" stop-color="#E2F1E5"/>
+    </linearGradient>
+    <linearGradient id="cardGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FAF5EB"/>
+      <stop offset="100%" stop-color="#F0E7DA"/>
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2A9D8F"/>
+      <stop offset="100%" stop-color="#3A7D60"/>
+    </linearGradient>
+    <style><![CDATA[
+      .title { font-family: 'Montserrat', sans-serif; font-size: 28px; fill: #204D3B; font-weight: 600; }
+      .caption { font-family: 'Montserrat', sans-serif; font-size: 18px; fill: #4C6F52; }
+      .body { font-family: 'Montserrat', sans-serif; font-size: 22px; fill: #2F4F43; }
+      .emphasis { font-family: 'Montserrat', sans-serif; font-size: 24px; fill: #2A9D8F; font-weight: 600; }
+      .mono { font-family: 'Fira Code', 'Courier New', monospace; font-size: 18px; fill: #3A7D60; }
+      .shadow { filter: drop-shadow(0px 6px 12px rgba(32,77,59,0.18)); }
+      .icon { font-size: 42px; fill: #2A9D8F; }
+      .card-icon { font-size: 50px; fill: #2A9D8F; }
+      .card-title { font-family: 'Montserrat', sans-serif; font-size: 26px; fill: #204D3B; font-weight: 600; }
+      .card-sub { font-family: 'Montserrat', sans-serif; font-size: 18px; fill: #4C6F52; }
+    ]]></style>
+  </defs>
+  <rect width="1024" height="600" fill="url(#bgGrad)"/>
+
+  <!-- Header container -->
+  <g transform="translate(60,48)" class="shadow">
+    <rect width="904" height="110" rx="26" fill="url(#cardGrad)" stroke="#D8D2C5" stroke-width="2"/>
+    <text x="48" y="55" class="title">Verdant Terrarium</text>
+    <text x="48" y="88" class="caption">Tableau de bord principal – Simulation &amp; Mode réel</text>
+    <text x="650" y="50" class="icon">🕒</text>
+    <text x="700" y="54" class="body">06:42</text>
+    <text x="650" y="92" class="icon">💾</text>
+    <text x="700" y="96" class="caption">SD : OK · 32 Go</text>
+    <text x="820" y="50" class="icon">🌿</text>
+    <text x="870" y="54" class="body">Veille OFF</text>
+  </g>
+
+  <!-- Summary widget -->
+  <g transform="translate(60,190)" class="shadow">
+    <rect width="384" height="176" rx="24" fill="url(#cardGrad)" stroke="#D8D2C5" stroke-width="2"/>
+    <text x="40" y="64" class="card-title">Résumé session</text>
+    <text x="40" y="102" class="body">Slot actif : <tspan class="emphasis">B – Boïdés</tspan></text>
+    <text x="40" y="138" class="body">Dernier enregistrement : <tspan class="emphasis">06:40:12</tspan></text>
+    <text x="40" y="168" class="caption">Incidents : 0 · MicroSD saine · 3 alertes résolues</text>
+  </g>
+
+  <!-- Navigation grid -->
+  <g transform="translate(470,190)">
+    <!-- Simulation card -->
+    <g transform="translate(0,0)" class="shadow">
+      <rect width="248" height="168" rx="22" fill="url(#cardGrad)" stroke="#C8E0D2" stroke-width="2"/>
+      <text x="36" y="66" class="card-icon">&#9654;</text>
+      <text x="96" y="70" class="card-title">Mode simulation</text>
+      <text x="96" y="106" class="card-sub">Slots multiples, moteur IA,</text>
+      <text x="96" y="134" class="card-sub">événements biologiques.</text>
+    </g>
+    <!-- Real card -->
+    <g transform="translate(276,0)" class="shadow">
+      <rect width="248" height="168" rx="22" fill="url(#cardGrad)" stroke="#C8E0D2" stroke-width="2"/>
+      <text x="38" y="64" class="card-icon">&#128062;</text>
+      <text x="96" y="70" class="card-title">Mode réel</text>
+      <text x="96" y="106" class="card-sub">Capteurs GT911,</text>
+      <text x="96" y="134" class="card-sub">actionneurs CH422G.</text>
+    </g>
+    <!-- Settings card -->
+    <g transform="translate(0,196)" class="shadow">
+      <rect width="248" height="168" rx="22" fill="url(#cardGrad)" stroke="#C8E0D2" stroke-width="2"/>
+      <text x="36" y="66" class="card-icon">&#9881;</text>
+      <text x="96" y="70" class="card-title">Paramètres</text>
+      <text x="96" y="106" class="card-sub">Calendrier UV, profils</text>
+      <text x="96" y="134" class="card-sub">jour/nuit, sauvegardes.</text>
+    </g>
+    <!-- Wake button -->
+    <g transform="translate(276,196)" class="shadow">
+      <rect width="248" height="168" rx="22" fill="white" stroke="#2A9D8F" stroke-width="3"/>
+      <rect x="16" y="40" width="216" height="88" rx="18" fill="url(#primaryGrad)"/>
+      <text x="74" y="96" class="card-title" fill="#FFFFFF">Quitter veille</text>
+      <text x="30" y="150" class="card-sub">Désarme l'économie d'énergie.</text>
+    </g>
+  </g>
+
+  <!-- Footer tips -->
+  <g transform="translate(60,510)">
+    <text class="caption">Interactions LVGL illustrées – les cartes utilisent `ui_theme_create_nav_card()` avec feedback pressé.</text>
+    <text y="28" class="mono">Callbacks conservés : menu_btn_sim_cb · menu_btn_real_cb · menu_btn_settings_cb · menu_btn_wake_cb</text>
+  </g>
+</svg>
