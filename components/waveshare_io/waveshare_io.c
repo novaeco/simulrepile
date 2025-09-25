@@ -28,7 +28,7 @@ static uint8_t s_ch422g_addr = 0;
 static void wait_bus_settle(void)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
-        ets_delay_us(50 * 1000);
+        esp_rom_delay_us(50 * 1000);
     } else {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
