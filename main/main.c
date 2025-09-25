@@ -52,6 +52,16 @@
 
 #include "esp_timer.h"
 
+#ifndef CONFIG_SIMULREPILE_SD_MOUNT_STACK_WORDS
+#define CONFIG_SIMULREPILE_SD_MOUNT_STACK_WORDS 8192
+#endif
+
+#define SD_MOUNT_TASK_STACK_WORDS CONFIG_SIMULREPILE_SD_MOUNT_STACK_WORDS
+
+#if SD_MOUNT_TASK_STACK_WORDS < 4096
+#error "sd_mount task stack must be at least 4096 words (16 kB)"
+#endif
+
 static const char *TAG = "main"; // Tag for logging
 
 static lv_timer_t *sleep_timer; // Inactivity timer handle
@@ -500,7 +510,8 @@ static esp_err_t sd_mount_with_watchdog(bool *wdt_registered,
   idle_guards[0] = idle_wdt_guard_detach_for_cpu(0);
 #endif
 
-  BaseType_t rc = xTaskCreatePinnedToCore(sd_mount_task, "sd_mount", 4096, &ctx,
+  BaseType_t rc = xTaskCreatePinnedToCore(sd_mount_task, "sd_mount",
+                                          SD_MOUNT_TASK_STACK_WORDS, &ctx,
                                           tskIDLE_PRIORITY + 1, NULL, task_core);
   if (rc != pdPASS) {
     ESP_LOGE(TAG,
