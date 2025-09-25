@@ -1,3 +1,11 @@
 config REPTILE_DEBUG
     bool "Activer le mode debug (désactive la veille)"
     default n
+
+config SIMULREPILE_SD_FAKE
+    bool "Activer le mode simulation microSD"
+    default n
+    help
+        Lorsque cette option est activée, l'initialisation SD est court-circuitée
+        et un volume simulé est créé sur le système de fichiers hôte. À utiliser
+        pour les tests automatisés sans carte microSD physique.

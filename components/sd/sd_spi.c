@@ -1,6 +1,10 @@
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include "driver/spi_master.h"
 #include "driver/sdspi_host.h"
@@ -8,6 +12,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
@@ -36,6 +41,7 @@ static const char *TAG = "sd";
 static sdmmc_card_t *s_card = NULL;
 static bool s_spi_bus_owned = false;
 static spi_host_device_t s_host_id = SPI3_HOST;
+static bool s_simulation_mode = false;
 
 static inline uint32_t sdspi_select_frequency(int attempt)
 {
@@ -43,13 +49,24 @@ static inline uint32_t sdspi_select_frequency(int attempt)
     uint32_t fallback = CONFIG_SD_SPI_RETRY_FREQ_KHZ;
 
     if (primary == 0) {
-        primary = 20000;
+        primary = 10000;
     }
     if (fallback == 0) {
         fallback = primary;
     }
+
+    if (primary > 12000) {
+        primary = 12000;
+    }
     if (fallback > primary) {
         fallback = primary;
+    }
+
+    if (primary < 400) {
+        primary = 400;
+    }
+    if (fallback < 400) {
+        fallback = 400;
     }
 
     return (attempt == 0) ? primary : fallback;
@@ -67,6 +84,29 @@ static inline spi_bus_config_t sdspi_bus_config(void) {
     return cfg;
 }
 
+static esp_err_t sd_prepare_mount_point(const char *mount_point)
+{
+    struct stat st = {0};
+    if (stat(mount_point, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            return ESP_OK;
+        }
+        ESP_LOGE(TAG, "%s existe mais n'est pas un répertoire", mount_point);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (mkdir(mount_point, 0775) == 0) {
+        return ESP_OK;
+    }
+
+    if (errno == EEXIST) {
+        return ESP_OK;
+    }
+
+    ESP_LOGE(TAG, "Création du point de montage %s impossible: %s", mount_point, strerror(errno));
+    return ESP_FAIL;
+}
+
 esp_err_t sd_mount(void)
 {
     if (s_card) {
@@ -81,6 +121,37 @@ esp_err_t sd_mount(void)
         .allocation_unit_size = 16 * 1024,
     };
 
+#if CONFIG_SIMULREPILE_SD_FAKE
+    if (!s_simulation_mode) {
+        ESP_LOGW(TAG, "Mode simulation SD actif – aucun accès matériel");
+    }
+    s_simulation_mode = true;
+    ESP_RETURN_ON_ERROR(sd_prepare_mount_point(mount_point), TAG, "create mount point");
+    char sentinel_path[128];
+    int written = snprintf(sentinel_path, sizeof(sentinel_path), "%s/selftest.txt", mount_point);
+    if (written <= 0 || written >= (int)sizeof(sentinel_path)) {
+        ESP_LOGE(TAG, "Chemin selftest invalide");
+        return ESP_FAIL;
+    }
+    FILE *f = fopen(sentinel_path, "w");
+    if (!f) {
+        ESP_LOGE(TAG, "Impossible de créer %s: %s", sentinel_path, strerror(errno));
+        return ESP_FAIL;
+    }
+    unsigned long now_us = (unsigned long)esp_timer_get_time();
+    if (fprintf(f, "OK SIMULATED %lu\n", now_us) < 0) {
+        ESP_LOGE(TAG, "Écriture du sentinel SD simulé échouée: %s", strerror(errno));
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (fclose(f) != 0) {
+        ESP_LOGE(TAG, "Fermeture du sentinel SD simulé échouée: %s", strerror(errno));
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "microSD simulée montée sur %s", mount_point);
+    return ESP_OK;
+#endif
+
     ESP_LOGI(TAG,
              "SDSPI host=SPI3 MOSI=%d MISO=%d SCLK=%d CS=%d",
              CONFIG_SD_SPI_MOSI_IO,
@@ -88,6 +159,7 @@ esp_err_t sd_mount(void)
              CONFIG_SD_SPI_SCLK_IO,
              CONFIG_SD_SPI_CS_IO);
 
+    s_simulation_mode = false;
     s_spi_bus_owned = false;
 
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -116,6 +188,8 @@ esp_err_t sd_mount(void)
                  attempt + 1,
                  host.max_freq_khz,
                  mount_point);
+
+        vTaskDelay(pdMS_TO_TICKS(50));
 
         esp_err_t ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_cfg, &mount_cfg, &s_card);
         if (ret == ESP_OK) {
@@ -158,6 +232,12 @@ esp_err_t sd_mount(void)
 
 esp_err_t sd_unmount(void)
 {
+    if (s_simulation_mode && !s_card) {
+        ESP_LOGI(TAG, "microSD simulée démontée");
+        s_simulation_mode = false;
+        return ESP_OK;
+    }
+
     if (!s_card) {
         return ESP_OK;
     }
@@ -196,6 +276,14 @@ sdmmc_card_t *sd_get_card(void)
 
 esp_err_t sd_card_print_info_stream(FILE *stream)
 {
+    if (s_simulation_mode && !s_card) {
+        if (!stream) {
+            stream = stdout;
+        }
+        fprintf(stream, "Simulated microSD mounted at %s\n", SD_MOUNT_POINT);
+        return ESP_OK;
+    }
+
     if (!s_card) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -238,7 +326,7 @@ esp_err_t sd_spi_cs_selftest(void)
 
 bool sd_is_mounted(void)
 {
-    return s_card != NULL;
+    return (s_card != NULL) || s_simulation_mode;
 }
 
 bool sd_uses_direct_cs(void)
@@ -249,4 +337,9 @@ bool sd_uses_direct_cs(void)
 int sd_get_cs_gpio(void)
 {
     return CONFIG_SD_SPI_CS_IO;
+}
+
+bool sd_is_simulated(void)
+{
+    return s_simulation_mode;
 }
