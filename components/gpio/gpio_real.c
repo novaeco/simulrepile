@@ -1,6 +1,8 @@
 #include "gpio.h"
 
-#include "ch422g.h"
+#include <limits.h>
+
+#include "waveshare_io.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -11,7 +13,7 @@
 typedef enum {
     REPTILE_OUTPUT_NONE = 0,
     REPTILE_OUTPUT_GPIO,
-    REPTILE_OUTPUT_CH422,
+    REPTILE_OUTPUT_EXPANDER,
 } reptile_output_bus_t;
 
 typedef struct {
@@ -19,7 +21,7 @@ typedef struct {
     bool active_high;
     union {
         gpio_num_t gpio;
-        uint8_t exio;
+        uint8_t line;
     } signal;
 } reptile_output_t;
 
@@ -31,28 +33,28 @@ typedef struct {
 
 static const reptile_channel_hw_t s_hw_map[] = {
     {
-        .heater = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = HEAT_RES_EXIO},
-        .pump = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = WATER_PUMP_EXIO},
+        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(HEAT_RES_EXIO)},
+        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(WATER_PUMP_EXIO)},
         .uv = {.bus = REPTILE_OUTPUT_GPIO, .active_high = true, .signal.gpio = LED_GPIO_PIN},
     },
     {
-        .heater = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = 1},
-        .pump = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = 2},
-        .uv = {.bus = REPTILE_OUTPUT_CH422, .active_high = false, .signal.exio = 3},
+        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(1)},
+        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(2)},
+        .uv = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(3)},
     },
 };
 
 #if SERVO_FEED_EXIO > 0
 static const reptile_output_t s_feed_output = {
-    .bus = REPTILE_OUTPUT_CH422,
+    .bus = REPTILE_OUTPUT_EXPANDER,
     .active_high = false,
-    .signal.exio = SERVO_FEED_EXIO,
+    .signal.line = waveshare_io_line_from_exio(SERVO_FEED_EXIO),
 };
 #else
 static const reptile_output_t s_feed_output = {
     .bus = REPTILE_OUTPUT_NONE,
     .active_high = false,
-    .signal.exio = 0,
+    .signal.line = UINT8_MAX,
 };
 #endif
 
@@ -129,9 +131,12 @@ static esp_err_t actuator_drive(const reptile_output_t *out, bool active)
     case REPTILE_OUTPUT_GPIO:
         gpio_set_level(out->signal.gpio, actuator_gpio_level(out, active));
         return ESP_OK;
-    case REPTILE_OUTPUT_CH422: {
+    case REPTILE_OUTPUT_EXPANDER: {
         bool level = (out->active_high == active);
-        return ch422g_exio_set(out->signal.exio, level);
+        if (!waveshare_io_line_valid(out->signal.line)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        return waveshare_io_output_set(out->signal.line, level);
     }
     case REPTILE_OUTPUT_NONE:
     default:
@@ -261,8 +266,8 @@ static void gpio_real_uv(size_t channel, bool on)
 
 static esp_err_t gpio_real_init(void)
 {
-    bool need_ch422 = (actuator_available(&s_feed_output) &&
-                       s_feed_output.bus == REPTILE_OUTPUT_CH422);
+    bool need_expander = (actuator_available(&s_feed_output) &&
+                          s_feed_output.bus == REPTILE_OUTPUT_EXPANDER);
     for (size_t i = 0; i < s_hw_channel_count; ++i) {
         const reptile_channel_hw_t *hw = &s_hw_map[i];
         const reptile_output_t *outputs[] = {&hw->heater, &hw->pump, &hw->uv};
@@ -271,16 +276,16 @@ static esp_err_t gpio_real_init(void)
             if (!actuator_available(out)) {
                 continue;
             }
-            if (out->bus == REPTILE_OUTPUT_CH422) {
-                need_ch422 = true;
+            if (out->bus == REPTILE_OUTPUT_EXPANDER) {
+                need_expander = true;
             } else if (out->bus == REPTILE_OUTPUT_GPIO) {
                 gpio_real_mode(out->signal.gpio, GPIO_MODE_OUTPUT);
             }
         }
     }
 
-    if (need_ch422) {
-        ESP_RETURN_ON_ERROR(ch422g_init(), TAG, "init CH422G expander");
+    if (need_expander) {
+        ESP_RETURN_ON_ERROR(waveshare_io_init(), TAG, "init Waveshare IO expander");
     }
 
     for (size_t i = 0; i < s_hw_channel_count; ++i) {

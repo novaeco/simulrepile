@@ -12,6 +12,7 @@
 #define SCAN_ADDR_END   0x77
 #define CH422G_ADDR_MIN 0x20
 #define CH422G_ADDR_MAX 0x23
+#define WAVESHARE_CH32_ADDR 0x24
 
 static i2c_master_bus_handle_t s_bus;
 
@@ -78,12 +79,17 @@ static void init_bus(void)
 static void scan_once(void)
 {
     bool ch422g_seen = false;
+    bool ch32_seen = false;
     for (uint16_t addr = SCAN_ADDR_START; addr <= SCAN_ADDR_END; ++addr) {
         esp_err_t ret = i2c_master_probe(s_bus, addr, 50);
         if (ret == ESP_OK) {
             if (addr >= CH422G_ADDR_MIN && addr <= CH422G_ADDR_MAX) {
                 ch422g_seen = true;
                 ESP_LOGI(TAG, "CH422G candidat détecté à 0x%02X", (int)addr);
+            } else if (addr == WAVESHARE_CH32_ADDR) {
+                ch32_seen = true;
+                ESP_LOGI(TAG, "Contrôleur IO Waveshare (CH32V003) détecté à 0x%02X",
+                         WAVESHARE_CH32_ADDR);
             } else {
                 ESP_LOGD(TAG, "Peripheral detected at 0x%02X", (int)addr);
             }
@@ -100,6 +106,11 @@ static void scan_once(void)
         ESP_LOGW(TAG,
                  "Aucun périphérique n'a répondu entre 0x%02X et 0x%02X.",
                  CH422G_ADDR_MIN, CH422G_ADDR_MAX);
+    }
+    if (!ch32_seen) {
+        ESP_LOGI(TAG,
+                 "Aucun CH32V003 n'a répondu à 0x%02X (révisions ESP32-S3 Touch LCD 7B).",
+                 WAVESHARE_CH32_ADDR);
     }
 }
 

@@ -17,6 +17,7 @@ idf_component_register(
         logging
         can
         gpio
+        waveshare_io
     PRIV_REQUIRES
         image
         sensors

@@ -15,7 +15,7 @@
 
 #include "i2c.h"
 #include "gpio.h"
-#include "io_extension.h"
+#include "waveshare_io.h"
 #include "rgb_lcd_port.h"
 
 #include "gt911.h"
@@ -381,15 +381,15 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
 
     // Reset the touch screen before usage
     DEV_I2C_Port port = DEV_I2C_Init();  // Initialize I2C port
-    esp_err_t ret = IO_EXTENSION_Init();  // Initialize the IO EXTENSION GPIO chip for backlight control
+    esp_err_t ret = waveshare_io_init();  // Initialize the Waveshare IO expander
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "IO extension init failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "IO expander init failed: %s", esp_err_to_name(ret));
         return ret;
     }
     DEV_GPIO_Mode(EXAMPLE_PIN_NUM_TOUCH_INT, GPIO_MODE_INPUT_OUTPUT);  // Set GPIO pin mode for interrupt
-    ret = IO_EXTENSION_Output(IO_EXTENSION_IO_1, 0);  // Set GPIO for backlight control to low (off)
+    ret = waveshare_io_output_set(WAVESHARE_IO_LINE_TOUCH_RST, false);  // Drive reset low
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set IO1 low: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to assert touch reset: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -397,9 +397,9 @@ esp_err_t touch_gt911_init(esp_lcd_touch_handle_t *out_handle)
     DEV_Digital_Write(EXAMPLE_PIN_NUM_TOUCH_INT, 0);  // Set interrupt pin low (disable interrupt)
 
     vTaskDelay(pdMS_TO_TICKS(100));  // Wait for another 100ms
-    ret = IO_EXTENSION_Output(IO_EXTENSION_IO_1, 1);  // Set GPIO for backlight control to high (on)
+    ret = waveshare_io_output_set(WAVESHARE_IO_LINE_TOUCH_RST, true);  // Release reset
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set IO1 high: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to release touch reset: %s", esp_err_to_name(ret));
         return ret;
     }
 
