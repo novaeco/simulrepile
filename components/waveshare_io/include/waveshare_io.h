@@ -37,9 +37,14 @@ esp_err_t waveshare_io_sd_deselect(void);
 #define WAVESHARE_IO_LINE_BACKLIGHT 2u
 #define WAVESHARE_IO_LINE_LCD_RST 3u
 
+#define WAVESHARE_IO_EXIO_DISABLED UINT8_MAX
+
+#define WAVESHARE_IO_LINE_FROM_EXIO_CONST(exio) \
+    ((uint8_t)(((exio) > 0u) ? ((exio) - 1u) : WAVESHARE_IO_EXIO_DISABLED))
+
 static inline uint8_t waveshare_io_line_from_exio(uint8_t exio)
 {
-    return (exio > 0u) ? (uint8_t)(exio - 1u) : UINT8_MAX;
+    return WAVESHARE_IO_LINE_FROM_EXIO_CONST(exio);
 }
 
 static inline bool waveshare_io_line_valid(uint8_t line)
