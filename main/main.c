@@ -23,6 +23,7 @@
 #include "esp_system.h"   // Reset reason API
 #include "esp_task_wdt.h" // Watchdog timer API
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "gpio.h" // Custom GPIO wrappers for reptile control
 #include "logging.h"
@@ -72,6 +73,12 @@ static sdmmc_card_t *s_sd_card = NULL;
 static bool s_sd_cs_ready = false;
 static esp_err_t s_sd_cs_last_err = ESP_OK;
 
+static EventGroupHandle_t s_sd_event_group;
+static TaskHandle_t s_sd_mount_task;
+
+#define SD_EVENT_READY BIT0
+#define SD_EVENT_FATAL BIT1
+
 enum {
   APP_MODE_MENU = 0,
   APP_MODE_GAME = 1,
@@ -106,6 +113,7 @@ static void sleep_timer_cb(lv_timer_t *timer);
 static void menu_header_timer_cb(lv_timer_t *timer);
 static void menu_header_update(void);
 static void menu_hint_append(const char *message);
+static void sd_mount_worker(void *arg);
 
 static void sd_cs_selftest(void) {
   s_sd_cs_ready = false;
@@ -411,15 +419,29 @@ static void hide_error_screen(void) {
   lvgl_port_unlock();
 }
 
-static void wait_for_sd_card(void) {
-  esp_err_t err;
+static void sd_mount_worker(void *arg) {
+  (void)arg;
+  esp_err_t err = ESP_OK;
   int attempts = 0;
   const int max_attempts = 10;
   bool wdt_registered = false;
   bool restart_required = false;
+  bool event_set = false;
+
+  if (s_sd_event_group == NULL) {
+    s_sd_event_group = xEventGroupCreate();
+    if (s_sd_event_group == NULL) {
+      ESP_LOGE(TAG, "Allocation EventGroup SD impossible");
+      s_sd_mount_task = NULL;
+      vTaskDelete(NULL);
+    }
+  }
 
   if (sd_is_mounted()) {
-    return;
+    menu_header_update();
+    xEventGroupSetBits(s_sd_event_group, SD_EVENT_READY);
+    event_set = true;
+    goto cleanup;
   }
 
   if (!s_sd_cs_ready) {
@@ -448,7 +470,9 @@ static void wait_for_sd_card(void) {
         lvgl_port_unlock();
       }
       menu_header_update();
-      return;
+      xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+      event_set = true;
+      goto cleanup;
     }
 #endif
     ESP_LOGE(TAG,
@@ -457,7 +481,9 @@ static void wait_for_sd_card(void) {
              esp_err_to_name(s_sd_cs_last_err));
     show_error_screen("Erreur bus expandeur / CS SD\nVérifier câblage I2C");
     menu_header_update();
-    return;
+    xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+    event_set = true;
+    goto cleanup;
   }
 
   esp_err_t wdt_ret = esp_task_wdt_add(NULL);
@@ -485,7 +511,9 @@ static void wait_for_sd_card(void) {
         wdt_registered = false;
       }
       menu_header_update();
-      return;
+      xEventGroupSetBits(s_sd_event_group, SD_EVENT_READY);
+      event_set = true;
+      goto cleanup;
     }
 
     s_sd_card = NULL;
@@ -524,16 +552,21 @@ static void wait_for_sd_card(void) {
                  CONFIG_STORAGE_SD_GPIO_CS_NUM, CONFIG_CH422G_EXIO_SD_CS,
                  CONFIG_STORAGE_SD_GPIO_CS_NUM);
         show_error_screen(screen_msg);
-        break;
+        menu_header_update();
+        xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+        event_set = true;
+        goto cleanup;
       }
 #endif
       show_error_screen("Carte SD absente - redémarrage");
+      menu_header_update();
       vTaskDelay(pdMS_TO_TICKS(2000));
       break;
     }
     // Attendre indéfiniment jusqu'à insertion d'une carte valide
   }
 
+cleanup:
   if (wdt_registered) {
     esp_err_t del_ret = esp_task_wdt_delete(NULL);
     if (del_ret != ESP_OK) {
@@ -541,9 +574,55 @@ static void wait_for_sd_card(void) {
                esp_err_to_name(del_ret));
     }
   }
+  if (!event_set) {
+    xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+  }
   menu_header_update();
+  s_sd_mount_task = NULL;
   if (restart_required) {
+    vTaskDelay(pdMS_TO_TICKS(50));
     esp_restart();
+  }
+  vTaskDelete(NULL);
+}
+
+static void wait_for_sd_card(void) {
+  if (sd_is_mounted()) {
+    return;
+  }
+
+  if (s_sd_event_group == NULL) {
+    s_sd_event_group = xEventGroupCreate();
+    if (s_sd_event_group == NULL) {
+      ESP_LOGE(TAG, "Impossible de créer le groupe d'événements SD");
+      return;
+    }
+  }
+
+  if (s_sd_mount_task == NULL) {
+    xEventGroupClearBits(s_sd_event_group, SD_EVENT_READY | SD_EVENT_FATAL);
+    BaseType_t created = xTaskCreatePinnedToCore(
+        sd_mount_worker, "sd-mount", 4096, NULL, tskIDLE_PRIORITY + 4,
+        &s_sd_mount_task, tskNO_AFFINITY);
+    if (created != pdPASS) {
+      ESP_LOGE(TAG, "Impossible de créer la tâche d'initialisation SD");
+      s_sd_mount_task = NULL;
+      xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+      return;
+    }
+  }
+
+  while (true) {
+    EventBits_t bits = xEventGroupWaitBits(
+        s_sd_event_group, SD_EVENT_READY | SD_EVENT_FATAL, pdFALSE, pdFALSE,
+        pdMS_TO_TICKS(200));
+    if (bits & SD_EVENT_READY) {
+      break;
+    }
+    if (bits & SD_EVENT_FATAL) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
