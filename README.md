@@ -162,20 +162,29 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 - `CONFIG_I2C_MASTER_SDA_GPIO` / `CONFIG_I2C_MASTER_SCL_GPIO` : sélection des broches
   SDA/SCL partagées par le CH422G, le GT911 et les capteurs. Adapter ces valeurs si
   le faisceau a été recâblé.
-- `CONFIG_I2C_MASTER_FREQUENCY_HZ` : fréquence du bus I²C (400 kHz par défaut) ; à
+- `CONFIG_I2C_MASTER_FREQUENCY_HZ` : fréquence du bus I²C (200 kHz par défaut) ; à
   réduire si les longueurs de nappe imposent une marge sur les fronts montants.
 - `CONFIG_I2C_MASTER_ENABLE_INTERNAL_PULLUPS` : active les résistances internes de
   tirage pour consolider les pull-ups externes sur SDA/SCL.
-- `CONFIG_CH422G_I2C_ADDR` : adresse 7 bits de l'extenseur. Le firmware
-  sonde d'abord la valeur configurée (0x24 par défaut) puis explore la plage
-  0x20–0x27 pour tolérer les modules de rechange.
-- `CONFIG_SD_USE_FALLBACK_GPIO_CS` + `CONFIG_SD_FALLBACK_CS_GPIO` : imposent le
-  pilotage direct de la CS microSD par un GPIO de l'ESP32-S3 (GPIO34 par
-  défaut) afin d'éviter tout trafic I²C dans les ISR. Adapter la valeur si le
-  pont EXIO→GPIO utilise une autre broche.
-- `CONFIG_SD_AUTOMOUNT` / `CONFIG_SD_MOUNT_POINT` : permettent de monter
-  automatiquement la carte au boot et d'ajuster le chemin VFS (`/sdcard` par
-  défaut).
+- `CONFIG_CH422G_I2C_ADDRESS` / `CONFIG_CH422G_EXIO_SD_CS` : adresse 7 bits de
+  l'extenseur et numéro d'EXIO pilotant la ligne CS du lecteur microSD. Le
+  firmware scanne automatiquement la plage 0x20–0x23 puis l'adresse configurée
+  afin de tenir compte des straps A0/A1 ou d'un module de rechange.
+- `CONFIG_STORAGE_SD_USE_GPIO_CS` + `CONFIG_STORAGE_SD_GPIO_CS_NUM` : bypass du
+  CH422G au profit d'un GPIO direct pour la CS microSD (câblage nécessaire).
+- `CONFIG_STORAGE_SD_GPIO_FALLBACK` : bascule automatiquement la CS sur le GPIO
+  de secours lorsque le CH422G reste muet au démarrage, afin que les tests SD
+  et l'application continuent pendant le diagnostic matériel.
+- `CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT` : lance automatiquement le montage
+  de la carte lorsque le fallback est actif **uniquement** si EXIO4→GPIO34 est
+  câblé. Laisser cette option désactivée lorsque la liaison n'est pas assurée
+  pour éviter les blocages prolongés de `esp_vfs_fat_sdspi_mount()` et la
+  réaction du watchdog.
+- Lorsque le fallback est actif sans recâblage EXIO4→GPIO34, le firmware affiche
+  désormais un avertissement persistant et n'effectue plus de redémarrage
+  forcé. Suivre les instructions affichées dans le bandeau LVGL, câbler EXIO4→GPIO34
+  puis activer `Automatically mount the fallback CS` pour récupérer les accès SD,
+  ou laisser l'auto-mount désactivé tant que la réparation n'est pas terminée.
 - Le pilote I²C déclenche automatiquement une récupération matérielle lorsque SDA/SCL
   restent bloquées (clock stretch infini, périphérique en erreur). Toutes les handles
   enregistrées (CH422G, multiplexeur, GT911…) sont relâchées puis recréées pour que
@@ -184,7 +193,7 @@ Ces étapes garantissent la libération du port avant de relancer le moniteur ES
 ### Dépannage CH422G / microSD
 
 Une procédure complète de diagnostic (mesures matérielles, réglages `menuconfig`,
-documentation du pont CS direct et messages attendus dans `idf.py monitor`) est disponible
+recâblage du fallback et messages attendus dans `idf.py monitor`) est disponible
 dans [`docs/troubleshooting/ch422g.md`](docs/troubleshooting/ch422g.md).
 
 Pour isoler un défaut matériel, un firmware minimal d'analyse I²C est fourni
