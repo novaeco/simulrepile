@@ -1,24 +1,21 @@
 #include "gpio.h"
-#include "game_mode.h"
 #include "esp_log.h"
 
-extern const actuator_driver_t gpio_real_driver;
 extern const actuator_driver_t gpio_sim_driver;
 
 static const char *TAG = "gpio";
 static const actuator_driver_t *s_driver = NULL;
 
-static void gpio_select_driver(void)
+static inline void ensure_driver(void)
 {
     if (!s_driver) {
-        s_driver = (game_mode_get() == GAME_MODE_SIMULATION) ?
-                       &gpio_sim_driver : &gpio_real_driver;
+        s_driver = &gpio_sim_driver;
     }
 }
 
 esp_err_t reptile_actuators_init(void)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (s_driver && s_driver->init) {
         return s_driver->init();
     }
@@ -27,7 +24,7 @@ esp_err_t reptile_actuators_init(void)
 
 void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (s_driver && s_driver->gpio_mode) {
         s_driver->gpio_mode(Pin, Mode);
     }
@@ -35,7 +32,7 @@ void DEV_GPIO_Mode(uint16_t Pin, uint16_t Mode)
 
 void DEV_GPIO_INT(int32_t Pin, gpio_isr_t isr_handler)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (s_driver && s_driver->gpio_int) {
         s_driver->gpio_int(Pin, isr_handler);
     }
@@ -43,7 +40,7 @@ void DEV_GPIO_INT(int32_t Pin, gpio_isr_t isr_handler)
 
 void DEV_Digital_Write(uint16_t Pin, uint8_t Value)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (s_driver && s_driver->digital_write) {
         s_driver->digital_write(Pin, Value);
     }
@@ -51,7 +48,7 @@ void DEV_Digital_Write(uint16_t Pin, uint8_t Value)
 
 uint8_t DEV_Digital_Read(uint16_t Pin)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (s_driver && s_driver->digital_read) {
         return s_driver->digital_read(Pin);
     }
@@ -60,7 +57,7 @@ uint8_t DEV_Digital_Read(uint16_t Pin)
 
 static bool channel_supported(size_t channel)
 {
-    gpio_select_driver();
+    ensure_driver();
     if (!s_driver) {
         return false;
     }
@@ -138,7 +135,7 @@ void reptile_uv_gpio(bool on)
 
 size_t reptile_actuator_channel_count(void)
 {
-    gpio_select_driver();
+    ensure_driver();
     return s_driver ? s_driver->channel_count : 0u;
 }
 

@@ -480,13 +480,8 @@ static void facility_reset(reptile_facility_t *facility, uint32_t limit) {
 }
 
 static const char *mode_dir(game_mode_t mode) {
-  switch (mode) {
-  case GAME_MODE_REAL:
-    return "real";
-  case GAME_MODE_SIMULATION:
-  default:
-    return "sim";
-  }
+  (void)mode;
+  return "sim";
 }
 
 static esp_err_t ensure_storage_ready(const char *context) {
@@ -540,12 +535,6 @@ static esp_err_t ensure_directories(const reptile_facility_t *facility) {
   snprintf(sim_dir, sizeof(sim_dir), "%s/sim", base);
   if (mkdir(sim_dir, 0777) != 0 && errno != EEXIST) {
     ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", sim_dir, errno);
-    status = ESP_FAIL;
-  }
-  char real_dir[64];
-  snprintf(real_dir, sizeof(real_dir), "%s/real", base);
-  if (mkdir(real_dir, 0777) != 0 && errno != EEXIST) {
-    ESP_LOGW(TAG, "Création du dossier %s impossible (%d)", real_dir, errno);
     status = ESP_FAIL;
   }
   return status;
@@ -694,9 +683,8 @@ esp_err_t reptile_facility_load(reptile_facility_t *facility) {
      * not reintroduce stale aggregates.
      */
     ESP_LOGI(TAG,
-             "Réduction automatique de l'élevage à %u terrariums (mode %s)",
-             (unsigned)limit,
-             facility->simulation_mode ? "simulation" : "réel");
+             "Réduction automatique de l'élevage à %u terrariums (mode simulation)",
+             (unsigned)limit);
     esp_err_t save_err = reptile_facility_save(facility);
     if (save_err != ESP_OK) {
       ESP_LOGW(TAG,
@@ -738,6 +726,9 @@ esp_err_t reptile_facility_init(reptile_facility_t *facility, bool simulation,
     return ESP_ERR_INVALID_ARG;
   }
 
+  (void)simulation;
+  (void)mode;
+
 #ifndef ESP_PLATFORM
   static bool s_seeded = false;
   if (!s_seeded) {
@@ -747,16 +738,16 @@ esp_err_t reptile_facility_init(reptile_facility_t *facility, bool simulation,
 #endif
 
   memset(facility, 0, sizeof(*facility));
-  facility->simulation_mode = simulation;
-  facility->mode = mode;
-  facility->sensors_available = !simulation;
+  facility->simulation_mode = true;
+  facility->mode = GAME_MODE_SIMULATION;
+  facility->sensors_available = true;
   if (!slot_name || slot_name[0] == '\0') {
     copy_string(facility->slot, sizeof(facility->slot), "slot_a");
   } else {
     copy_string(facility->slot, sizeof(facility->slot), slot_name);
   }
 
-  uint32_t limit = facility_effective_limit(simulation);
+  uint32_t limit = facility_effective_limit(facility->simulation_mode);
   facility_reset(facility, limit);
 
   esp_err_t dir_err = ensure_directories(facility);
