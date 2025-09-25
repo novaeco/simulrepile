@@ -512,7 +512,6 @@ static void sd_mount_worker(void *arg) {
   int attempts = 0;
   const int max_attempts = 10;
   bool wdt_registered = false;
-  bool restart_required = false;
   bool event_set = false;
 
   if (s_sd_event_group == NULL) {
@@ -609,10 +608,11 @@ static void sd_mount_worker(void *arg) {
     menu_header_update();
     vTaskDelay(pdMS_TO_TICKS(500));
     if (++attempts >= max_attempts) {
-      restart_required = true;
+      ESP_LOGE(TAG,
+               "Initialisation SD abandonnée après %d tentatives (%s). Mode sans stockage activé.",
+               attempts, esp_err_to_name(err));
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
       if (sd_fallback_due_to_ch422g()) {
-        restart_required = false;
         ESP_LOGE(TAG,
                  "Fallback GPIO%d actif sans câblage détecté. Relier EXIO%u (SD_CS) à "
                  "GPIO%d puis activer Component config → Storage / SD card → "
@@ -645,10 +645,16 @@ static void sd_mount_worker(void *arg) {
         goto cleanup;
       }
 #endif
-      show_error_screen("Carte SD absente - redémarrage");
+      hide_error_screen();
+      if (lvgl_port_lock(-1)) {
+        menu_hint_append(
+            "Mode sans stockage: carte SD absente. Remettre une carte valide puis relancer depuis les paramètres.");
+        lvgl_port_unlock();
+      }
       menu_header_update();
-      vTaskDelay(pdMS_TO_TICKS(2000));
-      break;
+      xEventGroupSetBits(s_sd_event_group, SD_EVENT_FATAL);
+      event_set = true;
+      goto cleanup;
     }
     // Attendre indéfiniment jusqu'à insertion d'une carte valide
   }
@@ -666,10 +672,6 @@ cleanup:
   }
   menu_header_update();
   s_sd_mount_task = NULL;
-  if (restart_required) {
-    vTaskDelay(pdMS_TO_TICKS(50));
-    esp_restart();
-  }
   vTaskDelete(NULL);
 }
 

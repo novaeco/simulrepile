@@ -5,11 +5,14 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 
 #include "ch422g.h"
 #include "io_extension.h"
 #include "i2c.h"
 #include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #ifndef CONFIG_CH422G_EXIO_SD_CS
 #define CONFIG_CH422G_EXIO_SD_CS 4
@@ -21,6 +24,15 @@ static waveshare_io_variant_t s_variant = WAVESHARE_IO_VARIANT_UNKNOWN;
 static esp_err_t s_init_status = ESP_ERR_INVALID_STATE;
 static bool s_ready = false;
 static uint8_t s_ch422g_addr = 0;
+
+static void wait_bus_settle(void)
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        ets_delay_us(50 * 1000);
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
 
 static esp_err_t detect_ch32v003(void)
 {
@@ -41,6 +53,7 @@ static esp_err_t detect_ch32v003(void)
                  IO_EXTENSION_ADDR,
                  CONFIG_I2C_MASTER_SDA_GPIO,
                  CONFIG_I2C_MASTER_SCL_GPIO);
+        wait_bus_settle();
     }
     return ret;
 }
@@ -55,6 +68,7 @@ static esp_err_t detect_ch422g(void)
                  s_ch422g_addr,
                  CONFIG_I2C_MASTER_SDA_GPIO,
                  CONFIG_I2C_MASTER_SCL_GPIO);
+        wait_bus_settle();
     }
     return ret;
 }
