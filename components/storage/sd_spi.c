@@ -830,107 +830,125 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
 
     ESP_RETURN_ON_ERROR(sd_bus_ensure(), TAG, "spi_bus_initialize");
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SD_SPI_HOST;
-    host.max_freq_khz = SD_SPI_INIT_FREQ_KHZ;
+    bool attempted_gpio_retry = false;
 
-    bool use_direct = s_use_direct_cs;
+    while (true) {
+        bool use_direct = s_use_direct_cs;
+
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK && !CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
-    if (use_direct && s_forced_fallback) {
-        ESP_LOGW(TAG,
-                 "Skipping SD mount: IO expander offline and fallback auto-mount disabled. "
-                 "Wire EXIO%u→GPIO%d or enable the auto-mount Kconfig option once the "
-                 "jumper is installed.",
-                 CONFIG_CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
-        return ESP_ERR_INVALID_STATE;
-    }
-#endif
-#if CONFIG_STORAGE_SD_USE_GPIO_CS
-    s_forced_fallback = false;
-#endif
-#if !STORAGE_SD_HAVE_DIRECT
-    (void)use_direct;
-#endif
-
-    sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_cfg.host_id = host.slot;
-#if STORAGE_SD_HAVE_DIRECT
-    if (!use_direct) {
-#endif
-        esp_err_t init_err = waveshare_io_init();
-        if (init_err != ESP_OK) {
-#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
-            s_forced_fallback = true;
-#if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+        if (use_direct && s_forced_fallback) {
             ESP_LOGW(TAG,
-                     "IO expander init failed (%s). Falling back to GPIO%d for SD card CS.",
-                     esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
-            s_use_direct_cs = true;
-            use_direct = true;
-#else
-            ESP_LOGW(TAG,
-                     "IO expander init failed (%s). GPIO%d fallback available but auto-mount "
-                     "disabled; SD mounting will be deferred until the wiring is in place.",
-                     esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
-            return init_err;
-#endif
-#else
-            return init_err;
-#endif
-        } else {
-            ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
-            s_forced_fallback = false;
+                     "Skipping SD mount: IO expander offline and fallback auto-mount disabled. "
+                     "Wire EXIO%u→GPIO%d or enable the auto-mount Kconfig option once the "
+                     "jumper is installed.",
+                     CONFIG_CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+            return ESP_ERR_INVALID_STATE;
         }
-#if STORAGE_SD_HAVE_DIRECT
-    }
+#endif
 
-    if (use_direct) {
-        ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS setup");
-        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS idle high");
-        slot_cfg.gpio_cs = STORAGE_SD_GPIO_CS;
-    } else {
+#if CONFIG_STORAGE_SD_USE_GPIO_CS
+        s_forced_fallback = false;
+#endif
+
+        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+        host.slot = SD_SPI_HOST;
+        host.max_freq_khz = SD_SPI_INIT_FREQ_KHZ;
+
+        sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+        slot_cfg.host_id = host.slot;
+
+#if STORAGE_SD_HAVE_DIRECT
+        if (!use_direct) {
+            esp_err_t init_err = waveshare_io_init();
+            if (init_err != ESP_OK) {
+#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
+                s_forced_fallback = true;
+#if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+                ESP_LOGW(TAG,
+                         "IO expander init failed (%s). Falling back to GPIO%d for SD card CS.",
+                         esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
+                s_use_direct_cs = true;
+                attempted_gpio_retry = true;
+                continue;
+#else
+                ESP_LOGW(TAG,
+                         "IO expander init failed (%s). GPIO%d fallback available but auto-mount "
+                         "disabled; SD mounting will be deferred until the wiring is in place.",
+                         esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
+                return init_err;
+#endif
+#else
+                return init_err;
+#endif
+            } else {
+                ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
+                s_forced_fallback = false;
+            }
+        }
+
+        if (use_direct) {
+            ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS setup");
+            ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS idle high");
+            slot_cfg.gpio_cs = STORAGE_SD_GPIO_CS;
+        } else {
+            slot_cfg.gpio_cs = SDSPI_SLOT_NO_CS;
+        }
+#else
         slot_cfg.gpio_cs = SDSPI_SLOT_NO_CS;
-    }
-#else
-    slot_cfg.gpio_cs = SDSPI_SLOT_NO_CS;
 #endif
 
 #if !STORAGE_SD_HAVE_DIRECT
-    host.do_transaction = sdspi_ch422g_do_transaction;
-#else
-    if (!use_direct) {
         host.do_transaction = sdspi_ch422g_do_transaction;
-    }
+#else
+        if (!use_direct) {
+            host.do_transaction = sdspi_ch422g_do_transaction;
+        }
 #endif
 
 #if !STORAGE_SD_HAVE_DIRECT
-    ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+        ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
 #else
-    if (!use_direct) {
-        ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
-    }
+        if (!use_direct) {
+            ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
+        }
 #endif
 
-    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
-        .format_if_mount_failed = false,
-        .max_files = 8,
-        .allocation_unit_size = 16 * 1024,
-        .disk_status_check_enable = false,
-        .use_one_fat = false,
-    };
+        esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
+            .format_if_mount_failed = false,
+            .max_files = 8,
+            .allocation_unit_size = 16 * 1024,
+            .disk_status_check_enable = false,
+            .use_one_fat = false,
+        };
 
 #if STORAGE_SD_HAVE_DIRECT
-    if (use_direct) {
-        ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS release");
-    } else {
-        ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
-    }
+        if (use_direct) {
+            ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS release");
+        } else {
+            ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
+        }
 #else
-    ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
+        ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
 #endif
 
-    esp_err_t err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_cfg, &mount_cfg, &s_card);
-    if (err != ESP_OK) {
+        esp_err_t err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_cfg, &mount_cfg, &s_card);
+        if (err == ESP_OK) {
+            break;
+        }
+
+#if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK && CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
+        if (!use_direct && !attempted_gpio_retry &&
+            (err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_INVALID_STATE)) {
+            ESP_LOGW(TAG,
+                     "SD mount via IO expander failed (%s); retrying with GPIO%d CS fallback.",
+                     esp_err_to_name(err), STORAGE_SD_GPIO_CS);
+            s_forced_fallback = true;
+            s_use_direct_cs = true;
+            attempted_gpio_retry = true;
+            continue;
+        }
+#endif
+
         ESP_LOGE(TAG, "esp_vfs_fat_sdspi_mount failed: %s", esp_err_to_name(err));
         spi_bus_free(SD_SPI_HOST);
         s_bus_ready = false;
@@ -941,7 +959,7 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     sdmmc_card_print_info(stdout, s_card);
 
 #if STORAGE_SD_HAVE_DIRECT
-    if (use_direct) {
+    if (s_use_direct_cs) {
         gpio_set_level(STORAGE_SD_GPIO_CS, 1);
         if (CONFIG_STORAGE_SD_USE_GPIO_CS) {
             ESP_LOGI(TAG, "SD card detected and mounted via GPIO%d CS", STORAGE_SD_GPIO_CS);
