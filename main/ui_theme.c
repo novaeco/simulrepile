@@ -5,9 +5,9 @@
 
 #include "image.h"
 
-LV_FONT_DECLARE(lv_font_montserrat_24);
-LV_FONT_DECLARE(lv_font_montserrat_20);
-LV_FONT_DECLARE(lv_font_montserrat_16);
+LV_FONT_DECLARE(ui_font_montserrat_24_fr);
+LV_FONT_DECLARE(ui_font_montserrat_20_fr);
+LV_FONT_DECLARE(ui_font_montserrat_16_fr);
 
 typedef struct {
   lv_style_t bg;
@@ -78,7 +78,7 @@ static void ui_theme_init_styles(void) {
   lv_style_set_bg_opa(&s_styles.badge, LV_OPA_COVER);
   lv_style_set_pad_hor(&s_styles.badge, 12);
   lv_style_set_pad_ver(&s_styles.badge, 6);
-  lv_style_set_text_font(&s_styles.badge, &lv_font_montserrat_16);
+  lv_style_set_text_font(&s_styles.badge, &ui_font_montserrat_16_fr);
   lv_style_set_text_color(&s_styles.badge, lv_color_hex(0x2F4F43));
 
   lv_style_init(&s_styles.badge_success);
@@ -103,16 +103,16 @@ static void ui_theme_init_styles(void) {
   lv_style_set_text_color(&s_styles.badge_critical, lv_color_hex(0xFFFFFF));
 
   lv_style_init(&s_styles.title);
-  lv_style_set_text_font(&s_styles.title, &lv_font_montserrat_24);
+  lv_style_set_text_font(&s_styles.title, &ui_font_montserrat_24_fr);
   lv_style_set_text_color(&s_styles.title, lv_color_hex(0x204D3B));
 
   lv_style_init(&s_styles.body);
-  lv_style_set_text_font(&s_styles.body, &lv_font_montserrat_20);
+  lv_style_set_text_font(&s_styles.body, &ui_font_montserrat_20_fr);
   lv_style_set_text_color(&s_styles.body, lv_color_hex(0x2F4F43));
   lv_style_set_text_line_space(&s_styles.body, 4);
 
   lv_style_init(&s_styles.caption);
-  lv_style_set_text_font(&s_styles.caption, &lv_font_montserrat_16);
+  lv_style_set_text_font(&s_styles.caption, &ui_font_montserrat_16_fr);
   lv_style_set_text_color(&s_styles.caption, lv_color_hex(0x4C6F52));
   lv_style_set_text_line_space(&s_styles.caption, 2);
 
@@ -121,13 +121,13 @@ static void ui_theme_init_styles(void) {
   lv_style_set_bg_opa(&s_styles.table_header, LV_OPA_COVER);
   lv_style_set_border_width(&s_styles.table_header, 1);
   lv_style_set_border_color(&s_styles.table_header, lv_color_hex(0xB5CBB5));
-  lv_style_set_text_font(&s_styles.table_header, &lv_font_montserrat_20);
+  lv_style_set_text_font(&s_styles.table_header, &ui_font_montserrat_20_fr);
   lv_style_set_text_color(&s_styles.table_header, lv_color_hex(0x1F3F2E));
   lv_style_set_pad_all(&s_styles.table_header, 8);
   lv_style_set_pad_gap(&s_styles.table_header, 6);
 
   lv_style_init(&s_styles.table_cell);
-  lv_style_set_text_font(&s_styles.table_cell, &lv_font_montserrat_20);
+  lv_style_set_text_font(&s_styles.table_cell, &ui_font_montserrat_20_fr);
   lv_style_set_text_color(&s_styles.table_cell, lv_color_hex(0x264C3F));
   lv_style_set_pad_all(&s_styles.table_cell, 10);
   lv_style_set_pad_gap(&s_styles.table_cell, 6);
@@ -135,7 +135,7 @@ static void ui_theme_init_styles(void) {
   lv_style_set_bg_opa(&s_styles.table_cell, LV_OPA_TRANSP);
 
   lv_style_init(&s_styles.table_cell_dense);
-  lv_style_set_text_font(&s_styles.table_cell_dense, &lv_font_montserrat_16);
+  lv_style_set_text_font(&s_styles.table_cell_dense, &ui_font_montserrat_16_fr);
   lv_style_set_text_color(&s_styles.table_cell_dense, lv_color_hex(0x264C3F));
   lv_style_set_pad_all(&s_styles.table_cell_dense, 4);
   lv_style_set_pad_gap(&s_styles.table_cell_dense, 4);
@@ -156,7 +156,7 @@ static void ui_theme_init_styles(void) {
   lv_style_set_pad_hor(&s_styles.button_base, 24);
   lv_style_set_min_height(&s_styles.button_base, 46);
   lv_style_set_border_width(&s_styles.button_base, 1);
-  lv_style_set_text_font(&s_styles.button_base, &lv_font_montserrat_20);
+  lv_style_set_text_font(&s_styles.button_base, &ui_font_montserrat_20_fr);
   lv_style_set_shadow_width(&s_styles.button_base, 8);
   lv_style_set_shadow_ofs_y(&s_styles.button_base, 3);
   lv_style_set_shadow_color(&s_styles.button_base, lv_color_hex(0xA3C9A8));
@@ -203,7 +203,7 @@ static void ui_theme_init_styles(void) {
   lv_style_set_border_width(&s_styles.dropdown_main, 1);
   lv_style_set_pad_hor(&s_styles.dropdown_main, 12);
   lv_style_set_pad_ver(&s_styles.dropdown_main, 10);
-  lv_style_set_text_font(&s_styles.dropdown_main, &lv_font_montserrat_20);
+  lv_style_set_text_font(&s_styles.dropdown_main, &ui_font_montserrat_20_fr);
   lv_style_set_text_color(&s_styles.dropdown_main, lv_color_hex(0x2F4F43));
 
   lv_style_init(&s_styles.nav_card);
@@ -226,7 +226,7 @@ static void ui_theme_init_styles(void) {
   lv_style_set_shadow_width(&s_styles.nav_card_pressed, 10);
 
   lv_style_init(&s_styles.nav_card_icon);
-  lv_style_set_text_font(&s_styles.nav_card_icon, &lv_font_montserrat_24);
+  lv_style_set_text_font(&s_styles.nav_card_icon, &ui_font_montserrat_24_fr);
   lv_style_set_text_color(&s_styles.nav_card_icon, lv_color_hex(0x2A9D8F));
 }
 

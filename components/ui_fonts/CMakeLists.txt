@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "ui_font_montserrat_16_fr.c"
+        "ui_font_montserrat_20_fr.c"
+        "ui_font_montserrat_24_fr.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        lvgl
+)

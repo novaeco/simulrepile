@@ -9,6 +9,7 @@ idf_component_register(
         touch
         esp_lcd
         fonts
+        ui_fonts
         reptile_logic
         env_control
         config
