@@ -31,16 +31,24 @@ typedef struct {
     reptile_output_t uv;
 } reptile_channel_hw_t;
 
+enum {
+    HEAT_RES_LINE = WAVESHARE_IO_LINE_FROM_EXIO_CONST(HEAT_RES_EXIO),
+    WATER_PUMP_LINE = WAVESHARE_IO_LINE_FROM_EXIO_CONST(WATER_PUMP_EXIO),
+    TEST_HEATER_LINE = WAVESHARE_IO_LINE_FROM_EXIO_CONST(1),
+    TEST_PUMP_LINE = WAVESHARE_IO_LINE_FROM_EXIO_CONST(2),
+    TEST_UV_LINE = WAVESHARE_IO_LINE_FROM_EXIO_CONST(3),
+};
+
 static const reptile_channel_hw_t s_hw_map[] = {
     {
-        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(HEAT_RES_EXIO)},
-        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(WATER_PUMP_EXIO)},
+        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = HEAT_RES_LINE},
+        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = WATER_PUMP_LINE},
         .uv = {.bus = REPTILE_OUTPUT_GPIO, .active_high = true, .signal.gpio = LED_GPIO_PIN},
     },
     {
-        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(1)},
-        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(2)},
-        .uv = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = waveshare_io_line_from_exio(3)},
+        .heater = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = TEST_HEATER_LINE},
+        .pump = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = TEST_PUMP_LINE},
+        .uv = {.bus = REPTILE_OUTPUT_EXPANDER, .active_high = false, .signal.line = TEST_UV_LINE},
     },
 };
 
@@ -48,7 +56,7 @@ static const reptile_channel_hw_t s_hw_map[] = {
 static const reptile_output_t s_feed_output = {
     .bus = REPTILE_OUTPUT_EXPANDER,
     .active_high = false,
-    .signal.line = waveshare_io_line_from_exio(SERVO_FEED_EXIO),
+    .signal.line = WAVESHARE_IO_LINE_FROM_EXIO_CONST(SERVO_FEED_EXIO),
 };
 #else
 static const reptile_output_t s_feed_output = {
