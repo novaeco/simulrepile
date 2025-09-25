@@ -1,0 +1,67 @@
+[
+  {
+    "id": "FND-001",
+    "file_path": "components/sd/sd_spi.c",
+    "start_line": 73,
+    "end_line": 180,
+    "severity": "Critical",
+    "category": "WDT/Timing",
+    "problem_summary": "Montage SDSPI bloquant provoquant TG1WDT_SYS_RST",
+    "root_cause": "esp_vfs_fat_sdspi_mount monopolise la tâche sans alimenter le WDT et sans délai de stabilisation",
+    "impact": "Reset matériel systématique lors de T4",
+    "proposed_fix_brief": "Réduire la fréquence, temporiser l'initialisation, ajouter mode simulation et préparation mount point",
+    "patch": "patches/01-sd-init.patch",
+    "validation": [
+      "idf.py fullclean build",
+      "pytest tests/test_sd_sim.py"
+    ]
+  },
+  {
+    "id": "FND-002",
+    "file_path": "main/main.c",
+    "start_line": 118,
+    "end_line": 190,
+    "severity": "Major",
+    "category": "UX/SD",
+    "problem_summary": "UI ne distingue pas le mode SD simulé",
+    "root_cause": "Absence de feedback LVGL lorsque la carte est émulée",
+    "impact": "Incompréhension opérateur et tests",
+    "proposed_fix_brief": "Afficher statut simulé, bypass autotest CS",
+    "patch": "patches/02-ui-sd-sim.patch",
+    "validation": [
+      "python tests/acceptance_sd.py --log logs/boot_after_fix.log --mount build/sdcard_mock"
+    ]
+  },
+  {
+    "id": "FND-003",
+    "file_path": ".github/workflows/ci.yml",
+    "start_line": 1,
+    "end_line": 120,
+    "severity": "Major",
+    "category": "CI",
+    "problem_summary": "CI inexistante pour détecter régressions SD",
+    "root_cause": "Aucun pipeline automatisé",
+    "impact": "Absence de garde-fous",
+    "proposed_fix_brief": "Ajouter workflow dockerisé build + tests",
+    "patch": "patches/04-ci.patch",
+    "validation": [
+      "GitHub Actions"
+    ]
+  },
+  {
+    "id": "FND-004",
+    "file_path": "docs/BRINGUP_SD.md",
+    "start_line": 1,
+    "end_line": 200,
+    "severity": "Minor",
+    "category": "Documentation",
+    "problem_summary": "Procédure bring-up SD manquante",
+    "root_cause": "Infos dispersées",
+    "impact": "Onboarding difficile",
+    "proposed_fix_brief": "Documenter câblage, config et tests",
+    "patch": "patches/03-docs.patch",
+    "validation": [
+      "Revue manuelle"
+    ]
+  }
+]

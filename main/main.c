@@ -115,6 +115,16 @@ static void menu_header_update(void);
 static void menu_hint_append(const char *message);
 
 static void sd_cs_selftest(void) {
+#if CONFIG_SIMULREPILE_SD_FAKE
+  s_sd_cs_ready = true;
+  s_sd_cs_last_err = ESP_OK;
+  ESP_LOGW(TAG,
+           "Mode simulation microSD activé – autotest CS ignoré (GPIO%d laissé non "
+           "configuré).",
+           sd_get_cs_gpio());
+  menu_header_update();
+  return;
+#endif
   s_sd_cs_ready = false;
   s_sd_cs_last_err = sd_spi_cs_selftest();
   if (s_sd_cs_last_err == ESP_OK) {
@@ -573,7 +583,11 @@ static void menu_header_update_locked(void) {
     char cs_hint[32];
     lv_color_t sd_color = lv_color_hex(0x2F4F43);
     snprintf(cs_hint, sizeof(cs_hint), " \u00b7 CS=GPIO%d", sd_get_cs_gpio());
-    if (!s_sd_cs_ready) {
+    if (sd_is_simulated()) {
+      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD simulée%s",
+               cs_hint);
+      sd_color = lv_color_hex(0x1F7A70);
+    } else if (!s_sd_cs_ready) {
       const char *err = (s_sd_cs_last_err != ESP_OK)
                             ? esp_err_to_name(s_sd_cs_last_err)
                             : "bus";
@@ -819,6 +833,13 @@ static void wait_for_sd_card(void) {
   bool wdt_registered = false;
   bool wdt_added_here = false;
   bool restart_required = false;
+
+#if CONFIG_SIMULREPILE_SD_FAKE
+  ESP_LOGW(TAG, "Mode simulation SD: attente carte bypassée");
+  hide_error_screen();
+  menu_header_update();
+  return;
+#endif
 
   if (sd_is_mounted()) {
     return;

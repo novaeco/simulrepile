@@ -1,0 +1,64 @@
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index 7e7c3a9..56a7a34 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -1,3 +1,11 @@
+ config REPTILE_DEBUG
+     bool "Activer le mode debug (désactive la veille)"
+     default n
++
++config SIMULREPILE_SD_FAKE
++    bool "Activer le mode simulation microSD"
++    default n
++    help
++        Lorsque cette option est activée, l'initialisation SD est court-circuitée
++        et un volume simulé est créé sur le système de fichiers hôte. À utiliser
++        pour les tests automatisés sans carte microSD physique.
+diff --git a/main/main.c b/main/main.c
+index 07ff1c2..9f59a70 100644
+--- a/main/main.c
++++ b/main/main.c
+@@ -115,6 +115,16 @@ static void menu_header_update(void);
+ static void menu_hint_append(const char *message);
+ 
+ static void sd_cs_selftest(void) {
++#if CONFIG_SIMULREPILE_SD_FAKE
++  s_sd_cs_ready = true;
++  s_sd_cs_last_err = ESP_OK;
++  ESP_LOGW(TAG,
++           "Mode simulation microSD activé – autotest CS ignoré (GPIO%d laissé non "
++           "configuré).",
++           sd_get_cs_gpio());
++  menu_header_update();
++  return;
++#endif
+   s_sd_cs_ready = false;
+   s_sd_cs_last_err = sd_spi_cs_selftest();
+   if (s_sd_cs_last_err == ESP_OK) {
+@@ -573,7 +583,11 @@ static void menu_header_update_locked(void) {
+     char cs_hint[32];
+     lv_color_t sd_color = lv_color_hex(0x2F4F43);
+     snprintf(cs_hint, sizeof(cs_hint), " \u00b7 CS=GPIO%d", sd_get_cs_gpio());
+-    if (!s_sd_cs_ready) {
++    if (sd_is_simulated()) {
++      snprintf(sd_text, sizeof(sd_text), LV_SYMBOL_SD_CARD " microSD simulée%s",
++               cs_hint);
++      sd_color = lv_color_hex(0x1F7A70);
++    } else if (!s_sd_cs_ready) {
+       const char *err = (s_sd_cs_last_err != ESP_OK)
+                             ? esp_err_to_name(s_sd_cs_last_err)
+                             : "bus";
+@@ -820,6 +834,13 @@ static void wait_for_sd_card(void) {
+   bool wdt_added_here = false;
+   bool restart_required = false;
+ 
++#if CONFIG_SIMULREPILE_SD_FAKE
++  ESP_LOGW(TAG, "Mode simulation SD: attente carte bypassée");
++  hide_error_screen();
++  menu_header_update();
++  return;
++#endif
++
+   if (sd_is_mounted()) {
+     return;
+   }

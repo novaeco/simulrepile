@@ -7,6 +7,10 @@
 #include "sdkconfig.h"
 #include "sdmmc_cmd.h"
 
+#if CONFIG_SIMULREPILE_SD_FAKE
+#include "esp_timer.h"
+#endif
+
 #ifndef CONFIG_SD_SPI_MOSI_IO
 #define CONFIG_SD_SPI_MOSI_IO 11
 #endif
@@ -111,6 +115,11 @@ bool sd_uses_direct_cs(void);
  * @brief Return the GPIO number used for the SD card CS line.
  */
 int sd_get_cs_gpio(void);
+
+/**
+ * @brief Indique si le montage actuel repose sur le mode simulation.
+ */
+bool sd_is_simulated(void);
 
 /* Legacy aliases kept for compatibility with existing modules */
 static inline esp_err_t sd_mmc_init(void) { return sd_mount(); }

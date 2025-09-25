@@ -1,0 +1,47 @@
+name: SimulRepile CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      BATCH_BUILD: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Prepare ESP-IDF container
+        uses: addnab/docker-run-action@v3
+        with:
+          image: espressif/idf:release-v5.5
+          options: >-
+            -v ${{ github.workspace }}:/workspace
+            -w /workspace
+          run: |
+            . /opt/esp/idf/export.sh
+            idf.py fullclean
+            idf.py build
+
+      - name: Run host tests
+        run: |
+          pytest tests/test_sd_sim.py -v
+
+      - name: Acceptance parser smoke-test
+        run: |
+          python tests/acceptance_sd.py --log tests/data/sample_sd_boot.log --mount tests/data/sample_sdcard
+        continue-on-error: true
