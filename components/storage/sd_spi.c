@@ -5,7 +5,7 @@
 #include <sys/param.h>
 
 #include "sdkconfig.h"
-#include "ch422g.h"
+#include "waveshare_io.h"
 #include "driver/gpio.h"
 #include "driver/sdmmc_defs.h"
 #include "driver/sdmmc_types.h"
@@ -41,8 +41,6 @@
 #ifndef CONFIG_CH422G_EXIO_SD_CS
 #define CONFIG_CH422G_EXIO_SD_CS 4
 #endif
-
-#define CH422G_EXIO_SD_CS CONFIG_CH422G_EXIO_SD_CS
 
 #ifndef CONFIG_STORAGE_SD_USE_GPIO_CS
 #define CONFIG_STORAGE_SD_USE_GPIO_CS 0
@@ -128,14 +126,14 @@ static esp_err_t sd_configure_direct_cs(void)
 }
 #endif
 
-static inline esp_err_t sd_ch422g_select(void)
+static inline esp_err_t sd_expander_select(void)
 {
-    return ch422g_exio_set(CH422G_EXIO_SD_CS, false);
+    return waveshare_io_sd_select();
 }
 
-static inline esp_err_t sd_ch422g_deselect(void)
+static inline esp_err_t sd_expander_deselect(void)
 {
-    return ch422g_exio_set(CH422G_EXIO_SD_CS, true);
+    return waveshare_io_sd_deselect();
 }
 
 #ifndef SDSPI_TRANSACTION_COUNT
@@ -684,7 +682,7 @@ static esp_err_t ch422g_start_command(ch422g_sdspi_slot_t *slot, sdspi_hw_cmd_t 
         ch422g_go_idle_clockout(slot);
     }
 
-    ret = sd_ch422g_select();
+    ret = sd_expander_select();
     if (ret != ESP_OK) {
         spi_device_release_bus(slot->spi_handle);
         return ret;
@@ -702,7 +700,7 @@ static esp_err_t ch422g_start_command(ch422g_sdspi_slot_t *slot, sdspi_hw_cmd_t 
         ret = ch422g_start_command_default(slot, flags, cmd);
     }
 
-    esp_err_t deselect_err = sd_ch422g_deselect();
+    esp_err_t deselect_err = sd_expander_deselect();
     if (deselect_err != ESP_OK && ret == ESP_OK) {
         ret = deselect_err;
     }
@@ -725,7 +723,7 @@ static esp_err_t sdspi_ch422g_do_transaction(sdspi_dev_handle_t handle, sdmmc_co
 {
     ch422g_sdspi_slot_t *slot = ch422g_slot_from_handle(handle);
     if (slot == NULL) {
-        ESP_LOGW(TAG, "CH422G transaction fallback to IDF driver (handle=%d)", handle);
+        ESP_LOGW(TAG, "IO-expander transaction fallback to IDF driver (handle=%d)", handle);
         return sdspi_host_do_transaction(handle, cmdinfo);
     }
 
@@ -840,10 +838,10 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK && !CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
     if (use_direct && s_forced_fallback) {
         ESP_LOGW(TAG,
-                 "Skipping SD mount: CH422G offline and fallback auto-mount disabled. "
+                 "Skipping SD mount: IO expander offline and fallback auto-mount disabled. "
                  "Wire EXIO%u→GPIO%d or enable the auto-mount Kconfig option once the "
                  "jumper is installed.",
-                 CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+                 CONFIG_CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
         return ESP_ERR_INVALID_STATE;
     }
 #endif
@@ -859,19 +857,19 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
 #if STORAGE_SD_HAVE_DIRECT
     if (!use_direct) {
 #endif
-        esp_err_t init_err = ch422g_init();
+        esp_err_t init_err = waveshare_io_init();
         if (init_err != ESP_OK) {
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
             s_forced_fallback = true;
 #if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
             ESP_LOGW(TAG,
-                     "CH422G init failed (%s). Falling back to GPIO%d for SD card CS.",
+                     "IO expander init failed (%s). Falling back to GPIO%d for SD card CS.",
                      esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
             use_direct = true;
 #else
             ESP_LOGW(TAG,
-                     "CH422G init failed (%s). GPIO%d fallback available but auto-mount "
+                     "IO expander init failed (%s). GPIO%d fallback available but auto-mount "
                      "disabled; SD mounting will be deferred until the wiring is in place.",
                      esp_err_to_name(init_err), STORAGE_SD_GPIO_CS);
             return init_err;
@@ -880,7 +878,7 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
             return init_err;
 #endif
         } else {
-            ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+            ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
             s_forced_fallback = false;
         }
 #if STORAGE_SD_HAVE_DIRECT
@@ -909,7 +907,7 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
 #else
     if (!use_direct) {
-        ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS idle high");
+        ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS idle high");
     }
 #endif
 
@@ -925,10 +923,10 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
     if (use_direct) {
         ESP_RETURN_ON_ERROR(gpio_set_level(STORAGE_SD_GPIO_CS, 1), TAG, "CS release");
     } else {
-        ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS release");
+        ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
     }
 #else
-    ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS release");
+    ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS release");
 #endif
 
     esp_err_t err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_cfg, &mount_cfg, &s_card);
@@ -951,13 +949,17 @@ esp_err_t sd_mount(sdmmc_card_t **out_card)
             ESP_LOGW(TAG, "SD card detected and mounted via GPIO%d fallback CS", STORAGE_SD_GPIO_CS);
         }
     } else {
-        sd_ch422g_deselect();
-        ESP_LOGI(TAG, "SD card detected and mounted via CH422G-controlled CS");
+        sd_expander_deselect();
+        ESP_LOGI(TAG,
+                 "SD card detected and mounted via %s-controlled CS",
+                 waveshare_io_variant_name(waveshare_io_get_variant()));
         s_forced_fallback = false;
     }
 #else
-    sd_ch422g_deselect();
-    ESP_LOGI(TAG, "SD card detected and mounted via CH422G-controlled CS");
+    sd_expander_deselect();
+    ESP_LOGI(TAG,
+             "SD card detected and mounted via %s-controlled CS",
+             waveshare_io_variant_name(waveshare_io_get_variant()));
 #endif
 
     if (out_card) {
@@ -985,10 +987,10 @@ esp_err_t sd_unmount(void)
             gpio_set_level(STORAGE_SD_GPIO_CS, 1);
         }
     } else {
-        sd_ch422g_deselect();
+        sd_expander_deselect();
     }
 #else
-    sd_ch422g_deselect();
+    sd_expander_deselect();
 #endif
 
     if (s_bus_ready) {
@@ -1028,14 +1030,14 @@ esp_err_t sd_spi_cs_selftest(void)
     }
 #endif
 
-    esp_err_t err = ch422g_init();
+    esp_err_t err = waveshare_io_init();
     if (err != ESP_OK) {
 #if STORAGE_SD_HAVE_DIRECT && CONFIG_STORAGE_SD_GPIO_FALLBACK
         if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_TIMEOUT || err == ESP_ERR_INVALID_RESPONSE) {
             s_forced_fallback = true;
 #if CONFIG_STORAGE_SD_GPIO_FALLBACK_AUTO_MOUNT
             ESP_LOGW(TAG,
-                     "CH422G init failed (%s). Switching self-test to GPIO%d fallback.",
+                     "IO expander init failed (%s). Switching self-test to GPIO%d fallback.",
                      esp_err_to_name(err), STORAGE_SD_GPIO_CS);
             s_use_direct_cs = true;
             ESP_RETURN_ON_ERROR(sd_configure_direct_cs(), TAG, "direct CS");
@@ -1045,13 +1047,13 @@ esp_err_t sd_spi_cs_selftest(void)
             return ESP_OK;
 #else
             ESP_LOGW(TAG,
-                     "CH422G init failed (%s). GPIO%d fallback available but auto-mount "
+                     "IO expander init failed (%s). GPIO%d fallback available but auto-mount "
                      "disabled; keeping CS idle to avoid watchdog resets.",
                      esp_err_to_name(err), STORAGE_SD_GPIO_CS);
             ESP_LOGW(TAG,
                      "Wire EXIO%u→GPIO%d and enable Component config → Storage / SD card → "
                      "Automatically mount the fallback CS once the jumper is installed.",
-                     CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
+                     CONFIG_CH422G_EXIO_SD_CS, STORAGE_SD_GPIO_CS);
             s_use_direct_cs = CONFIG_STORAGE_SD_USE_GPIO_CS;
             return ESP_ERR_NOT_FOUND;
 #endif
@@ -1060,9 +1062,9 @@ esp_err_t sd_spi_cs_selftest(void)
         return err;
     }
 
-    ESP_RETURN_ON_ERROR(sd_ch422g_select(), TAG, "CS low");
+    ESP_RETURN_ON_ERROR(sd_expander_select(), TAG, "CS low");
     esp_rom_delay_us(5);
-    ESP_RETURN_ON_ERROR(sd_ch422g_deselect(), TAG, "CS high");
+    ESP_RETURN_ON_ERROR(sd_expander_deselect(), TAG, "CS high");
     s_forced_fallback = false;
     return ESP_OK;
 }

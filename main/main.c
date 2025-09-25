@@ -15,7 +15,7 @@
 #include "rgb_lcd_port.h" // Header for Waveshare RGB LCD driver
 
 #include "can.h"
-#include "ch422g.h"
+#include "waveshare_io.h"
 #include "driver/gpio.h" // GPIO definitions for wake-up source
 #include "driver/ledc.h" // LEDC for backlight PWM
 #include "esp_lcd_panel_ops.h"
@@ -125,23 +125,35 @@ static void sd_cs_selftest(void) {
                CONFIG_STORAGE_SD_GPIO_CS_NUM);
 #if !CONFIG_STORAGE_SD_USE_GPIO_CS
       ESP_LOGW(TAG,
-               "Fallback GPIO activé : CH422G indisponible au boot. Les accès SD "
+               "Fallback GPIO activé : expandeur IO indisponible au boot. Les accès SD "
                "utiliseront la liaison directe jusqu'à réparation.");
 #endif
     } else {
+      waveshare_io_variant_t variant = waveshare_io_get_variant();
+      const char *variant_name = waveshare_io_variant_name(variant);
 #ifdef CONFIG_CH422G_EXIO_SD_CS
-      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G EXIO%d.",
-               CONFIG_CH422G_EXIO_SD_CS);
+      ESP_LOGI(TAG, "Ligne CS microSD pilotée via %s (ligne %d).",
+               variant_name, CONFIG_CH422G_EXIO_SD_CS);
 #else
-      ESP_LOGI(TAG, "Ligne CS microSD pilotée via CH422G.");
+      ESP_LOGI(TAG, "Ligne CS microSD pilotée via %s.", variant_name);
 #endif
     }
 #endif
     if (!uses_direct_cs) {
-      ESP_LOGI(TAG,
-               "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
-               ch422g_get_address(), CONFIG_I2C_MASTER_SDA_GPIO,
-               CONFIG_I2C_MASTER_SCL_GPIO);
+      waveshare_io_variant_t variant = waveshare_io_get_variant();
+      if (variant == WAVESHARE_IO_VARIANT_CH422G) {
+        ESP_LOGI(TAG,
+                 "CH422G détecté sur 0x%02X (SDA=%d SCL=%d).",
+                 waveshare_io_get_ch422g_address(),
+                 CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+      } else if (variant == WAVESHARE_IO_VARIANT_CH32V003) {
+        ESP_LOGI(TAG,
+                 "Contrôleur Waveshare IO (CH32V003) actif (SDA=%d SCL=%d).",
+                 CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
+      } else {
+        ESP_LOGW(TAG,
+                 "Expandeur IO non identifié malgré l'absence de fallback GPIO.");
+      }
     }
     menu_header_update();
     return;
@@ -155,7 +167,7 @@ static void sd_cs_selftest(void) {
            scl_level);
   if (s_sd_cs_last_err == ESP_ERR_NOT_FOUND) {
     ESP_LOGE(TAG,
-             "CH422G absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
+             "Expandeur IO absent ou injoignable. Vérifiez VCC=3V3, SDA=GPIO%d, "
              "SCL=GPIO%d et les résistances de tirage 2.2–4.7 kΩ.",
              CONFIG_I2C_MASTER_SDA_GPIO, CONFIG_I2C_MASTER_SCL_GPIO);
 #if CONFIG_STORAGE_SD_USE_GPIO_CS || CONFIG_STORAGE_SD_GPIO_FALLBACK
@@ -172,7 +184,7 @@ static void sd_cs_selftest(void) {
   } else if (s_sd_cs_last_err == ESP_ERR_INVALID_STATE) {
     ESP_LOGE(TAG,
              "Bus I2C instable : lecture NACK pendant la configuration de la "
-             "ligne CS. Inspectez les pull-ups et le câblage CH422G.");
+             "ligne CS. Inspectez les pull-ups et le câblage de l'expandeur IO.");
   }
 
 #if CONFIG_STORAGE_SD_USE_GPIO_CS
@@ -181,11 +193,11 @@ static void sd_cs_selftest(void) {
 #elif CONFIG_STORAGE_SD_GPIO_FALLBACK
   ESP_LOGW(TAG,
            "Fallback GPIO%d configuré : connectez le fil CS direct ou rétablissez "
-           "le CH422G pour retrouver la microSD.",
+           "l'expandeur IO pour retrouver la microSD.",
            CONFIG_STORAGE_SD_GPIO_CS_NUM);
 #else
   ESP_LOGW(TAG,
-           "Le firmware continuera sans carte SD tant que le bus CH422G ne "
+           "Le firmware continuera sans carte SD tant que le bus de l'expandeur IO ne "
            "répond pas ou qu'aucun fallback GPIO n'est configuré.");
 #endif
   menu_header_update();
@@ -251,7 +263,11 @@ static void menu_header_update(void) {
 #endif
       }
     } else {
-      cs_hint = forced_fallback ? " \u00b7 CH422G (!)" : " \u00b7 CH422G";
+      const char *variant_name = waveshare_io_variant_name(waveshare_io_get_variant());
+      cs_hint = forced_fallback ? " \u00b7 %s (!)" : " \u00b7 %s";
+      static char variant_hint[24];
+      snprintf(variant_hint, sizeof(variant_hint), cs_hint, variant_name);
+      cs_hint = variant_hint;
     }
 #endif
     if (!s_sd_cs_ready) {
@@ -506,10 +522,10 @@ static void wait_for_sd_card(void) {
     }
 #endif
     ESP_LOGE(TAG,
-             "Attente SD annulée : autotest CS échoué (%s). Réparez le bus "
-             "CH422G ou activez le fallback GPIO dans menuconfig.",
+             "Attente SD annulée : autotest CS échoué (%s). Réparez l'expandeur IO "
+             "ou activez le fallback GPIO dans menuconfig.",
              esp_err_to_name(s_sd_cs_last_err));
-    show_error_screen("Erreur bus CH422G / CS SD\nVérifier câblage I2C");
+    show_error_screen("Erreur bus expandeur / CS SD\nVérifier câblage I2C");
     menu_header_update();
     return;
   }
@@ -837,7 +853,7 @@ void app_main() {
     const lv_image_dsc_t *real_icon =
         ui_theme_get_icon(UI_THEME_ICON_TERRARIUM_OK);
     ui_theme_create_nav_card(nav_grid, "Mode Réel",
-                             "Capteurs physiques, automation CH422G et microSD",
+                             "Capteurs physiques, automation expandeur IO et microSD",
                              real_icon, UI_THEME_NAV_ICON_IMAGE, menu_btn_real_cb,
                              NULL);
 

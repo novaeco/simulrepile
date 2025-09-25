@@ -40,7 +40,7 @@ bool sd_is_mounted(void);
 bool sd_uses_direct_cs(void);
 
 /**
- * @brief Report whether the direct GPIO mode was forced because CH422G failed.
+ * @brief Report whether the direct GPIO mode was forced because the IO expander failed.
  */
 bool sd_fallback_due_to_ch422g(void);
 

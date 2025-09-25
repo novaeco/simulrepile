@@ -14,6 +14,7 @@
 #include <assert.h>
 #include "rgb_lcd_port.h"
 #include "lvgl_port.h"
+#include "waveshare_io.h"
 
 const char *TAG = "example";
 
@@ -219,7 +220,7 @@ void waveshare_rgb_lcd_restart()
  */
 void wavesahre_rgb_lcd_bl_on()
 {
-    esp_err_t ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 1);  // Backlight ON configuration
+    esp_err_t ret = waveshare_io_output_set(WAVESHARE_IO_LINE_BACKLIGHT, true);  // Backlight ON configuration
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Backlight ON failed: %s", esp_err_to_name(ret));
     }
@@ -235,7 +236,7 @@ void wavesahre_rgb_lcd_bl_on()
  */
 void wavesahre_rgb_lcd_bl_off()
 {
-    esp_err_t ret = IO_EXTENSION_Output(IO_EXTENSION_IO_2, 0);  // Backlight OFF configuration
+    esp_err_t ret = waveshare_io_output_set(WAVESHARE_IO_LINE_BACKLIGHT, false);  // Backlight OFF configuration
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Backlight OFF failed: %s", esp_err_to_name(ret));
     }
