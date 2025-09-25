@@ -41,7 +41,8 @@ L'interface graphique s'appuie désormais sur un thème mutualisé accessible vi
 `main/ui_theme.c`. Le thème applique un fond dégradé (`0xF3EFE2 → 0xE2F1E5`)
 évoquant la canopée, une palette primaire turquoise (`#2A9D8F`), des accents
 forester (`#3A7D60`) et des teintes sable pour les arrière-plans de cartes.
-Les typos utilisées sont `lv_font_montserrat_24/20/16` :
+Les typos utilisées sont `ui_font_montserrat_24_fr/20_fr/16_fr` (déclinaisons
+latin-1 complètes) :
 
 | Style | API | Usage | Caractéristiques |
 |-------|-----|-------|------------------|
@@ -53,6 +54,10 @@ Les typos utilisées sont `lv_font_montserrat_24/20/16` :
 | Boutons secondaires | `ui_theme_create_button(..., UI_THEME_BUTTON_SECONDARY, …)` | navigation, toggles | Fond clair, bord vert `#3A7D60`, texte `#2F4F43` |
 | Tableaux | `ui_theme_apply_table()` | listes, tableaux réglementaires | En-tête vert pastel, cellules denses, surbrillance accent |
 | Menus déroulants | `ui_theme_apply_dropdown()` | sélecteurs de slot, configuration terrarium | Rayon 12 px, bord `#8FBC8F` |
+
+Les variantes embarquées couvrent tout le jeu de caractères Latin-1 (accents,
+symboles monétaires `€`, unités `°`), supprimant les carrés de remplacement
+observés sur la version précédente.
 
 Les icônes terrarium (OK/alerte) et monnaie sont centralisées par
 `ui_theme_get_icon(UI_THEME_ICON_*)`, garantissant une cohérence d'usage.
