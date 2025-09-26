@@ -1,0 +1,19 @@
+{
+  "app_title": "SimulRepile",
+  "disclaimer": "Ce simulateur ne remplace pas la formation obligatoire",
+  "docs.no_results": "Aucun document disponible",
+  "docs.search_placeholder": "Rechercher un document",
+  "dashboard.empty_slot": "Emplacement libre",
+  "dashboard.temperature": "Températures",
+  "dashboard.humidity": "Humidité",
+  "dashboard.hydration": "Hydratation",
+  "dashboard.stress": "Stress",
+  "dashboard.last_care": "Dernier soin",
+  "dashboard.no_care": "Aucun soin enregistré",
+  "slots.empty": "Libre",
+  "settings.language": "Langue",
+  "settings.high_contrast": "Contraste élevé",
+  "settings.save_now": "Sauvegarder",
+  "settings.flush_logs": "Archiver les journaux",
+  "settings.no_logs": "Aucun journal disponible"
+}
