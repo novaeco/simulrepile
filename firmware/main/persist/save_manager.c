@@ -11,11 +11,6 @@
 #include <unistd.h>
 #include "esp_log.h"
 #include "esp_rom_crc.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include "esp_log.h"
 
 #include "persist/schema_version.h"
 
@@ -32,6 +27,124 @@ typedef struct __attribute__((packed)) {
     uint32_t payload_length;
     uint64_t saved_at_unix;
 } save_file_header_t;
+
+static void reset_file_info(save_slot_file_info_t *info)
+{
+    if (!info) {
+        return;
+    }
+    memset(info, 0, sizeof(*info));
+    info->last_error = ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t inspect_slot_file(int slot_index, bool backup, bool validate_crc, save_slot_file_info_t *info)
+{
+    if (!info) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    reset_file_info(info);
+
+    char path[160];
+    build_path(slot_index, backup, path, sizeof(path));
+
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        if (errno == ENOENT) {
+            return ESP_ERR_NOT_FOUND;
+        }
+        info->last_error = ESP_FAIL;
+        ESP_LOGE(TAG, "Failed to open %s (errno=%d)", path, errno);
+        return info->last_error;
+    }
+
+    info->exists = true;
+    info->last_error = ESP_OK;
+
+    save_file_header_t header = {0};
+    size_t read_bytes = fread(&header, 1, sizeof(header), f);
+    if (read_bytes != sizeof(header)) {
+        info->valid = false;
+        info->last_error = ESP_FAIL;
+        ESP_LOGE(TAG, "Header read failed for %s", path);
+        fclose(f);
+        return info->last_error;
+    }
+
+    bool header_ok = true;
+    bool crc_ok = true;
+    bool io_ok = true;
+
+    if (memcmp(header.magic, SIMULREPILE_SAVE_MAGIC, sizeof(header.magic)) != 0) {
+        header_ok = false;
+        info->last_error = ESP_ERR_INVALID_RESPONSE;
+        ESP_LOGE(TAG, "Invalid magic in %s", path);
+    } else if (header.version > SIMULREPILE_SAVE_VERSION) {
+        header_ok = false;
+        info->last_error = ESP_ERR_NOT_SUPPORTED;
+        ESP_LOGE(TAG, "Unsupported version %u in %s", header.version, path);
+    } else if (header.flags & ~SAVE_MANAGER_FLAG_COMPRESSED) {
+        header_ok = false;
+        info->last_error = ESP_ERR_NOT_SUPPORTED;
+        ESP_LOGE(TAG, "Unknown flag bits 0x%08x in %s", header.flags, path);
+    } else if (header.flags & SAVE_MANAGER_FLAG_COMPRESSED) {
+        header_ok = false;
+        info->last_error = ESP_ERR_NOT_SUPPORTED;
+        ESP_LOGW(TAG, "Compressed save unsupported for %s", path);
+    }
+
+    if (header_ok) {
+        if (validate_crc && header.payload_length > 0) {
+            uint32_t crc = 0;
+            uint8_t buffer[512];
+            size_t remaining = header.payload_length;
+            while (remaining > 0) {
+                size_t to_read = remaining > sizeof(buffer) ? sizeof(buffer) : remaining;
+                size_t just_read = fread(buffer, 1, to_read, f);
+                if (just_read != to_read) {
+                    crc_ok = false;
+                    io_ok = false;
+                    info->last_error = ESP_FAIL;
+                    ESP_LOGE(TAG, "Payload read failed for %s", path);
+                    break;
+                }
+                crc = esp_rom_crc32_le(crc, buffer, just_read);
+                remaining -= just_read;
+            }
+            if (crc_ok && crc != header.payload_crc32) {
+                crc_ok = false;
+                info->last_error = ESP_ERR_INVALID_CRC;
+                ESP_LOGE(TAG, "CRC mismatch for %s (expected %08x got %08x)", path, header.payload_crc32, crc);
+            }
+        } else if (!validate_crc && header.payload_length > 0) {
+            if (fseek(f, (long)header.payload_length, SEEK_CUR) != 0) {
+                io_ok = false;
+                info->last_error = ESP_FAIL;
+                ESP_LOGW(TAG, "Failed to skip payload for %s", path);
+            }
+        }
+    }
+
+    fclose(f);
+
+    if (header_ok) {
+        info->meta.schema_version = header.version;
+        info->meta.flags = header.flags;
+        info->meta.crc32 = header.payload_crc32;
+        info->meta.payload_length = header.payload_length;
+        info->meta.saved_at_unix = header.saved_at_unix;
+        memset(info->meta.reserved, 0, sizeof(info->meta.reserved));
+    } else {
+        memset(&info->meta, 0, sizeof(info->meta));
+    }
+
+    info->valid = header_ok && io_ok && (!validate_crc || crc_ok);
+    if (!info->valid && info->last_error == ESP_OK) {
+        info->last_error = ESP_FAIL;
+    }
+
+    return info->last_error;
+}
 
 static esp_err_t ensure_directory(const char *path)
 {
@@ -331,10 +444,75 @@ esp_err_t save_manager_delete_slot(int slot_index)
     err = delete_file(bak_path);
     if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
         return err;
-
-        ESP_LOGI(TAG, "Creating backup %s", bak_path);
-
     }
+    return ESP_OK;
+}
+
+esp_err_t save_manager_list_slots(save_slot_status_t *out_status, size_t status_count)
+{
+    if (!out_status) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (status_count < SAVE_MANAGER_MAX_SLOTS) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    for (int i = 0; i < SAVE_MANAGER_MAX_SLOTS; ++i) {
+        reset_file_info(&out_status[i].primary);
+        reset_file_info(&out_status[i].backup);
+
+        esp_err_t primary_err = inspect_slot_file(i, false, false, &out_status[i].primary);
+        if (primary_err != ESP_OK && primary_err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(TAG, "Slot %d primary inspection returned 0x%x", i, primary_err);
+        }
+
+        esp_err_t backup_err = inspect_slot_file(i, true, false, &out_status[i].backup);
+        if (backup_err != ESP_OK && backup_err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(TAG, "Slot %d backup inspection returned 0x%x", i, backup_err);
+        }
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t save_manager_validate_slot(int slot_index, bool check_backup, save_slot_status_t *out_status)
+{
+    if (!out_status) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (slot_index < 0 || slot_index >= SAVE_MANAGER_MAX_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    reset_file_info(&out_status->primary);
+    reset_file_info(&out_status->backup);
+
+    esp_err_t primary_err = inspect_slot_file(slot_index, false, true, &out_status->primary);
+    if (primary_err == ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "Primary slot %d missing", slot_index);
+    }
+
+    esp_err_t backup_err = ESP_ERR_NOT_FOUND;
+    if (check_backup) {
+        backup_err = inspect_slot_file(slot_index, true, true, &out_status->backup);
+        if (backup_err == ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(TAG, "Backup slot %d missing", slot_index);
+        }
+    }
+
+    bool primary_ok = (primary_err == ESP_OK) && out_status->primary.valid;
+    bool backup_ok = true;
+    if (check_backup) {
+        backup_ok = (backup_err == ESP_OK) && out_status->backup.valid;
+    }
+
+    if (!primary_ok) {
+        return (primary_err == ESP_OK) ? out_status->primary.last_error : primary_err;
+    }
+    if (!backup_ok) {
+        return (backup_err == ESP_OK) ? out_status->backup.last_error : backup_err;
+    }
+
     return ESP_OK;
 }
 
