@@ -1,0 +1,81 @@
+menu "SimulRepile Application"
+
+config APP_MAX_TERRARIUMS
+    int "Maximum number of terrariums"
+    range 1 4
+    default 4
+    help
+        Defines how many terrariums can be managed simultaneously.
+
+config APP_AUTOSAVE_INTERVAL_S
+    int "Automatic save interval (s)"
+    range 30 900
+    default 120
+
+config APP_ENABLE_COMPRESSION
+    bool "Enable save compression"
+    default n
+
+choice APP_BOARD_REV
+    prompt "Waveshare 7B board revision"
+    default APP_BOARD_REV_A if !APP_BOARD_REV_B
+    default APP_BOARD_REV_A
+
+config APP_BOARD_REV_A
+    bool "Revision A (ST7262)"
+
+config APP_BOARD_REV_B
+    bool "Revision B (AXS15231B)"
+
+endchoice
+
+config APP_ENABLE_WIFI_OTA
+    bool "Enable Wi-Fi OTA"
+    default n
+
+config APP_ENABLE_TTS_STUB
+    bool "Enable Text-to-Speech stub"
+    default n
+
+choice APP_LANG_DEFAULT
+    prompt "Default language"
+    default APP_LANG_FR
+
+config APP_LANG_FR
+    bool "French"
+
+config APP_LANG_EN
+    bool "English"
+
+config APP_LANG_DE
+    bool "German"
+
+config APP_LANG_ES
+    bool "Spanish"
+
+endchoice
+
+config APP_THEME_HIGH_CONTRAST
+    bool "Enable high contrast theme"
+    default y
+
+config APP_SD_PATH_MAX_LEN
+    int "Maximum SD path length"
+    range 64 512
+    default 256
+
+config APP_ASSET_CACHE_SIZE
+    int "Asset cache items"
+    range 4 64
+    default 16
+
+config APP_DOC_READ_CHUNK_SIZE
+    int "Document read chunk size"
+    range 256 4096
+    default 1024
+
+config APP_ENABLE_LOG_DEBUG
+    bool "Enable verbose debug logging"
+    default n
+
+endmenu
