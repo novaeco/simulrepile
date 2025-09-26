@@ -19,6 +19,8 @@ static char s_root[128];
 
 #define SAVE_MANAGER_MAX_SLOTS 4
 
+static void build_path(int slot_index, bool backup, char *buffer, size_t len);
+
 typedef struct __attribute__((packed)) {
     char magic[4];
     uint32_t version;
