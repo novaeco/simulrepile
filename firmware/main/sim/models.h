@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -36,6 +37,25 @@ typedef struct {
     health_state_t health;
     float activity_score;
 } terrarium_state_t;
+
+#define TERRARIUM_INVALID_TIMESTAMP UINT32_C(0)
+
+void environment_profile_copy(environment_profile_t *dst, const environment_profile_t *src);
+void environment_profile_interpolate(const environment_profile_t *from,
+                                     const environment_profile_t *to,
+                                     float ratio,
+                                     environment_profile_t *out);
+
+void terrarium_state_init(terrarium_state_t *state,
+                          const reptile_profile_t *profile,
+                          uint32_t timestamp_seconds);
+void terrarium_state_set_environment(terrarium_state_t *state, const environment_profile_t *environment);
+void terrarium_state_apply_environment(terrarium_state_t *state,
+                                       const environment_profile_t *target,
+                                       float smoothing_factor);
+void terrarium_state_record_feeding(terrarium_state_t *state, uint32_t timestamp_seconds);
+uint32_t terrarium_state_time_since_feeding(const terrarium_state_t *state, uint32_t current_timestamp_seconds);
+bool terrarium_state_needs_feeding(const terrarium_state_t *state, uint32_t current_timestamp_seconds);
 
 #ifdef __cplusplus
 }

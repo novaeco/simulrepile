@@ -1,0 +1,83 @@
+menu "SimulRepile Application Configuration"
+
+config APP_MAX_TERRARIUMS
+    int "Maximum number of terrariums"
+    range 1 8
+    default 4
+    help
+        Defines how many terrariums can be simulated simultaneously.
+        Keep this value aligned with the UI layout (4 slots maximum).
+
+config APP_AUTOSAVE_INTERVAL_S
+    int "Autosave interval (seconds)"
+    range 30 3600
+    default 120
+    help
+        Interval between automatic persistence operations. Values below
+        30 seconds may impact SD throughput without benefit.
+
+config APP_ENABLE_COMPRESSION
+    bool "Enable save data compression"
+    default n
+    help
+        Activate the optional compression backend defined in
+        components/compression_if. Disable to simplify debugging of
+        JSON save payloads.
+
+config APP_ENABLE_WIFI_OTA
+    bool "Enable Wi-Fi OTA updates"
+    default n
+    help
+        Allow firmware upgrades through Wi-Fi in addition to SD card
+        based updates. Requires Wi-Fi credentials management.
+
+config APP_ENABLE_TTS_STUB
+    bool "Enable TTS stub"
+    default n
+    help
+        Provide a stub Text-To-Speech hook for accessibility testing.
+        Implementations can be swapped at runtime through the settings
+        screen.
+
+config APP_LANG_DEFAULT
+    string "Default language (ISO 639-1 code)"
+    default "fr"
+    help
+        ISO 639-1 language code loaded during the first boot. Users can
+        switch language at runtime through the settings screen.
+
+config APP_THEME_HIGH_CONTRAST
+    bool "Enable high-contrast theme by default"
+    default y
+    help
+        Enables the accessible color palette on first boot. Users may
+        revert to the standard theme from the settings screen.
+
+menu "Board Support Package Options"
+
+choice BSP_SD_BUS_WIDTH
+    prompt "SD bus width"
+    default BSP_SD_BUS_WIDTH_1BIT
+    help
+        Select the data bus width for the SD/MMC interface. 1-bit is the
+        safe default for wiring simplicity; 4-bit provides higher
+        throughput when all data lines are available.
+
+config BSP_SD_BUS_WIDTH_1BIT
+    bool "1-bit"
+
+config BSP_SD_BUS_WIDTH_4BIT
+    bool "4-bit"
+endchoice
+
+config BSP_USB_CAN_SELECTABLE
+    bool "Allow runtime USB/CAN selection"
+    default y
+    help
+        Exposes the CH422G EXIO5 line allowing the user to switch
+        between native USB (CDC) and CAN functionality from the
+        settings screen.
+
+endmenu
+
+endmenu
