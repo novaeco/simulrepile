@@ -1,5 +1,6 @@
 #include "persist/save_manager.h"
 
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,9 +9,14 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-
 #include "esp_log.h"
 #include "esp_rom_crc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "esp_log.h"
+
 #include "persist/schema_version.h"
 
 static const char *TAG = "save_manager";
@@ -51,6 +57,7 @@ static void build_path(int slot_index, bool backup, char *buffer, size_t len)
 {
     snprintf(buffer, len, "%s/slot%d%s.json", s_root, slot_index, backup ? ".bak" : "");
 }
+
 
 static esp_err_t copy_file(const char *src_path, const char *dst_path)
 {
@@ -205,10 +212,12 @@ esp_err_t save_manager_init(const char *root_path)
         return ESP_ERR_INVALID_ARG;
     }
     strlcpy(s_root, root_path, sizeof(s_root));
+
     esp_err_t err = ensure_directory(s_root);
     if (err != ESP_OK) {
         return err;
     }
+
     ESP_LOGI(TAG, "Save root set to %s", s_root);
     return ESP_OK;
 }
@@ -218,6 +227,7 @@ esp_err_t save_manager_load_slot(int slot_index, save_slot_t *out_slot)
     if (!out_slot) {
         return ESP_ERR_INVALID_ARG;
     }
+
     if (slot_index < 0 || slot_index >= SAVE_MANAGER_MAX_SLOTS) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -244,6 +254,7 @@ esp_err_t save_manager_load_slot(int slot_index, save_slot_t *out_slot)
     }
     ESP_LOGW(TAG, "Backup for slot %d unavailable (err=0x%x)", slot_index, err);
     return err;
+
 }
 
 esp_err_t save_manager_save_slot(int slot_index, const save_slot_t *slot_data, bool make_backup)
@@ -251,6 +262,7 @@ esp_err_t save_manager_save_slot(int slot_index, const save_slot_t *slot_data, b
     if (!slot_data) {
         return ESP_ERR_INVALID_ARG;
     }
+
     if (slot_index < 0 || slot_index >= SAVE_MANAGER_MAX_SLOTS) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -265,12 +277,14 @@ esp_err_t save_manager_save_slot(int slot_index, const save_slot_t *slot_data, b
         ESP_LOGE(TAG, "Unsupported flag bits 0x%08x", slot_data->meta.flags);
         return ESP_ERR_INVALID_ARG;
     }
+
     char path[160];
     build_path(slot_index, false, path, sizeof(path));
     ESP_LOGI(TAG, "Saving slot %d -> %s (backup=%d)", slot_index, path, make_backup);
     if (make_backup) {
         char bak_path[160];
         build_path(slot_index, true, bak_path, sizeof(bak_path));
+
         esp_err_t copy_err = copy_file(path, bak_path);
         if (copy_err != ESP_OK && copy_err != ESP_ERR_NOT_FOUND) {
             ESP_LOGW(TAG, "Backup copy failed for slot %d (err=0x%x)", slot_index, copy_err);
@@ -317,6 +331,9 @@ esp_err_t save_manager_delete_slot(int slot_index)
     err = delete_file(bak_path);
     if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
         return err;
+
+        ESP_LOGI(TAG, "Creating backup %s", bak_path);
+
     }
     return ESP_OK;
 }
