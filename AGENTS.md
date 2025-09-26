@@ -188,4 +188,165 @@ Autosave + Export/Import.
 
 MAJ par SD (stub OTA).
 
+
 Tests Unity + stabilisation perf.
+
+
+
+
+Mode Exécution Incrémentale — Interdiction de Recréer l’Existant
+0) Invariant
+
+Ne pas reconstruire/réécrire des modules déjà présents et fonctionnels.
+Objectif unique : combler les manquements (“gaps”) du projet tel que décrit dans ce document.
+
+1) Gel de périmètre (Scope Lock)
+
+Refactor Freeze : interdiction de refactor massif, de renommage de fichiers, de déplacement d’arbres, ou de “reconstruction” d’API sauf blocage critique justifié.
+
+Compat ascendante obligatoire pour tout format de données, API, ABI, schéma JSON.
+
+2) Procédure avant toute modification (obligatoire)
+
+Exécuter et consigner dans GAPS.md :
+
+# Cartographie du repo
+git rev-parse --short HEAD
+git status -s
+git ls-files
+
+# Détection des briques existantes (ne pas recréer si présentes)
+git grep -n -E "save_manager|persist|CRC|slot|ota|i18n|exio|waveshare|gt911|lvgl|lovyangfx|doc_reader|asset_manager"
+
+# Rapport lacunes vs. cahier des charges (ce fichier)
+# -> produire un tableau "Exigence" | "Présent ?" | "Fichier(s)" | "Action minimale"
+
+
+Sortie attendue : GAPS.md contenant la liste exhaustive de ce qui manque réellement (et seulement cela).
+
+3) Politique de modification (Surgical-Only)
+
+Ajouter sans casser : compléter les fonctions ou ajouter des fichiers manquants ; ne pas réécrire l’architecture ou des pipelines déjà en place.
+
+Changement minimal viable (MCV) : le plus petit diff répondant à l’exigence.
+
+Un gap = une PR (sauf micro-gaps groupables). Taille max ~300 lignes modifiées.
+
+4) Fichiers & modules protégés (ne pas recréer)
+
+Persistance (ex. persist/save_manager.c/.h, schema_version.h)
+
+Si présents : ne pas reconstruire le pipeline.
+
+Autorisé : ajout de fonctions manquantes (ex. save_delete_slot(), save_list_slots(), save_validate()), sans changer le format existant ni le comportement atomique en place.
+
+Si évolution de schéma requise : bump version + migration non destructive + lecture rétrocompatible.
+
+BSP / Pins / EXIO / LCD / Touch (ex. bsp/waveshare_7b.[ch], pins_*.h, exio.[ch])
+
+Ne pas re-écrire : compléter uniquement (ex. ajout bsp_battery_read_mv() si absent).
+
+UI LVGL (ex. ui_root, ui_dashboard, ui_docs, ui_settings)
+
+Interdiction de re-scaffolder; ajouter vues/écrans manquants uniquement.
+
+I18N (/i18n/*.json, loader)
+
+Ajouter clés manquantes, ne pas renommer/supprimer des clés existantes.
+
+Mise à jour par SD / OTA
+
+Si stub déjà présent : compléter les lacunes (ex. manifest.json parsing) sans refondre le mécanisme.
+
+5) Définition de “Gap” (ce qui est autorisé à coder)
+
+Un gap est une exigence du cahier des charges non satisfaite après scan :
+
+Fonction/API absente alors que référencée par l’architecture.
+
+Option menuconfig manquante (Kconfig) explicitement listée.
+
+Écran LVGL prévu mais non implémenté.
+
+Test unitaire prévu mais absent pour un module critique (CRC, rollback, sérialisation).
+
+Fichier d’exemple SD (docs/i18n/saves) manquant.
+
+Tout le reste (refactor global, re-design, re-génération de pipelines) est interdit.
+
+6) Workflow imposé
+
+Scanner & rédiger GAPS.md (tableau “Exigence → État → Action minimale”).
+
+Proposer PLAN.md listant l’ordre des gaps à traiter (priorités : persistance > UI bloquante > i18n > docs > MAJ).
+
+Ouvrir une branche par gap : feat/gap-<id>-<slug>.
+
+Implémentation chirurgicale (diff minimal).
+
+Tests ciblés (Unity pour CRC/rollback/JSON ; tests d’intégration pour UI si applicable).
+
+PR avec le template ci-dessous ; lien vers GAPS.md + capture/trace avant/après.
+
+Merge uniquement si DoD du gap est vert.
+
+7) Template de PR (obligatoire)
+Titre: [GAP-<id>] <résumé court>
+
+Contexte
+- Exigence (AGENTS.md §X.Y): …
+- État initial (référencer fichiers et lignes): …
+- Motif du changement: gap confirmé (voir GAPS.md)
+
+Scope (strict)
+- Ajouts/fichiers: …
+- Aucune suppression/renommage massif
+- Aucun changement de format/contrat public existant
+
+Implémentation
+- Diffs clés: …
+- Choix techniques minimaux: …
+
+Tests
+- Unitaires: CRC/rollback/json/…
+- Manuels: écran(s) LVGL impactés, I/O SD non bloquants
+- Résultats: (logs, captures)
+
+Risques
+- Compat: rétrocompat OK / migration N/A
+- Perf: inchangée / mesurée
+
+Checklist
+- [ ] Respect “Surgical-Only”
+- [ ] Pas de refactor non demandé
+- [ ] DoD du gap satisfait
+
+8) DoD (Définition de Fini) par gap
+
+Fonctionnel : l’exigence est couverte sans casser l’existant.
+
+Tests : unitaires (si module critique) + preuve d’usage.
+
+Diff minimal : pas de remaniement structurel.
+
+Docs : README/inline comments/Kconfig help mis à jour si nécessaire.
+
+9) Liste indicative de gaps fréquents à traiter (exécuter après scan)
+
+Persistance : save_delete_slot(), save_list_slots(), save_validate() ; sans changer en-tête atomique ni CRC existants.
+
+UI : ajout de l’écran Documents minimal si manquant (TXT/HTML), menu Paramètres (langue, contraste, autosave), À propos/Légal.
+
+I18N : chargeur JSON et bascule FR/EN à chaud.
+
+BSP : utilitaires EXIO (DISP, LCD_VDD_EN, USB_SEL) si absents ; bsp_backlight_set(), bsp_battery_read_mv() si manquants.
+
+Kconfig : options APP_MAX_TERRARIUMS, APP_AUTOSAVE_INTERVAL_S, APP_ENABLE_COMPRESSION, BSP_SD_BUS_WIDTH, etc., si manquantes.
+
+MAJ par SD : parsing manifest.json de base si non présent.
+
+Tests Unity : CRC32, rollback .bak, sérialisation JSON.
+
+10) Conditions d’arrêt (Fail Fast)
+
+Si une action requiert reconstruction d’un module existant → STOP et ouvrir une Issue “Refactor Proposal” sans coder, avec justification et impact.
