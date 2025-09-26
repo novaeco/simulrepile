@@ -1,0 +1,4 @@
+#pragma once
+
+#define SIMULREPILE_SAVE_MAGIC "SRSL"
+#define SIMULREPILE_SAVE_VERSION 1

@@ -1,0 +1,9 @@
+{
+  "magic": "SRSL",
+  "version": 1,
+  "flags": ["auto"],
+  "crc32": "00000000",
+  "payload": {
+    "terrariums": []
+  }
+}

@@ -1,0 +1,33 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "bsp/waveshare_7b.c"
+        "bsp/exio.c"
+        "assets/asset_cache.c"
+        "docs/doc_reader.c"
+        "i18n/i18n_manager.c"
+        "persist/save_manager.c"
+        "sim/models.c"
+        "sim/presets.c"
+        "sim/sim_engine.c"
+        "ui/ui_root.c"
+        "ui/ui_dashboard.c"
+        "ui/ui_slots.c"
+        "ui/ui_docs.c"
+        "ui/ui_settings.c"
+        "ui/ui_theme.c"
+    INCLUDE_DIRS
+        "."
+        "bsp"
+        "assets"
+        "docs"
+        "i18n"
+        "persist"
+        "sim"
+        "ui"
+    REQUIRES
+        lvgl_port
+        compression_if
+)
+
+# Add Unity tests placeholder component if needed later.

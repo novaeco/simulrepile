@@ -1,0 +1,8 @@
+SIMULREPILE - AVERTISSEMENT LÉGAL
+================================
+
+Ce simulateur est un outil pédagogique. Il ne remplace ni l'expertise vétérinaire, ni les obligations légales relatives à la détention de faune sauvage protégée.
+
+- Respectez les réglementations françaises, européennes et internationales (CITES, I-FAP, CDC) avant tout projet réel.
+- Les informations présentées sont fournies à titre indicatif et doivent être vérifiées auprès des autorités compétentes.
+- Aucune fonctionnalité de ce logiciel ne doit être utilisée pour contourner les contrôles administratifs ou sanitaires.

@@ -1,0 +1,9 @@
+MAINTENANCE HEBDOMADAIRE STANDARD
+=================================
+
+1. Vérifier l'intégrité des verrous et du vitrage.
+2. Contrôler la température et l'hygrométrie sur 24 h.
+3. Nettoyer les zones souillées et remplacer le substrat localement.
+4. Désinfecter l'abreuvoir et renouveler l'eau osmosée.
+5. Programmer la prochaine session d'enrichissement environnemental.
+6. Journaliser les observations comportementales (activité, appétit, mue).
