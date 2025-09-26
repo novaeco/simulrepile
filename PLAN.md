@@ -1,5 +1,6 @@
 # Plan de traitement des gaps
 
+0. **GAP-010 – Corriger les dépendances locales CMake** : nécessaire pour exécuter `idf.py build` avant toute autre intégration.
 1. **GAP-001 – Compléter `sim/models.c`** : blocage de build immédiat, condition préalable à toute intégration continue.
 2. **GAP-007 – Introduire le Kconfig applicatif/BSP** : sans symboles déclarés, les options `CONFIG_APP_*`/`CONFIG_BSP_*` référencées restent inertes.
 3. **GAP-002 – Ajouter `save_manager_list_slots()`/`save_manager_validate_slot()`** : priorité persistance (AGENTS §9) afin de sécuriser les sauvegardes.
