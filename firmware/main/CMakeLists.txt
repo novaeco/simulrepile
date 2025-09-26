@@ -28,6 +28,7 @@ idf_component_register(
     REQUIRES
         lvgl_port
         compression_if
+        json
 )
 
 # Add Unity tests placeholder component if needed later.

@@ -1,0 +1,11 @@
+{
+  "language": "es",
+  "strings": {
+    "app_title": "SimulRepile",
+    "disclaimer_ack": "Entiendo que esta aplicación es solo un simulador educativo.",
+    "menu_dashboard": "Panel",
+    "menu_documents": "Documentos",
+    "menu_settings": "Ajustes",
+    "menu_about": "Acerca de"
+  }
+}
