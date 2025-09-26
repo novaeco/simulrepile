@@ -444,9 +444,6 @@ esp_err_t save_manager_delete_slot(int slot_index)
     err = delete_file(bak_path);
     if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
         return err;
-
-        ESP_LOGI(TAG, "Creating backup %s", bak_path);
-
     }
     return ESP_OK;
 }
