@@ -1,3 +1,6 @@
+version: "0.1.0"
+description: "Simu Reptile - App principale"
 dependencies:
   idf: ">=5.5"
-  idf::cjson: "*"
+  espressif/esp_lvgl_port: "^2"
+  lvgl/lvgl: "^9.2"

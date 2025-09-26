@@ -26,9 +26,17 @@ idf_component_register(
         "sim"
         "ui"
     REQUIRES
+        driver
+        esp_lcd
+        cJSON
+        fatfs
+        nvs_flash
+        esp_timer
+        esp_psram
+        esp_lvgl_port
+        lvgl__lvgl
         lvgl_port
         compression_if
-        cjson
 )
 
 # Add Unity tests placeholder component if needed later.
