@@ -18,7 +18,6 @@ config APP_ENABLE_COMPRESSION
 
 choice APP_BOARD_REV
     prompt "Waveshare 7B board revision"
-    default APP_BOARD_REV_A if !APP_BOARD_REV_B
     default APP_BOARD_REV_A
 
 config APP_BOARD_REV_A
