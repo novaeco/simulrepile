@@ -1,3 +1,5 @@
+#include <stddef.h>
+
 #include "bsp/waveshare_7b.h"
 
 #include "bsp/exio.h"
@@ -5,6 +7,7 @@
 #include "bsp/pins_sd.h"
 #include "bsp/pins_touch.h"
 #include "bsp/pins_usb.h"
+#include "link/core_link.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -35,6 +38,7 @@ static uint8_t s_backlight_percent = 0;
 static bool s_pwm_initialized = false;
 static i2c_master_dev_handle_t s_touch_dev = NULL;
 static bool s_touch_isr_attached = false;
+static TaskHandle_t s_touch_task_handle = NULL;
 static sdmmc_card_t *s_sd_card = NULL;
 static usb_phy_handle_t s_usb_phy = NULL;
 
@@ -44,10 +48,39 @@ static usb_phy_handle_t s_usb_phy = NULL;
 #define BACKLIGHT_LEDC_RESOLUTION   LEDC_TIMER_12_BIT
 #define BACKLIGHT_LEDC_FREQUENCY_HZ 5000
 #define TOUCH_I2C_TIMEOUT_MS        100
+#define FT5X06_MAX_TOUCH_POINTS     5
+#define FT5X06_POINT_DATA_SIZE      6
+#define FT5X06_REG_POINTS           0x02
+#define TOUCH_TASK_STACK_SIZE       4096
+#define TOUCH_TASK_PRIORITY         5
+#define TOUCH_TASK_CORE             1
+
+typedef struct {
+    bool active;
+    uint16_t x;
+    uint16_t y;
+} touch_point_state_t;
+
+static touch_point_state_t s_touch_points[FT5X06_MAX_TOUCH_POINTS];
+
+static void touch_task(void *arg);
+static void touch_process_sample(void);
+static void touch_handle_point(uint8_t id, uint8_t event_flag, uint16_t x, uint16_t y, bool *seen_points);
+static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16_t x, uint16_t y);
 
 static void IRAM_ATTR touch_irq_handler(void *arg)
 {
     (void)arg;
+
+    if (!s_touch_task_handle) {
+        return;
+    }
+
+    BaseType_t higher_woken = pdFALSE;
+    vTaskNotifyGiveFromISR(s_touch_task_handle, &higher_woken);
+    if (higher_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
 }
 
 static esp_err_t configure_rgb_panel(void)
@@ -127,6 +160,13 @@ static esp_err_t configure_touch(void)
     uint8_t id = 0;
     ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_touch_dev, &reg, 1, &id, 1, TOUCH_I2C_TIMEOUT_MS), TAG, "Read touch ID failed");
     ESP_LOGI(TAG, "FT5x06 ID: 0x%02X", id);
+
+    if (!s_touch_task_handle) {
+        BaseType_t task_created = xTaskCreatePinnedToCore(touch_task, "touch_lvgl", TOUCH_TASK_STACK_SIZE, NULL,
+                                                         TOUCH_TASK_PRIORITY, &s_touch_task_handle, TOUCH_TASK_CORE);
+        ESP_RETURN_ON_FALSE(task_created == pdPASS, ESP_ERR_NO_MEM, TAG, "Touch task creation failed");
+    }
+
     return ESP_OK;
 }
 
@@ -193,6 +233,118 @@ esp_err_t bsp_init(void)
     ESP_RETURN_ON_ERROR(bsp_backlight_enable(true), TAG, "Backlight enable failed");
     ESP_LOGI(TAG, "BSP initialized");
     return ESP_OK;
+}
+
+static void touch_task(void *arg)
+{
+    (void)arg;
+
+    while (true) {
+        if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 0) {
+            continue;
+        }
+
+        touch_process_sample();
+
+        while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
+            touch_process_sample();
+        }
+    }
+}
+
+static void touch_process_sample(void)
+{
+    if (!s_touch_dev) {
+        return;
+    }
+
+    uint8_t reg = FT5X06_REG_POINTS;
+    uint8_t buffer[1 + FT5X06_MAX_TOUCH_POINTS * FT5X06_POINT_DATA_SIZE] = {0};
+    esp_err_t err = i2c_master_transmit_receive(s_touch_dev, &reg, 1, buffer, sizeof(buffer), TOUCH_I2C_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Touch read failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    uint8_t reported = buffer[0] & 0x0F;
+    if (reported > FT5X06_MAX_TOUCH_POINTS) {
+        reported = FT5X06_MAX_TOUCH_POINTS;
+    }
+
+    bool seen[FT5X06_MAX_TOUCH_POINTS] = {false};
+
+    for (uint8_t i = 0; i < reported; ++i) {
+        size_t offset = 1 + (size_t)i * FT5X06_POINT_DATA_SIZE;
+        uint8_t event_flag = (buffer[offset] >> 6) & 0x03;
+        uint16_t x = (uint16_t)((buffer[offset] & 0x0F) << 8) | buffer[offset + 1];
+        uint16_t y = (uint16_t)((buffer[offset + 2] & 0x0F) << 8) | buffer[offset + 3];
+        uint8_t id = (buffer[offset + 2] >> 4) & 0x0F;
+        touch_handle_point(id, event_flag, x, y, seen);
+    }
+
+    for (uint8_t id = 0; id < FT5X06_MAX_TOUCH_POINTS; ++id) {
+        if (!seen[id] && s_touch_points[id].active) {
+            touch_dispatch_event(CORE_LINK_TOUCH_UP, id, s_touch_points[id].x, s_touch_points[id].y);
+            s_touch_points[id].active = false;
+        }
+    }
+}
+
+static void touch_handle_point(uint8_t id, uint8_t event_flag, uint16_t x, uint16_t y, bool *seen_points)
+{
+    if (id >= FT5X06_MAX_TOUCH_POINTS) {
+        return;
+    }
+
+    seen_points[id] = true;
+
+    touch_point_state_t *state = &s_touch_points[id];
+
+    switch (event_flag) {
+    case 0: // Touch down
+        state->active = true;
+        state->x = x;
+        state->y = y;
+        touch_dispatch_event(CORE_LINK_TOUCH_DOWN, id, x, y);
+        break;
+    case 2: // Contact / move
+        if (!state->active) {
+            state->active = true;
+            state->x = x;
+            state->y = y;
+            touch_dispatch_event(CORE_LINK_TOUCH_DOWN, id, x, y);
+        } else if (state->x != x || state->y != y) {
+            state->x = x;
+            state->y = y;
+            touch_dispatch_event(CORE_LINK_TOUCH_MOVE, id, x, y);
+        }
+        break;
+    case 1: // Touch up
+        state->x = x;
+        state->y = y;
+        touch_dispatch_event(CORE_LINK_TOUCH_UP, id, x, y);
+        state->active = false;
+        break;
+    default:
+        break;
+    }
+}
+
+static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16_t x, uint16_t y)
+{
+    core_link_touch_event_t event = {
+        .type = type,
+        .point_id = id,
+        .x = x,
+        .y = y,
+    };
+
+    esp_err_t err = core_link_send_touch_event(&event);
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGD(TAG, "Touch event dropped (link not ready)");
+    } else if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send touch event: %s", esp_err_to_name(err));
+    }
 }
 
 esp_err_t bsp_backlight_enable(bool enable)
