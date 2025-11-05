@@ -7,7 +7,10 @@
 #include "bsp/pins_sd.h"
 #include "bsp/pins_touch.h"
 #include "bsp/pins_usb.h"
+#include "bsp/waveshare_7b_lgfx.h"
 #include "link/core_link.h"
+
+#include "lvgl_port.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -28,8 +31,6 @@
 #include "usb/usb_phy.h"
 
 #include "sdkconfig.h"
-
-extern esp_err_t waveshare_7b_lgfx_init(void);
 
 static const char *TAG = "waveshare_7b";
 
@@ -344,6 +345,11 @@ static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16
         ESP_LOGD(TAG, "Touch event dropped (link not ready)");
     } else if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send touch event: %s", esp_err_to_name(err));
+    }
+
+    if (id == 0) {
+        bool pressed = (type != CORE_LINK_TOUCH_UP);
+        lvgl_port_feed_touch_event(pressed, x, y);
     }
 }
 
