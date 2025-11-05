@@ -1,0 +1,58 @@
+menu "SimulRepile Core Configuration"
+
+config CORE_APP_LINK_UART_PORT
+    int "UART port"
+    range 0 2
+    default 1
+    help
+        Port UART matériel utilisé pour la liaison vers la Waveshare.
+
+config CORE_APP_LINK_UART_TX_PIN
+    int "UART TX pin"
+    default 17
+    help
+        Broche TX du DevKitC reliée au RX de la Waveshare.
+
+config CORE_APP_LINK_UART_RX_PIN
+    int "UART RX pin"
+    default 18
+    help
+        Broche RX du DevKitC reliée au TX de la Waveshare.
+
+config CORE_APP_LINK_UART_BAUD
+    int "UART baud rate"
+    default 2000000
+    help
+        Débit de la liaison UART (bits/s). 2 Mbps recommandé pour les frames LVGL.
+
+config CORE_APP_HANDSHAKE_TIMEOUT_MS
+    int "Handshake timeout (ms)"
+    default 5000
+    help
+        Temps maximum d'attente pour l'acquittement `HELLO_ACK` et `DISPLAY_READY`.
+
+config CORE_APP_HANDSHAKE_RETRY_MS
+    int "Handshake retry interval (ms)"
+    default 500
+    help
+        Intervalle entre deux émissions `HELLO` lorsque l'afficheur n'a pas encore répondu.
+
+config CORE_APP_STATE_PUBLISH_INTERVAL_MS
+    int "State publish interval (ms)"
+    default 500
+    help
+        Intervalle entre deux envois périodiques de `STATE_FULL`.
+
+config CORE_APP_STATE_BASE_EPOCH
+    int "Base epoch timestamp"
+    default 1704067200
+    help
+        Epoch Unix de référence utilisée en l'absence de RTC ou synchronisation réseau.
+
+config CORE_APP_TOUCH_RELIEF_DELTA
+    int "Touch relief delta"
+    default 5
+    help
+        Pourcentage de réduction du stress quand un contact tactile DOWN est reçu.
+
+endmenu
