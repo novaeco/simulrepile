@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "app_main.c"
         "bsp/waveshare_7b.c"
+        "bsp/waveshare_7b_lgfx.cpp"
         "bsp/exio.c"
         "assets/asset_cache.c"
         "docs/doc_reader.c"

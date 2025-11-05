@@ -23,3 +23,6 @@
 #define LCD_PIN_B5       18
 #define LCD_PIN_B6       17
 #define LCD_PIN_B7       10
+
+/* Backlight control routed through EXIO PWM, no dedicated GPIO (-1 = unused) */
+#define LCD_PIN_BACKLIGHT    (-1)

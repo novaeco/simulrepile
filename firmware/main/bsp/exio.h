@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +22,8 @@ esp_err_t exio_set(exio_line_t line, bool level);
 esp_err_t exio_enable_display(bool enable);
 esp_err_t exio_enable_lcd_vdd(bool enable);
 esp_err_t exio_select_usb(bool enable_usb);
+esp_err_t exio_set_pwm(uint8_t percent);
+i2c_master_bus_handle_t exio_get_bus_handle(void);
 
 #ifdef __cplusplus
 }
