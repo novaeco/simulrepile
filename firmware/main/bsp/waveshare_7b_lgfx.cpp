@@ -1,6 +1,7 @@
 #include <LovyanGFX.hpp>
 
 #include "bsp/pins_lcd.h"
+#include "bsp/waveshare_7b_lgfx.h"
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -100,7 +101,14 @@ extern "C" esp_err_t waveshare_7b_lgfx_init(void)
     return ESP_OK;
 }
 
-extern "C" lgfx::LGFX_Device *waveshare_7b_get_lgfx(void)
+extern "C" bool waveshare_7b_lgfx_flush(int32_t x, int32_t y, int32_t w, int32_t h, const void *pixel_data)
 {
-    return &s_lgfx;
+    if (!pixel_data || w <= 0 || h <= 0) {
+        return false;
+    }
+
+    s_lgfx.startWrite();
+    s_lgfx.pushImage(x, y, w, h, reinterpret_cast<const uint16_t *>(pixel_data));
+    s_lgfx.endWrite();
+    return true;
 }
