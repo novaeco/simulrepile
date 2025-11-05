@@ -27,6 +27,9 @@ vitesse (par défaut 2 Mbps sur UART1, GPIO43↔GPIO44) encapsulant un protocole
 Les paramètres (port UART, broches, timeout handshake) sont accessibles dans `idf.py menuconfig → SimulRepile Application
 Configuration → Core Link Bridge` et possèdent des valeurs par défaut adaptées au câblage direct entre les deux cartes.
 
+Le firmware maître (DevKitC) se trouve dans `../core_firmware/`. Il publie les instantanés simulés sur la même structure de
+trames (`common/include/link/core_link_protocol.h`) et gère les événements tactiles pour ajuster la simulation.
+
 ## Pré-requis
 
 1. Installer ESP-IDF 5.5 ou supérieur et activer l'environnement (`. ./export.sh`).

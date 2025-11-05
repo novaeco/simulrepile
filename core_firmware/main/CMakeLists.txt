@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "link/core_host_link.c"
+        "state/core_state_manager.c"
+    INCLUDE_DIRS
+        "."
+        "link"
+        "state"
+        "../../firmware/common/include"
+    REQUIRES
+        driver
+        esp_timer
+        nvs_flash
+)

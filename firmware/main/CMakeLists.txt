@@ -27,6 +27,7 @@ idf_component_register(
         "sim"
         "ui"
         "link"
+        "../common/include"
     REQUIRES
         driver
         esp_lcd
