@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 
 #include "link/core_link_protocol.h"
+#include "core_link_protocol.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
