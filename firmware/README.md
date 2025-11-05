@@ -11,6 +11,22 @@ Il fournit l'architecture logicielle, les points d'entrée et les stubs nécessa
 - `sdkconfig.defaults` : configuration par défaut orientée ESP32-S3 avec PSRAM et LVGL.
 - `partitions.csv` : partitionnement dual-OTA + stockage FAT pour la carte SD virtuelle.
 
+## Architecture maître/esclave
+
+La branche courante implémente l’option **B** : la carte Waveshare reste un terminal graphique/entrée tactile tandis que toute
+la logique métier tourne sur une ESP32-S3-DevKitC-1 (module WROOM-2). Les deux cartes sont reliées par un lien UART haute
+vitesse (par défaut 2 Mbps sur UART1, GPIO43↔GPIO44) encapsulant un protocole binaire minimal (`link/core_link.*`).
+
+- **Handshake & capabilities** : au démarrage, le DevKitC émet `HELLO`, la Waveshare acquitte avec `HELLO_ACK` et publie sa
+  résolution dans un message `DISPLAY_READY`.
+- **Synchronisation d’état** : le DevKitC pousse des trames `STATE_FULL` contenant jusqu’à 4 instantanés de terrariums. Le
+  module d’affichage les stocke via `sim_engine_apply_remote_snapshot()` et désactive la simulation locale.
+- **Événements tactiles** : l’API `core_link_send_touch_event()` prépare l’intégration future du driver I²C pour remonter les
+  contacts vers le cœur.
+
+Les paramètres (port UART, broches, timeout handshake) sont accessibles dans `idf.py menuconfig → SimulRepile Application
+Configuration → Core Link Bridge` et possèdent des valeurs par défaut adaptées au câblage direct entre les deux cartes.
+
 ## Pré-requis
 
 1. Installer ESP-IDF 5.5 ou supérieur et activer l'environnement (`. ./export.sh`).

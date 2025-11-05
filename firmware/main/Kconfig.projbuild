@@ -53,6 +53,52 @@ config APP_THEME_HIGH_CONTRAST
         Enables the accessible color palette on first boot. Users may
         revert to the standard theme from the settings screen.
 
+menu "Core Link Bridge"
+
+config APP_CORE_LINK_UART_PORT
+    int "UART port used for the core link"
+    range 0 2
+    default 1
+    help
+        Select the UART controller used to communicate with the
+        ESP32-S3-DevKitC core board. UART1 is routed to GPIO43/GPIO44 on
+        the Waveshare carrier and is free by default.
+
+config APP_CORE_LINK_UART_TX_PIN
+    int "Core link UART TX GPIO"
+    default 43
+    help
+        GPIO driving the TX line towards the DevKitC bridge. Adapt this
+        value if you re-route the differential pair via the CH422G or a
+        mezzanine connector.
+
+config APP_CORE_LINK_UART_RX_PIN
+    int "Core link UART RX GPIO"
+    default 44
+    help
+        GPIO receiving data from the DevKitC bridge. Make sure the pin is
+        not reused by the LCD or SD peripheral when rewiring the board.
+
+config APP_CORE_LINK_UART_BAUD
+    int "Core link UART baud rate"
+    range 115200 4000000
+    default 2000000
+    help
+        Serial baud rate for the master<->display RPC channel. 2 Mbps
+        provides a good balance between throughput and signal integrity
+        over short ribbon cables.
+
+config APP_CORE_LINK_HANDSHAKE_TIMEOUT_MS
+    int "Core link handshake timeout (ms)"
+    range 100 60000
+    default 5000
+    help
+        Maximum duration to wait for the DevKitC to acknowledge the
+        display endpoint during boot. If the timeout expires the display
+        falls back to local stubs.
+
+endmenu
+
 menu "Board Support Package Options"
 
 choice BSP_SD_BUS_WIDTH

@@ -10,6 +10,7 @@ idf_component_register(
         "sim/models.c"
         "sim/presets.c"
         "sim/sim_engine.c"
+        "link/core_link.c"
         "ui/ui_root.c"
         "ui/ui_dashboard.c"
         "ui/ui_slots.c"
@@ -25,6 +26,7 @@ idf_component_register(
         "persist"
         "sim"
         "ui"
+        "link"
     REQUIRES
         driver
         esp_lcd

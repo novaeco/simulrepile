@@ -10,14 +10,18 @@
 #include "bsp/waveshare_7b.h"
 #include "docs/doc_reader.h"
 #include "i18n/i18n_manager.h"
+#include "link/core_link.h"
 #include "lvgl_port.h"
 #include "persist/save_manager.h"
 #include "sim/sim_engine.h"
 #include "ui/ui_root.h"
 
+#include "sdkconfig.h"
+
 static const char *TAG = "simulrepile";
 
-static void simulation_task(void *ctx);
+static void ui_loop_task(void *ctx);
+static void handle_core_state(const core_link_state_frame_t *frame, void *ctx);
 
 void app_main(void)
 {
@@ -27,24 +31,62 @@ void app_main(void)
     ESP_ERROR_CHECK(save_manager_init("/sdcard/saves"));
     ESP_ERROR_CHECK(i18n_manager_init("/sdcard/i18n"));
     ESP_ERROR_CHECK(doc_reader_init("/sdcard/docs"));
+
+    core_link_config_t link_cfg = {
+        .uart_port = CONFIG_APP_CORE_LINK_UART_PORT,
+        .tx_gpio = CONFIG_APP_CORE_LINK_UART_TX_PIN,
+        .rx_gpio = CONFIG_APP_CORE_LINK_UART_RX_PIN,
+        .baud_rate = CONFIG_APP_CORE_LINK_UART_BAUD,
+        .task_stack_size = 4096,
+        .task_priority = 6,
+        .handshake_timeout_ticks = pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_HANDSHAKE_TIMEOUT_MS),
+    };
+
+    ESP_ERROR_CHECK(core_link_init(&link_cfg));
+    ESP_ERROR_CHECK(core_link_register_state_callback(handle_core_state, NULL));
+    ESP_ERROR_CHECK(core_link_start());
+
+    esp_err_t wait_err = core_link_wait_for_handshake(link_cfg.handshake_timeout_ticks);
+    if (wait_err == ESP_OK) {
+        ESP_LOGI(TAG, "Core link handshake established (peer v%u)", core_link_get_peer_version());
+        ESP_ERROR_CHECK(core_link_request_state_sync());
+    } else {
+        ESP_LOGW(TAG, "Core link handshake timed out");
+    }
+
     ESP_ERROR_CHECK(lvgl_port_init());
 
+    sim_engine_init();
     ui_root_init();
     ui_root_show_boot_splash();
     ui_root_show_disclaimer();
 
-    sim_engine_init();
-    xTaskCreatePinnedToCore(simulation_task, "sim_engine", 4096, NULL, 5, NULL, 1);
+    if (core_link_is_ready()) {
+        ESP_ERROR_CHECK(core_link_send_display_ready());
+    }
+
+    xTaskCreatePinnedToCore(ui_loop_task, "ui_loop", 4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "Initialization complete");
 }
 
-static void simulation_task(void *ctx)
+static void ui_loop_task(void *ctx)
 {
     const TickType_t period = pdMS_TO_TICKS(1000 / 30); // 30 Hz loop
     while (true) {
-        sim_engine_step(1.0f / 30.0f);
         ui_root_update();
         vTaskDelay(period);
+    }
+}
+
+static void handle_core_state(const core_link_state_frame_t *frame, void *ctx)
+{
+    (void)ctx;
+    if (!frame) {
+        return;
+    }
+    esp_err_t err = sim_engine_apply_remote_snapshot(frame);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to apply remote snapshot: %s", esp_err_to_name(err));
     }
 }
