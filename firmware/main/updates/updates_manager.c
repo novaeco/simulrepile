@@ -15,14 +15,21 @@
 #include <unistd.h>
 
 #define UPDATES_ROOT_PATH "/sdcard/updates"
-#define UPDATES_MANIFEST_PATH "/sdcard/updates/manifest.json"
-#define UPDATES_BIN_PATH "/sdcard/updates/update.bin"
-#define UPDATES_BIN_BAK_PATH "/sdcard/updates/update.bin.bak"
-#define UPDATES_LAST_FLASH_PATH "/sdcard/updates/last_flash.json"
+#define UPDATES_DEFAULT_FILE_NAME "update.bin"
+#define UPDATES_MANIFEST_PATH UPDATES_ROOT_PATH "/manifest.json"
+#define UPDATES_BIN_PATH UPDATES_ROOT_PATH "/" UPDATES_DEFAULT_FILE_NAME
+#define UPDATES_BIN_BAK_PATH UPDATES_BIN_PATH ".bak"
+#define UPDATES_LAST_FLASH_PATH UPDATES_ROOT_PATH "/last_flash.json"
 
 static const char *TAG = "updates";
 
+static esp_err_t errno_to_esp_err(int errnum);
 static void populate_default_manifest(updates_manifest_info_t *info);
+static void build_update_paths(const updates_manifest_info_t *info,
+                               char *binary_path,
+                               size_t binary_path_size,
+                               char *backup_path,
+                               size_t backup_path_size);
 
 const char *updates_flash_outcome_to_string(updates_flash_outcome_t outcome)
 {
@@ -386,7 +393,27 @@ static void populate_default_manifest(updates_manifest_info_t *info)
         return;
     }
     memset(info, 0, sizeof(*info));
-    strncpy(info->file_name, "update.bin", sizeof(info->file_name) - 1);
+    strncpy(info->file_name, UPDATES_DEFAULT_FILE_NAME, sizeof(info->file_name) - 1);
+}
+
+static void build_update_paths(const updates_manifest_info_t *info,
+                               char *binary_path,
+                               size_t binary_path_size,
+                               char *backup_path,
+                               size_t backup_path_size)
+{
+    const char *file_name = UPDATES_DEFAULT_FILE_NAME;
+    if (info && info->file_name[0] != '\0') {
+        file_name = info->file_name;
+    }
+
+    if (binary_path && binary_path_size > 0) {
+        snprintf(binary_path, binary_path_size, "%s/%s", UPDATES_ROOT_PATH, file_name);
+    }
+
+    if (backup_path && backup_path_size > 0) {
+        snprintf(backup_path, backup_path_size, "%s/%s.bak", UPDATES_ROOT_PATH, file_name);
+    }
 }
 
 esp_err_t updates_check_available(updates_manifest_info_t *out_info)
@@ -398,9 +425,13 @@ esp_err_t updates_check_available(updates_manifest_info_t *out_info)
         return ESP_ERR_NOT_FOUND;
     }
 
-    if ((access(UPDATES_BIN_PATH, F_OK) != 0) && (access(UPDATES_BIN_BAK_PATH, F_OK) == 0)) {
-        if (rename(UPDATES_BIN_BAK_PATH, UPDATES_BIN_PATH) == 0) {
-            ESP_LOGW(TAG, "Restored %s from leftover .bak", UPDATES_BIN_PATH);
+    char default_binary_path[128];
+    char default_backup_path[128];
+    build_update_paths(NULL, default_binary_path, sizeof(default_binary_path), default_backup_path, sizeof(default_backup_path));
+
+    if ((access(default_binary_path, F_OK) != 0) && (access(default_backup_path, F_OK) == 0)) {
+        if (rename(default_backup_path, default_binary_path) == 0) {
+            ESP_LOGW(TAG, "Restored %s from leftover .bak", default_binary_path);
         } else {
             ESP_LOGW(TAG, "Failed to restore leftover .bak update: %s", strerror(errno));
         }
@@ -478,7 +509,16 @@ esp_err_t updates_check_available(updates_manifest_info_t *out_info)
     size_t manifest_size = parse_size(size, &size_ok);
 
     char update_path[128];
-    snprintf(update_path, sizeof(update_path), "%s/%s", UPDATES_ROOT_PATH, local_info.file_name[0] ? local_info.file_name : "update.bin");
+    char update_bak_path[128];
+    build_update_paths(&local_info, update_path, sizeof(update_path), update_bak_path, sizeof(update_bak_path));
+
+    if ((access(update_path, F_OK) != 0) && (access(update_bak_path, F_OK) == 0)) {
+        if (rename(update_bak_path, update_path) == 0) {
+            ESP_LOGW(TAG, "Restored %s from leftover .bak", update_path);
+        } else {
+            ESP_LOGW(TAG, "Failed to restore leftover .bak update: %s", strerror(errno));
+        }
+    }
 
     if (access(update_path, F_OK) != 0) {
         ESP_LOGW(TAG, "Update binary %s not found", update_path);
@@ -519,19 +559,32 @@ esp_err_t updates_check_available(updates_manifest_info_t *out_info)
     return ESP_OK;
 }
 
-static esp_err_t cleanup_bak_on_failure(void)
+static esp_err_t cleanup_bak_on_failure(const char *binary_path, const char *backup_path)
 {
-    if (access(UPDATES_BIN_BAK_PATH, F_OK) != 0) {
+    if (!backup_path || backup_path[0] == '\0') {
         return ESP_OK;
     }
 
-    if (rename(UPDATES_BIN_BAK_PATH, UPDATES_BIN_PATH) != 0) {
+    if (access(backup_path, F_OK) != 0) {
+        return ESP_OK;
+    }
+
+    if (!binary_path || binary_path[0] == '\0') {
+        ESP_LOGW(TAG, "Backup %s present but no target path available", backup_path);
+        if (unlink(backup_path) != 0) {
+            int err = errno;
+            return errno_to_esp_err(err);
+        }
+        return ESP_OK;
+    }
+
+    if (rename(backup_path, binary_path) != 0) {
         int err = errno;
-        ESP_LOGW(TAG, "Failed to restore update.bin from .bak: %s", strerror(err));
+        ESP_LOGW(TAG, "Failed to restore %s from .bak: %s", binary_path, strerror(err));
         return errno_to_esp_err(err);
     }
 
-    ESP_LOGW(TAG, "Rolled back update.bin from .bak after failure");
+    ESP_LOGW(TAG, "Rolled back %s from .bak after failure", binary_path);
     return ESP_OK;
 }
 
@@ -559,14 +612,24 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
             record_flash_outcome(UPDATES_FLASH_OUTCOME_ERROR, &current_info, ESP_ERR_INVALID_STATE, NULL);
             return ESP_ERR_INVALID_STATE;
         }
+        if (expected_info->file_name[0]
+            && strncmp(expected_info->file_name, current_info.file_name, sizeof(current_info.file_name)) != 0) {
+            ESP_LOGW(TAG, "Manifest file name changed");
+            record_flash_outcome(UPDATES_FLASH_OUTCOME_ERROR, &current_info, ESP_ERR_INVALID_STATE, NULL);
+            return ESP_ERR_INVALID_STATE;
+        }
     }
 
-    if (access(UPDATES_BIN_BAK_PATH, F_OK) == 0) {
+    char binary_path[128];
+    char backup_path[128];
+    build_update_paths(&current_info, binary_path, sizeof(binary_path), backup_path, sizeof(backup_path));
+
+    if (access(backup_path, F_OK) == 0) {
         ESP_LOGW(TAG, "Removing stale update backup before applying");
-        unlink(UPDATES_BIN_BAK_PATH);
+        unlink(backup_path);
     }
 
-    if (rename(UPDATES_BIN_PATH, UPDATES_BIN_BAK_PATH) != 0) {
+    if (rename(binary_path, backup_path) != 0) {
         int sys_err = errno;
         ESP_LOGE(TAG, "Failed to create .bak: %s", strerror(sys_err));
         esp_err_t mapped = errno_to_esp_err(sys_err);
@@ -574,11 +637,11 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
         return mapped;
     }
 
-    FILE *binary = fopen(UPDATES_BIN_BAK_PATH, "rb");
+    FILE *binary = fopen(backup_path, "rb");
     if (!binary) {
         int sys_err = errno;
-        ESP_LOGE(TAG, "Cannot open %s: %s", UPDATES_BIN_BAK_PATH, strerror(sys_err));
-        cleanup_bak_on_failure();
+        ESP_LOGE(TAG, "Cannot open %s: %s", backup_path, strerror(sys_err));
+        cleanup_bak_on_failure(binary_path, backup_path);
         record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, errno_to_esp_err(sys_err), NULL);
         return errno_to_esp_err(sys_err);
     }
@@ -587,7 +650,7 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
     if (!target) {
         ESP_LOGE(TAG, "No OTA partition available");
         fclose(binary);
-        cleanup_bak_on_failure();
+        cleanup_bak_on_failure(binary_path, backup_path);
         record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, ESP_FAIL, NULL);
         return ESP_FAIL;
     }
@@ -597,7 +660,7 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         fclose(binary);
-        cleanup_bak_on_failure();
+        cleanup_bak_on_failure(binary_path, backup_path);
         record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, err, target->label);
         return err;
     }
@@ -612,7 +675,7 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
                 ESP_LOGE(TAG, "esp_ota_write failed at %zu bytes: %s", total_written, esp_err_to_name(err));
                 esp_ota_abort(ota_handle);
                 fclose(binary);
-                cleanup_bak_on_failure();
+                cleanup_bak_on_failure(binary_path, backup_path);
                 record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, err, target->label);
                 return err;
             }
@@ -624,7 +687,7 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
                 ESP_LOGE(TAG, "Read error while flashing: %s", strerror(sys_err));
                 esp_ota_abort(ota_handle);
                 fclose(binary);
-                cleanup_bak_on_failure();
+                cleanup_bak_on_failure(binary_path, backup_path);
                 esp_err_t mapped = errno_to_esp_err(sys_err);
                 record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, mapped, target->label);
                 return mapped;
@@ -637,7 +700,7 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
     err = esp_ota_end(ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
-        cleanup_bak_on_failure();
+        cleanup_bak_on_failure(binary_path, backup_path);
         record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, err, target->label);
         return err;
     }
@@ -645,12 +708,12 @@ esp_err_t updates_apply(const updates_manifest_info_t *expected_info)
     err = esp_ota_set_boot_partition(target);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-        cleanup_bak_on_failure();
+        cleanup_bak_on_failure(binary_path, backup_path);
         record_flash_outcome(UPDATES_FLASH_OUTCOME_ROLLBACK, &current_info, err, target->label);
         return err;
     }
 
-    unlink(UPDATES_BIN_BAK_PATH);
+    unlink(backup_path);
     unlink(UPDATES_MANIFEST_PATH);
 
     record_flash_outcome(UPDATES_FLASH_OUTCOME_SUCCESS, &current_info, ESP_OK, target->label);
