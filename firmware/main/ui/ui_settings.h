@@ -13,6 +13,7 @@ void ui_settings_set_language(uint16_t index);
 void ui_settings_set_autosave_interval(uint32_t seconds);
 void ui_settings_set_usb_mode(bool usb_enabled);
 void ui_settings_on_profiles_reload(esp_err_t status, uint8_t terrarium_count);
+void ui_settings_refresh_language(void);
 
 #ifdef __cplusplus
 }

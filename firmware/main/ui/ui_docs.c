@@ -1,6 +1,7 @@
 #include "ui/ui_docs.h"
 
 #include "esp_log.h"
+#include "i18n/i18n_manager.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -14,7 +15,7 @@
 #define UI_DOCS_BUFFER_SIZE 8192
 
 typedef struct {
-    const char *label;
+    const char *label_key;
     doc_category_t category;
 } ui_docs_category_option_t;
 
@@ -22,6 +23,7 @@ static const char *TAG = "ui_docs";
 
 static lv_obj_t *s_root = NULL;
 static lv_obj_t *s_header = NULL;
+static lv_obj_t *s_header_title = NULL;
 static lv_obj_t *s_category_dropdown = NULL;
 static lv_obj_t *s_list = NULL;
 static lv_obj_t *s_viewer = NULL;
@@ -33,11 +35,12 @@ static int s_selected_index = -1;
 static doc_category_t s_current_category = DOC_CATEGORY_REGLEMENTAIRES;
 static char s_doc_buffer[UI_DOCS_BUFFER_SIZE];
 static bool s_events_suspended = false;
+static char s_dropdown_buffer[128];
 
 static const ui_docs_category_option_t s_category_options[] = {
-    {.label = "Réglementaires", .category = DOC_CATEGORY_REGLEMENTAIRES},
-    {.label = "Espèces", .category = DOC_CATEGORY_SPECIES},
-    {.label = "Guides", .category = DOC_CATEGORY_GUIDES},
+    {.label_key = "docs_category_regulatory", .category = DOC_CATEGORY_REGLEMENTAIRES},
+    {.label_key = "docs_category_species", .category = DOC_CATEGORY_SPECIES},
+    {.label_key = "docs_category_guides", .category = DOC_CATEGORY_GUIDES},
 };
 
 static void ui_docs_build_layout(lv_obj_t *parent);
@@ -47,6 +50,8 @@ static void ui_docs_item_clicked_cb(lv_event_t *event);
 static void ui_docs_update_selection(int index);
 static bool ui_docs_is_html(const char *path);
 static void ui_docs_sanitize_html(char *buffer);
+static void ui_docs_update_dropdown(void);
+static void ui_docs_update_header(void);
 
 void ui_docs_create(lv_obj_t *parent)
 {
@@ -56,6 +61,7 @@ void ui_docs_create(lv_obj_t *parent)
 
     ESP_LOGI(TAG, "Creating document browser");
     ui_docs_build_layout(parent);
+    ui_docs_refresh_language();
     ui_docs_populate_category(s_current_category);
 }
 
@@ -74,7 +80,11 @@ void ui_docs_show_document(const char *path)
     esp_err_t err = doc_reader_load(&descriptor, s_doc_buffer, sizeof(s_doc_buffer), &out_len);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to load %s (%s)", path, esp_err_to_name(err));
-        lv_textarea_set_text(s_viewer, "Impossible de charger le document.");
+        const char *text = i18n_manager_get_string("docs_viewer_error");
+        if (!text) {
+            text = "Unable to load document.";
+        }
+        lv_textarea_set_text(s_viewer, text);
         return;
     }
 
@@ -83,7 +93,11 @@ void ui_docs_show_document(const char *path)
     }
 
     if (out_len >= (int)(sizeof(s_doc_buffer) - 1)) {
-        lv_textarea_set_text(s_viewer, "Document tronqué (taille maximale atteinte).");
+        const char *text = i18n_manager_get_string("docs_viewer_truncated");
+        if (!text) {
+            text = "Document truncated (maximum size reached).";
+        }
+        lv_textarea_set_text(s_viewer, text);
     } else {
         lv_textarea_set_text(s_viewer, s_doc_buffer);
     }
@@ -91,6 +105,33 @@ void ui_docs_show_document(const char *path)
 
 void ui_docs_refresh_category(void)
 {
+    ui_docs_populate_category(s_current_category);
+}
+
+void ui_docs_refresh_language(void)
+{
+    if (!s_root) {
+        return;
+    }
+    ui_docs_update_header();
+    ui_docs_update_dropdown();
+
+    if (s_doc_count == 0 && s_status_label) {
+        const char *loading = i18n_manager_get_string("docs_status_loading");
+        if (!loading) {
+            loading = "Loading...";
+        }
+        lv_label_set_text(s_status_label, loading);
+    }
+
+    if (s_viewer && s_selected_index < 0) {
+        const char *placeholder = i18n_manager_get_string("docs_viewer_placeholder");
+        if (!placeholder) {
+            placeholder = "Select a document.";
+        }
+        lv_textarea_set_text(s_viewer, placeholder);
+    }
+
     ui_docs_populate_category(s_current_category);
 }
 
@@ -110,14 +151,11 @@ static void ui_docs_build_layout(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_header, 12, LV_PART_MAIN);
     ui_theme_apply_panel_style(s_header);
 
-    lv_obj_t *title = lv_label_create(s_header);
-    lv_label_set_text(title, "Bibliothèque documentaire");
-    ui_theme_apply_label_style(title, true);
+    s_header_title = lv_label_create(s_header);
+    ui_theme_apply_label_style(s_header_title, true);
 
     s_category_dropdown = lv_dropdown_create(s_header);
-    lv_dropdown_set_options_static(s_category_dropdown, "Réglementaires\nEspèces\nGuides");
     lv_obj_add_event_cb(s_category_dropdown, ui_docs_category_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_dropdown_set_selected(s_category_dropdown, 0);
 
     lv_obj_t *body = lv_obj_create(s_root);
     lv_obj_set_size(body, LV_PCT(100), LV_PCT(100));
@@ -133,7 +171,6 @@ static void ui_docs_build_layout(lv_obj_t *parent)
     ui_theme_apply_panel_style(s_list);
 
     s_status_label = lv_label_create(s_list);
-    lv_label_set_text(s_status_label, "Chargement...");
     ui_theme_apply_label_style(s_status_label, false);
 
     s_viewer = lv_textarea_create(body);
@@ -146,7 +183,7 @@ static void ui_docs_build_layout(lv_obj_t *parent)
     lv_textarea_set_scroll_dir(s_viewer, LV_DIR_VER);
     ui_theme_apply_panel_style(s_viewer);
     ui_theme_apply_label_style(lv_textarea_get_label(s_viewer), false);
-    lv_textarea_set_text(s_viewer, "Sélectionnez un document pour l'afficher.");
+    lv_textarea_set_text(s_viewer, "");
 }
 
 static void ui_docs_populate_category(doc_category_t category)
@@ -164,27 +201,45 @@ static void ui_docs_populate_category(doc_category_t category)
     s_selected_index = -1;
 
     lv_obj_clean(s_list);
+    s_status_label = lv_label_create(s_list);
+    ui_theme_apply_label_style(s_status_label, false);
+    const char *loading = i18n_manager_get_string("docs_status_loading");
+    if (!loading) {
+        loading = "Loading...";
+    }
+    lv_label_set_text(s_status_label, loading);
 
     int count = 0;
     esp_err_t err = doc_reader_list(category, s_docs, UI_DOCS_MAX_ITEMS, &count);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to list docs for category %d (%s)", category, esp_err_to_name(err));
-        s_status_label = lv_label_create(s_list);
-        lv_label_set_text(s_status_label, "Lecture impossible");
-        ui_theme_apply_label_style(s_status_label, false);
+        const char *fmt = i18n_manager_get_string("docs_status_error_fmt");
+        if (!fmt) {
+            fmt = "Unable to list documents (%s)";
+        }
+        lv_label_set_text_fmt(s_status_label, fmt, esp_err_to_name(err));
         s_events_suspended = false;
         return;
     }
 
     s_doc_count = count;
     if (s_doc_count == 0) {
-        s_status_label = lv_label_create(s_list);
-        lv_label_set_text(s_status_label, "Aucun document disponible");
-        ui_theme_apply_label_style(s_status_label, false);
+        const char *empty = i18n_manager_get_string("docs_status_empty");
+        if (!empty) {
+            empty = "No documents available";
+        }
+        lv_label_set_text(s_status_label, empty);
         s_events_suspended = false;
-        lv_textarea_set_text(s_viewer, "Cette catégorie ne contient aucun document.");
+        const char *viewer_empty = i18n_manager_get_string("docs_viewer_empty");
+        if (!viewer_empty) {
+            viewer_empty = "This category has no documents.";
+        }
+        lv_textarea_set_text(s_viewer, viewer_empty);
         return;
     }
+
+    lv_obj_del(s_status_label);
+    s_status_label = NULL;
 
     for (int i = 0; i < s_doc_count; ++i) {
         lv_obj_t *btn = lv_list_add_btn(s_list, LV_SYMBOL_FILE, s_docs[i].path);
@@ -294,4 +349,52 @@ static void ui_docs_sanitize_html(char *buffer)
         ++src;
     }
     *dst = '\0';
+}
+
+static void ui_docs_update_dropdown(void)
+{
+    if (!s_category_dropdown) {
+        return;
+    }
+    s_dropdown_buffer[0] = '\0';
+    size_t offset = 0;
+    size_t remaining = sizeof(s_dropdown_buffer);
+    for (size_t i = 0; i < (sizeof(s_category_options) / sizeof(s_category_options[0])); ++i) {
+        const char *label = i18n_manager_get_string(s_category_options[i].label_key);
+        if (!label) {
+            label = "?";
+        }
+        size_t needed = strlen(label) + 1;
+        if (needed + 1 > remaining) {
+            break;
+        }
+        strcpy(&s_dropdown_buffer[offset], label);
+        offset += strlen(label);
+        remaining = sizeof(s_dropdown_buffer) - offset;
+        if (i + 1 < (sizeof(s_category_options) / sizeof(s_category_options[0]))) {
+            s_dropdown_buffer[offset++] = '\n';
+            remaining = sizeof(s_dropdown_buffer) - offset;
+        }
+    }
+    s_dropdown_buffer[offset] = '\0';
+    lv_dropdown_set_options(s_category_dropdown, s_dropdown_buffer);
+
+    for (uint16_t i = 0; i < (uint16_t)(sizeof(s_category_options) / sizeof(s_category_options[0])); ++i) {
+        if (s_category_options[i].category == s_current_category) {
+            lv_dropdown_set_selected(s_category_dropdown, i);
+            break;
+        }
+    }
+}
+
+static void ui_docs_update_header(void)
+{
+    if (!s_header_title) {
+        return;
+    }
+    const char *title = i18n_manager_get_string("docs_title");
+    if (!title) {
+        title = "Document library";
+    }
+    lv_label_set_text(s_header_title, title);
 }
