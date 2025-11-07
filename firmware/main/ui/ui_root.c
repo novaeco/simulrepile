@@ -36,6 +36,7 @@ static void ui_root_build_boot_screen(void);
 static void ui_root_build_disclaimer_screen(void);
 static void ui_root_build_main_screen(void);
 static void ui_root_on_disclaimer_accepted(lv_event_t *event);
+static void ui_root_on_tab_changed(lv_event_t *event);
 
 esp_err_t ui_root_init(void)
 {
@@ -284,6 +285,7 @@ static void ui_root_build_main_screen(void)
     lv_obj_set_flex_grow(s_tabview, 1);
     lv_obj_set_size(s_tabview, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(s_tabview, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_add_event_cb(s_tabview, ui_root_on_tab_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     s_tab_dashboard = lv_tabview_add_tab(s_tabview, "Tableau de bord");
     s_tab_slots = lv_tabview_add_tab(s_tabview, "Terrariums");
@@ -301,4 +303,29 @@ static void ui_root_on_disclaimer_accepted(lv_event_t *event)
     (void)event;
     ESP_LOGI(TAG, "Disclaimer acknowledged");
     ui_root_show_dashboard();
+}
+
+static void ui_root_on_tab_changed(lv_event_t *event)
+{
+    if (!event || !s_tabview) {
+        return;
+    }
+
+    uint16_t index = lv_tabview_get_tab_act(s_tabview);
+    switch (index) {
+    case 0:
+        s_active_view = UI_ROOT_VIEW_DASHBOARD;
+        break;
+    case 1:
+        s_active_view = UI_ROOT_VIEW_SLOTS;
+        break;
+    case 2:
+        s_active_view = UI_ROOT_VIEW_DOCS;
+        break;
+    case 3:
+        s_active_view = UI_ROOT_VIEW_SETTINGS;
+        break;
+    default:
+        break;
+    }
 }
