@@ -68,17 +68,27 @@ Exemple de profil :
   "cycle_speed": 0.03,
   "phase_offset": 0.0,
   "enrichment_factor": 1.0,
-  "hydration_pct": 88.0,
-  "stress_pct": 15.0,
-  "health_pct": 94.0,
-  "activity_score": 0.5,
-  "last_feeding_timestamp": 1704074400
+  "metrics": {
+    "hydration_pct": 88.0,
+    "stress_pct": 15.0,
+    "health_pct": 94.0,
+    "activity_score": 0.5,
+    "feeding": {
+      "last_timestamp": 1704074400,
+      "interval_hours": 72,
+      "intake_pct": 80.0
+    }
+  }
 }
 ```
 
 Les champs non renseignés sont complétés avec des valeurs cohérentes (cycle circadien,
-hydratation/stress/santé initiaux, horodatage de nourrissage). Les fichiers sont triés
-alphabétiquement avant chargement pour garantir un ordre déterministe.
+hydratation/stress/santé initiaux, fréquence de nourrissage). Les fichiers sont triés
+alphabétiquement avant chargement pour garantir un ordre déterministe. Les anciennes clés
+au niveau racine (`hydration_pct`, `stress_pct`, `health_pct`, `activity_score`,
+`last_feeding_timestamp`) restent acceptées pour la rétrocompatibilité.
 
-Une modification du chemin peut être prise en compte à chaud via
-`core_state_manager_reload_profiles("/nouveau/chemin")` côté DevKitC.
+Les profils peuvent être rechargés à chaud soit en invoquant directement
+`core_state_manager_reload_profiles("/nouveau/chemin")` côté DevKitC, soit via la commande
+UART `CORE_LINK_CMD_RELOAD_PROFILES` (exposée côté afficheur par
+`core_link_request_profile_reload()`).

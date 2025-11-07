@@ -18,6 +18,7 @@ static void state_publish_task(void *ctx);
 static void handle_display_ready(const core_host_display_info_t *info, void *ctx);
 static void handle_state_request(void *ctx);
 static void handle_touch_event(const core_link_touch_event_t *event, void *ctx);
+static esp_err_t handle_command(core_link_command_opcode_t opcode, const char *argument, uint8_t *out_count, void *ctx);
 static void publish_snapshot(void);
 
 esp_err_t app_initialize(void)
@@ -45,6 +46,7 @@ esp_err_t app_initialize(void)
     ESP_ERROR_CHECK(core_host_link_register_display_ready_cb(handle_display_ready, NULL));
     ESP_ERROR_CHECK(core_host_link_register_request_cb(handle_state_request, NULL));
     ESP_ERROR_CHECK(core_host_link_register_touch_cb(handle_touch_event, NULL));
+    ESP_ERROR_CHECK(core_host_link_register_command_cb(handle_command, NULL));
     ESP_ERROR_CHECK(core_host_link_start());
 
     xTaskCreatePinnedToCore(handshake_task, "core_handshake", 3072, NULL, 7, NULL, 0);
@@ -116,6 +118,32 @@ static void handle_touch_event(const core_link_touch_event_t *event, void *ctx)
 {
     (void)ctx;
     core_state_manager_apply_touch(event);
+}
+
+static esp_err_t handle_command(core_link_command_opcode_t opcode, const char *argument, uint8_t *out_count, void *ctx)
+{
+    (void)ctx;
+    esp_err_t status = ESP_ERR_NOT_SUPPORTED;
+
+    switch (opcode) {
+        case CORE_LINK_CMD_RELOAD_PROFILES: {
+            const char *path = (argument && argument[0] != '\0') ? argument : NULL;
+            status = core_state_manager_reload_profiles(path);
+            if (status == ESP_OK || status == ESP_ERR_NOT_FOUND) {
+                publish_snapshot();
+            }
+            break;
+        }
+        default:
+            ESP_LOGW(TAG, "Unhandled command opcode 0x%02X", opcode);
+            break;
+    }
+
+    if (out_count) {
+        *out_count = (uint8_t)core_state_manager_get_terrarium_count();
+    }
+
+    return status;
 }
 
 static void publish_snapshot(void)

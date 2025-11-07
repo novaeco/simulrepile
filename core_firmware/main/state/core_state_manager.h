@@ -31,16 +31,27 @@ extern "C" {
  *   "cycle_speed": 0.03,
  *   "phase_offset": 0.0,
  *   "enrichment_factor": 1.0,
- *   "hydration_pct": 88.0,
- *   "stress_pct": 15.0,
- *   "health_pct": 94.0,
- *   "activity_score": 0.5,
- *   "last_feeding_timestamp": 1704074400
+ *   "metrics": {
+ *     "hydration_pct": 88.0,
+ *     "stress_pct": 15.0,
+ *     "health_pct": 94.0,
+ *     "activity_score": 0.5,
+ *     "feeding": {
+ *       "last_timestamp": 1704074400,
+ *       "interval_hours": 72,
+ *       "intake_pct": 80.0
+ *     }
+ *   }
  * }
  * ```
  *
  * Les champs `scientific_name`, `common_name` et le bloc `environment` sont
- * obligatoires. Les autres valeurs sont optionnelles et complétées par défaut.
+ * obligatoires. Les métriques (`metrics`) sont optionnelles : lorsqu'elles
+ * sont absentes, l'algorithme applique des valeurs plausibles (hydratation,
+ * stress, santé, alimentation). Les anciennes clés au niveau racine
+ * (`hydration_pct`, `stress_pct`, `health_pct`, `activity_score`,
+ * `last_feeding_timestamp`) restent prises en charge pour assurer la
+ * rétrocompatibilité.
  *
  * @param base_path Chemin racine à utiliser pour une recharge à chaud. Passer
  *                  `NULL` pour utiliser le chemin courant (menuconfig).
