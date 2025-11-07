@@ -4,15 +4,23 @@
 
 #include "driver/uart.h"
 #include "esp_check.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
+#include "sdkconfig.h"
 
 #define CORE_LINK_SOF 0xA5
 #define CORE_LINK_MAX_PAYLOAD 512
 #define CORE_HOST_EVENT_HANDSHAKE BIT0
 #define CORE_HOST_EVENT_DISPLAY_READY BIT1
+
+#define CORE_HOST_WATCHDOG_PERIOD_MS 250
+#define CORE_HOST_WATCHDOG_PERIOD_TICKS pdMS_TO_TICKS(CORE_HOST_WATCHDOG_PERIOD_MS)
+#define CORE_HOST_STATE_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_CORE_APP_LINK_STATE_TIMEOUT_MS)
+#define CORE_HOST_PING_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_CORE_APP_LINK_PING_TIMEOUT_MS)
 
 static const char *TAG = "core_host_link";
 
@@ -68,11 +76,19 @@ static void *s_request_ctx = NULL;
 static core_host_touch_cb_t s_touch_cb = NULL;
 static void *s_touch_ctx = NULL;
 static core_host_display_info_t s_display_info = {0};
+static TimerHandle_t s_watchdog_timer = NULL;
+static TickType_t s_last_activity_tick = 0;
+static TickType_t s_last_ping_tick = 0;
+static bool s_ping_in_flight = false;
+static bool s_display_alive = false;
+static bool s_watchdog_triggered = false;
 
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload);
 static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload, uint16_t length);
 static void rx_task(void *arg);
 static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length);
+static void update_display_alive(bool alive);
+static void watchdog_timer_cb(TimerHandle_t timer);
 
 esp_err_t core_host_link_init(const core_host_link_config_t *config)
 {
@@ -107,6 +123,18 @@ esp_err_t core_host_link_init(const core_host_link_config_t *config)
         ESP_RETURN_ON_FALSE(s_events, ESP_ERR_NO_MEM, TAG, "event group alloc failed");
     }
 
+    if (!s_watchdog_timer) {
+        s_watchdog_timer = xTimerCreate("core_host_wd", CORE_HOST_WATCHDOG_PERIOD_TICKS, pdTRUE, NULL, watchdog_timer_cb);
+        ESP_RETURN_ON_FALSE(s_watchdog_timer, ESP_ERR_NO_MEM, TAG, "watchdog timer alloc failed");
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    s_last_activity_tick = now;
+    s_last_ping_tick = now;
+    s_ping_in_flight = false;
+    s_display_alive = false;
+    s_watchdog_triggered = false;
+
     s_initialized = true;
     ESP_LOGI(TAG, "UART host ready on port %d (TX=%d RX=%d @ %d bps)", s_config.uart_port, s_config.tx_gpio, s_config.rx_gpio, s_config.baud_rate);
     return ESP_OK;
@@ -121,6 +149,9 @@ esp_err_t core_host_link_start(void)
 
     BaseType_t task_ok = xTaskCreatePinnedToCore(rx_task, "core_host_link_rx", s_config.task_stack_size, NULL, s_config.task_priority, &s_rx_task, 0);
     ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "rx task creation failed");
+    if (s_watchdog_timer && !xTimerIsTimerActive(s_watchdog_timer)) {
+        ESP_RETURN_ON_FALSE(xTimerStart(s_watchdog_timer, 0) == pdPASS, ESP_FAIL, TAG, "watchdog timer start failed");
+    }
     s_started = true;
     return ESP_OK;
 }
@@ -273,8 +304,76 @@ static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload,
     return ESP_OK;
 }
 
+static void update_display_alive(bool alive)
+{
+    if (alive) {
+        if (!s_display_alive) {
+            if (s_watchdog_triggered) {
+                ESP_LOGI(TAG, "Display link restored, waiting for DISPLAY_READY");
+            }
+            s_display_alive = true;
+        }
+        s_watchdog_triggered = false;
+        s_ping_in_flight = false;
+        return;
+    }
+
+    if (!s_display_alive) {
+        return;
+    }
+
+    if (!s_watchdog_triggered) {
+        ESP_LOGE(TAG, "Display watchdog expired, marking panel offline");
+    }
+    s_watchdog_triggered = true;
+    s_display_alive = false;
+    s_ping_in_flight = false;
+    if (s_events) {
+        xEventGroupClearBits(s_events, CORE_HOST_EVENT_DISPLAY_READY);
+    }
+}
+
+static void watchdog_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    if (!s_started || !s_events) {
+        return;
+    }
+
+    EventBits_t bits = xEventGroupGetBits(s_events);
+    if ((bits & CORE_HOST_EVENT_HANDSHAKE) == 0 || !s_display_alive) {
+        return;
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    TickType_t elapsed = now - s_last_activity_tick;
+    if (elapsed < CORE_HOST_STATE_TIMEOUT_TICKS) {
+        return;
+    }
+
+    if (!s_ping_in_flight) {
+        esp_err_t err = core_host_link_send_ping();
+        if (err == ESP_OK) {
+            s_ping_in_flight = true;
+            s_last_ping_tick = now;
+            ESP_LOGW(TAG, "No DISPLAY activity for %d ms, sending ping", CONFIG_CORE_APP_LINK_STATE_TIMEOUT_MS);
+        } else {
+            ESP_LOGE(TAG, "Failed to send watchdog ping: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    TickType_t ping_elapsed = now - s_last_ping_tick;
+    if (ping_elapsed >= CORE_HOST_PING_TIMEOUT_TICKS) {
+        ESP_LOGE(TAG, "Ping timeout after %d ms, marking display offline", CONFIG_CORE_APP_LINK_PING_TIMEOUT_MS);
+        update_display_alive(false);
+    }
+}
+
 static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length)
 {
+    s_last_activity_tick = xTaskGetTickCount();
+    update_display_alive(true);
     switch (type) {
         case CORE_LINK_MSG_HELLO_ACK:
             if (length >= sizeof(core_link_hello_ack_payload_t)) {

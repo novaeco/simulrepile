@@ -15,7 +15,7 @@ void sim_engine_step(float delta_seconds);
 size_t sim_engine_get_count(void);
 const terrarium_state_t *sim_engine_get_state(size_t index);
 esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame);
-void sim_engine_handle_link_status(bool connected);
+const char *sim_engine_handle_link_status(bool connected);
 
 #ifdef __cplusplus
 }

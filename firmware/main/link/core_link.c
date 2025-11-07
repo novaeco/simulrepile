@@ -52,6 +52,7 @@ static TimerHandle_t s_watchdog_timer = NULL;
 static TickType_t s_last_state_tick = 0;
 static TickType_t s_last_ping_tick = 0;
 static bool s_ping_in_flight = false;
+static bool s_state_timeout_logged = false;
 static bool s_watchdog_triggered = false;
 static SemaphoreHandle_t s_touch_queue_sem = NULL;
 static TaskHandle_t s_touch_dispatch_task = NULL;
@@ -153,6 +154,7 @@ esp_err_t core_link_init(const core_link_config_t *config)
     s_last_state_tick = xTaskGetTickCount();
     s_last_ping_tick = s_last_state_tick;
     s_ping_in_flight = false;
+    s_state_timeout_logged = false;
     s_watchdog_triggered = false;
     s_link_alive = false;
 
@@ -334,10 +336,12 @@ static void update_link_alive(bool alive)
         }
         s_watchdog_triggered = true;
         s_ping_in_flight = false;
+        s_state_timeout_logged = false;
         touch_queue_reset();
     } else {
         if (s_watchdog_triggered) {
             s_watchdog_triggered = false;
+            s_state_timeout_logged = false;
             if (s_handshake_done) {
                 ESP_LOGI(TAG, "DevKitC link restored, requesting state resynchronization");
                 esp_err_t err = core_link_request_state_sync();
@@ -372,7 +376,10 @@ static void watchdog_timer_cb(TimerHandle_t timer)
         if (err == ESP_OK) {
             s_ping_in_flight = true;
             s_last_ping_tick = now;
-            ESP_LOGW(TAG, "STATE_FULL timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+            if (!s_state_timeout_logged) {
+                ESP_LOGW(TAG, "STATE_FULL timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+                s_state_timeout_logged = true;
+            }
         } else {
             ESP_LOGE(TAG, "Failed to send watchdog ping: %s", esp_err_to_name(err));
         }
@@ -383,6 +390,7 @@ static void watchdog_timer_cb(TimerHandle_t timer)
     if (ping_elapsed >= CORE_LINK_PING_TIMEOUT_TICKS) {
         ESP_LOGE(TAG, "Ping timeout after %d ms, declaring DevKitC offline", CONFIG_APP_CORE_LINK_PING_TIMEOUT_MS);
         update_link_alive(false);
+        s_state_timeout_logged = false;
     }
 }
 
@@ -521,6 +529,7 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             s_last_state_tick = now;
             s_last_ping_tick = now;
             s_ping_in_flight = false;
+            s_state_timeout_logged = false;
             bool triggered = s_watchdog_triggered;
             update_link_alive(true);
             if (!triggered) {
@@ -533,6 +542,7 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             s_last_state_tick = now;
             s_last_ping_tick = now;
             s_ping_in_flight = false;
+            s_state_timeout_logged = false;
             update_link_alive(true);
             if (handle_state_frame(payload, length) != ESP_OK) {
                 ESP_LOGW(TAG, "Invalid state frame received");
@@ -544,9 +554,7 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             break;
         case CORE_LINK_MSG_PONG: {
             TickType_t now = xTaskGetTickCount();
-            s_last_state_tick = now;
             s_last_ping_tick = now;
-            s_ping_in_flight = false;
             update_link_alive(true);
             break;
         }
