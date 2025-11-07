@@ -78,6 +78,7 @@ static void ui_loop_task(void *ctx)
     const TickType_t period = pdMS_TO_TICKS(1000 / 30); // 30 Hz loop
     while (true) {
         ui_root_update();
+        asset_cache_tick();
         vTaskDelay(period);
     }
 }

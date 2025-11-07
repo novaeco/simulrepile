@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -20,6 +21,7 @@ typedef struct {
     asset_type_t type;
     void *data;
     size_t size;
+    uint32_t ref_count;
 } asset_handle_t;
 
 esp_err_t asset_cache_init(void);

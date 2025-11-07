@@ -13,9 +13,12 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 
-#define ASSET_CACHE_HASH_BUCKETS 64U
-#define ASSET_CACHE_MAX_PATH_LEN 256U
-#define ASSET_CACHE_IDLE_GRACE_TICKS 3U
+#define ASSET_CACHE_HASH_BUCKETS ((size_t)CONFIG_APP_ASSET_CACHE_HASH_BUCKETS)
+#define ASSET_CACHE_MAX_PATH_LEN ((size_t)CONFIG_APP_ASSET_CACHE_MAX_PATH)
+#define ASSET_CACHE_IDLE_GRACE_TICKS ((uint32_t)CONFIG_APP_ASSET_CACHE_IDLE_GRACE_TICKS)
+
+_Static_assert(CONFIG_APP_ASSET_CACHE_HASH_BUCKETS > 0, "hash bucket count must be > 0");
+_Static_assert(CONFIG_APP_ASSET_CACHE_MAX_PATH > 0, "max path length must be > 0");
 
 typedef struct asset_cache_entry {
     struct asset_cache_entry *prev;
@@ -400,6 +403,7 @@ esp_err_t asset_cache_get(const char *path, asset_handle_t *handle)
     handle->type = entry->type;
     handle->data = entry->data;
     handle->size = entry->size;
+    handle->ref_count = entry->ref_count;
     return ESP_OK;
 }
 
