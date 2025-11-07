@@ -95,7 +95,9 @@ static void IRAM_ATTR touch_irq_handler(void *arg)
 
 static esp_err_t configure_rgb_panel(void)
 {
-    ESP_RETURN_ON_ERROR(waveshare_7b_lgfx_init(), TAG, "LovyanGFX init failed");
+    ESP_RETURN_ON_ERROR(
+        waveshare_7b_lgfx_init(WAVESHARE_7B_LCD_HOR_RES, WAVESHARE_7B_LCD_VER_RES), TAG,
+        "LovyanGFX init failed");
 
     waveshare_7b_lgfx_set_backlight(s_backlight_enabled ? s_backlight_percent : 0);
 
