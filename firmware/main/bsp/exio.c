@@ -60,7 +60,7 @@ esp_err_t exio_init(void)
     vTaskDelay(pdMS_TO_TICKS(2));
 
     ESP_RETURN_ON_ERROR(ch422g_write_reg(CH422G_REG_MODE, 0xFF), TAG, "mode write failed");
-    s_output_state = 0x00;
+    s_output_state = (1U << EXIO_LINE_TOUCH_RST) | (1U << EXIO_LINE_USB_SEL);
     ESP_RETURN_ON_ERROR(ch422g_write_reg(CH422G_REG_OUTPUT, s_output_state), TAG, "output write failed");
     ESP_RETURN_ON_ERROR(ch422g_write_reg(CH422G_REG_PWM, 0x00), TAG, "pwm reset failed");
 
@@ -97,7 +97,7 @@ esp_err_t exio_enable_lcd_vdd(bool enable)
 esp_err_t exio_select_usb(bool enable_usb)
 {
     /* Active low: 0 selects USB, 1 selects CAN */
-    return exio_set(EXIO_LINE_USB_SEL, enable_usb ? 0 : 1);
+    return exio_set(EXIO_LINE_USB_SEL, enable_usb ? false : true);
 }
 
 esp_err_t exio_set_pwm(uint8_t percent)
