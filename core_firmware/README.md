@@ -5,7 +5,9 @@ maître de l'architecture SimulRepile option B :
 
 - Génération de l'état simulé des terrariums (jusqu'à 4) via `state/core_state_manager.*`.
 - Publication périodique et sur demande des instantanés vers la carte Waveshare via le protocole UART
-  `core_link` partagé (`common/include/link/core_link_protocol.h`).
+  `core_link` partagé (`common/include/link/core_link_protocol.h`). Lorsque l’afficheur annonce une version de protocole ≥ 1,
+  le DevKitC encode et transmet uniquement les champs modifiés (`STATE_DELTA`). Sinon il se rabat automatiquement sur des trames
+  complètes.
 - Gestion des événements tactiles remontés par la Waveshare afin d'ajuster la simulation.
 
 ## Compilation
