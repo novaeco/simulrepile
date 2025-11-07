@@ -139,8 +139,9 @@ config APP_CORE_LINK_STATE_TIMEOUT_MS
     range 500 60000
     default 4000
     help
-        Maximum delay tolerated between two STATE_FULL frames coming
-        from the DevKitC. When the timeout expires the display endpoint
+        Maximum delay tolerated between two state updates (`STATE_FULL`
+        or `STATE_DELTA`) coming from the DevKitC. When the timeout
+        expires the display endpoint
         probes the link with a ping and eventually falls back to the
         internal simulation if the DevKitC stays silent.
 
@@ -150,7 +151,7 @@ config APP_CORE_LINK_PING_TIMEOUT_MS
     default 800
     help
         Duration to wait for a PONG response after emitting a watchdog
-        PING when the DevKitC stops publishing STATE_FULL frames. If the
+        PING when the DevKitC stops publishing state frames. If the
         timeout expires the bridge is considered lost and the UI falls
         back to the local simulator while displaying an alert banner.
 

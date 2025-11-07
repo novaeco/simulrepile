@@ -64,6 +64,8 @@ static size_t s_touch_queue_count = 0;
 static portMUX_TYPE s_touch_queue_lock = portMUX_INITIALIZER_UNLOCKED;
 static core_link_touch_event_t s_touch_last_sent = {0};
 static bool s_touch_last_sent_valid = false;
+static core_link_state_frame_t s_cached_state = {0};
+static bool s_cached_state_valid = false;
 
 #define CORE_LINK_WATCHDOG_PERIOD_MS 250
 #define CORE_LINK_STATE_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS)
@@ -73,13 +75,15 @@ static bool s_touch_last_sent_valid = false;
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload);
 static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload, uint16_t length);
 static void rx_task(void *arg);
-static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length);
+static esp_err_t handle_state_full_frame(const uint8_t *payload, uint16_t length);
+static esp_err_t handle_state_delta_frame(const uint8_t *payload, uint16_t length);
 static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length);
 static void update_link_alive(bool alive);
 static void watchdog_timer_cb(TimerHandle_t timer);
 static void touch_dispatch_task(void *arg);
 static bool touch_queue_pop(core_link_touch_event_t *event);
 static void touch_queue_reset(void);
+static core_link_terrarium_snapshot_t *find_cached_snapshot(core_link_state_frame_t *frame, uint8_t terrarium_id);
 
 static void touch_queue_reset(void)
 {
@@ -280,6 +284,7 @@ esp_err_t core_link_send_display_ready(void)
 
 esp_err_t core_link_request_state_sync(void)
 {
+    s_cached_state_valid = false;
     return uart_send_frame(CORE_LINK_MSG_REQUEST_STATE, NULL, 0);
 }
 
@@ -373,6 +378,8 @@ static void update_link_alive(bool alive)
         s_ping_in_flight = false;
         s_state_timeout_logged = false;
         touch_queue_reset();
+        s_cached_state_valid = false;
+        memset(&s_cached_state, 0, sizeof(s_cached_state));
     } else {
         if (s_watchdog_triggered) {
             s_watchdog_triggered = false;
@@ -412,7 +419,7 @@ static void watchdog_timer_cb(TimerHandle_t timer)
             s_ping_in_flight = true;
             s_last_ping_tick = now;
             if (!s_state_timeout_logged) {
-                ESP_LOGW(TAG, "STATE_FULL timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+                ESP_LOGW(TAG, "State update timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
                 s_state_timeout_logged = true;
             }
         } else {
@@ -484,7 +491,18 @@ typedef struct __attribute__((packed)) {
     float activity_score;
 } core_link_snapshot_wire_t;
 
-static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length)
+typedef struct __attribute__((packed)) {
+    uint32_t epoch_seconds;
+    uint8_t terrarium_count;
+    uint8_t changed_count;
+} core_link_state_delta_header_wire_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t terrarium_id;
+    core_link_delta_field_mask_t field_mask;
+} core_link_state_delta_entry_wire_t;
+
+static esp_err_t handle_state_full_frame(const uint8_t *payload, uint16_t length)
 {
     if (length < sizeof(core_link_state_header_wire_t)) {
         return ESP_ERR_INVALID_SIZE;
@@ -531,10 +549,180 @@ static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length)
         frame.terrariums[i].activity_score = wire.activity_score;
     }
 
+    s_cached_state = frame;
+    s_cached_state_valid = true;
+
     if (s_state_cb) {
         s_state_cb(&frame, s_state_ctx);
     }
     return ESP_OK;
+}
+
+static esp_err_t handle_state_delta_frame(const uint8_t *payload, uint16_t length)
+{
+    if (length < sizeof(core_link_state_delta_header_wire_t)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (!s_cached_state_valid) {
+        ESP_LOGW(TAG, "STATE_DELTA received without baseline");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    core_link_state_delta_header_wire_t header;
+    memcpy(&header, payload, sizeof(header));
+
+    if (header.terrarium_count != s_cached_state.terrarium_count) {
+        ESP_LOGW(TAG, "STATE_DELTA terrarium mismatch (%u != %u)", header.terrarium_count, s_cached_state.terrarium_count);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    size_t offset = sizeof(header);
+    core_link_state_frame_t next = s_cached_state;
+    next.epoch_seconds = header.epoch_seconds;
+    next.terrarium_count = header.terrarium_count;
+
+    if (header.changed_count > next.terrarium_count) {
+        ESP_LOGW(TAG, "STATE_DELTA change count %u exceeds terrariums %u", header.changed_count, next.terrarium_count);
+        header.changed_count = next.terrarium_count;
+    }
+
+    for (uint8_t i = 0; i < header.changed_count; ++i) {
+        if (offset + sizeof(core_link_state_delta_entry_wire_t) > length) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        core_link_state_delta_entry_wire_t entry;
+        memcpy(&entry, payload + offset, sizeof(entry));
+        offset += sizeof(entry);
+
+        core_link_terrarium_snapshot_t *snap = find_cached_snapshot(&next, entry.terrarium_id);
+        if (!snap) {
+            ESP_LOGW(TAG, "STATE_DELTA unknown terrarium id %u", entry.terrarium_id);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        core_link_delta_field_mask_t mask = entry.field_mask;
+
+        if (mask & CORE_LINK_DELTA_FIELD_SCIENTIFIC_NAME) {
+            if (offset + CORE_LINK_DELTA_STRING_BYTES > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(snap->scientific_name, payload + offset, CORE_LINK_DELTA_STRING_BYTES);
+            snap->scientific_name[CORE_LINK_NAME_MAX_LEN] = '\0';
+            offset += CORE_LINK_DELTA_STRING_BYTES;
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_COMMON_NAME) {
+            if (offset + CORE_LINK_DELTA_STRING_BYTES > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(snap->common_name, payload + offset, CORE_LINK_DELTA_STRING_BYTES);
+            snap->common_name[CORE_LINK_NAME_MAX_LEN] = '\0';
+            offset += CORE_LINK_DELTA_STRING_BYTES;
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_TEMP_DAY) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->temp_day_c, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_TEMP_NIGHT) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->temp_night_c, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HUMIDITY_DAY) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->humidity_day_pct, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HUMIDITY_NIGHT) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->humidity_night_pct, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LUX_DAY) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->lux_day, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LUX_NIGHT) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->lux_night, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HYDRATION) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->hydration_pct, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_STRESS) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->stress_pct, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HEALTH) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->health_pct, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LAST_FEED) {
+            if (offset + sizeof(uint32_t) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->last_feeding_timestamp, payload + offset, sizeof(uint32_t));
+            offset += sizeof(uint32_t);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_ACTIVITY) {
+            if (offset + sizeof(float) > length) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(&snap->activity_score, payload + offset, sizeof(float));
+            offset += sizeof(float);
+        }
+    }
+
+    s_cached_state = next;
+    s_cached_state_valid = true;
+
+    if (s_state_cb) {
+        core_link_state_frame_t frame = next;
+        s_state_cb(&frame, s_state_ctx);
+    }
+
+    return ESP_OK;
+}
+
+static core_link_terrarium_snapshot_t *find_cached_snapshot(core_link_state_frame_t *frame, uint8_t terrarium_id)
+{
+    if (!frame) {
+        return NULL;
+    }
+
+    for (uint8_t i = 0; i < frame->terrarium_count; ++i) {
+        if (frame->terrariums[i].terrarium_id == terrarium_id) {
+            return &frame->terrariums[i];
+        }
+    }
+
+    return NULL;
 }
 
 static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length)
@@ -579,8 +767,25 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             s_ping_in_flight = false;
             s_state_timeout_logged = false;
             update_link_alive(true);
-            if (handle_state_frame(payload, length) != ESP_OK) {
-                ESP_LOGW(TAG, "Invalid state frame received");
+            if (handle_state_full_frame(payload, length) != ESP_OK) {
+                ESP_LOGW(TAG, "Invalid STATE_FULL frame received");
+            }
+            break;
+        }
+        case CORE_LINK_MSG_STATE_DELTA: {
+            TickType_t now = xTaskGetTickCount();
+            s_last_state_tick = now;
+            s_last_ping_tick = now;
+            s_ping_in_flight = false;
+            s_state_timeout_logged = false;
+            update_link_alive(true);
+            if (handle_state_delta_frame(payload, length) != ESP_OK) {
+                ESP_LOGW(TAG, "Invalid STATE_DELTA received, requesting resync");
+                s_cached_state_valid = false;
+                esp_err_t err = core_link_request_state_sync();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "State resync request failed: %s", esp_err_to_name(err));
+                }
             }
             break;
         }
