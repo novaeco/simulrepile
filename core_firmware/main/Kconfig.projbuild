@@ -55,4 +55,18 @@ config CORE_APP_TOUCH_RELIEF_DELTA
     help
         Pourcentage de réduction du stress quand un contact tactile DOWN est reçu.
 
+config CORE_STATE_PROFILE_BASE_PATH
+    string "Chemin profils (SD)"
+    default "/sdcard/profiles"
+    help
+        Répertoire primaire sur la carte SD contenant les fichiers JSON
+        `*.json` décrivant les profils terrarium.
+
+config CORE_STATE_PROFILE_SPIFFS_PATH
+    string "Chemin profils (SPIFFS)"
+    default "/spiffs/profiles"
+    help
+        Répertoire de secours monté en SPIFFS. Laisser vide pour désactiver
+        le fallback embarqué.
+
 endmenu
