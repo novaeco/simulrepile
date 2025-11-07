@@ -17,6 +17,7 @@ static terrarium_state_t s_terrariums[MAX_TERRARIUMS];
 static size_t s_terrarium_count = 0;
 static float s_time_accumulator = 0.0f;
 static bool s_remote_active = false;
+static const char *SIM_ENGINE_ALERT_REMOTE_LOST = "Lien DevKitC indisponible — simulation locale réactivée.";
 static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static const reptile_profile_t *s_default_profiles[MAX_TERRARIUMS];
 static reptile_profile_t s_remote_profiles[MAX_TERRARIUMS];
@@ -155,8 +156,9 @@ esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame)
     return ESP_OK;
 }
 
-void sim_engine_handle_link_status(bool connected)
+const char *sim_engine_handle_link_status(bool connected)
 {
+    const char *alert = NULL;
     portENTER_CRITICAL(&s_state_lock);
     if (!connected) {
         s_remote_active = false;
@@ -165,6 +167,7 @@ void sim_engine_handle_link_status(bool connected)
         memset(s_remote_scientific_names, 0, sizeof(s_remote_scientific_names));
         memset(s_remote_common_names, 0, sizeof(s_remote_common_names));
         sim_engine_load_defaults_locked();
+        alert = SIM_ENGINE_ALERT_REMOTE_LOST;
     }
     portEXIT_CRITICAL(&s_state_lock);
 
@@ -173,4 +176,5 @@ void sim_engine_handle_link_status(bool connected)
     } else {
         ESP_LOGW(TAG, "Core link lost, resuming internal terrarium simulation");
     }
+    return alert;
 }

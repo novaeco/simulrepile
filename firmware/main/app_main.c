@@ -64,7 +64,7 @@ void app_main(void)
     ESP_ERROR_CHECK(lvgl_port_init());
 
     sim_engine_init();
-    sim_engine_handle_link_status(core_link_is_ready());
+    (void)sim_engine_handle_link_status(core_link_is_ready());
     ui_root_init();
     ui_root_show_boot_splash();
     ui_root_show_disclaimer();
@@ -131,10 +131,10 @@ static void handle_core_state(const core_link_state_frame_t *frame, void *ctx)
 static void handle_core_link_status(bool connected, void *ctx)
 {
     (void)ctx;
+    const char *alert = sim_engine_handle_link_status(connected);
     if (connected) {
         ESP_LOGI(TAG, "Core link watchdog cleared: DevKitC reachable");
-        sim_engine_handle_link_status(true);
-        ui_root_set_link_alert(false, NULL);
+        ui_root_set_link_alert(false, alert);
         if (core_link_is_ready()) {
             esp_err_t err = core_link_send_display_ready();
             if (err != ESP_OK) {
@@ -143,7 +143,6 @@ static void handle_core_link_status(bool connected, void *ctx)
         }
     } else {
         ESP_LOGW(TAG, "Core link watchdog tripped: falling back to local simulation");
-        sim_engine_handle_link_status(false);
-        ui_root_set_link_alert(true, NULL);
+        ui_root_set_link_alert(true, alert);
     }
 }

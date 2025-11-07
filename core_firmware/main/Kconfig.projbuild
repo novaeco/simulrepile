@@ -37,6 +37,18 @@ config CORE_APP_HANDSHAKE_RETRY_MS
     help
         Intervalle entre deux émissions `HELLO` lorsque l'afficheur n'a pas encore répondu.
 
+config CORE_APP_LINK_STATE_TIMEOUT_MS
+    int "Display inactivity timeout (ms)"
+    default 4000
+    help
+        Durée maximale sans réception de trame avant émission d'un `PING` vers l'afficheur.
+
+config CORE_APP_LINK_PING_TIMEOUT_MS
+    int "Ping timeout (ms)"
+    default 800
+    help
+        Délai d'attente d'un `PONG` (ou d'une trame) avant de considérer l'afficheur comme déconnecté.
+
 config CORE_APP_STATE_PUBLISH_INTERVAL_MS
     int "State publish interval (ms)"
     default 500
