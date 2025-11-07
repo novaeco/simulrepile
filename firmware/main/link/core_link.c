@@ -7,6 +7,8 @@
 #include "esp_log.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
+#include "sdkconfig.h"
 
 #define CORE_LINK_SOF 0xA5
 #define CORE_LINK_MAX_PAYLOAD 512
@@ -35,17 +37,32 @@ static core_link_config_t s_config;
 static bool s_initialized = false;
 static bool s_started = false;
 static bool s_handshake_done = false;
+static bool s_link_alive = false;
 static EventGroupHandle_t s_events = NULL;
 static TaskHandle_t s_rx_task = NULL;
 static core_link_state_cb_t s_state_cb = NULL;
 static void *s_state_ctx = NULL;
 static uint8_t s_peer_version = 0;
+static core_link_status_cb_t s_status_cb = NULL;
+static void *s_status_ctx = NULL;
+static TimerHandle_t s_watchdog_timer = NULL;
+static TickType_t s_last_state_tick = 0;
+static TickType_t s_last_ping_tick = 0;
+static bool s_ping_in_flight = false;
+static bool s_watchdog_triggered = false;
+
+#define CORE_LINK_WATCHDOG_PERIOD_MS 250
+#define CORE_LINK_STATE_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS)
+#define CORE_LINK_PING_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_PING_TIMEOUT_MS)
+#define CORE_LINK_WATCHDOG_PERIOD_TICKS pdMS_TO_TICKS(CORE_LINK_WATCHDOG_PERIOD_MS)
 
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload);
 static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload, uint16_t length);
 static void rx_task(void *arg);
 static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length);
 static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length);
+static void update_link_alive(bool alive);
+static void watchdog_timer_cb(TimerHandle_t timer);
 
 esp_err_t core_link_init(const core_link_config_t *config)
 {
@@ -80,6 +97,17 @@ esp_err_t core_link_init(const core_link_config_t *config)
         ESP_RETURN_ON_FALSE(s_events, ESP_ERR_NO_MEM, TAG, "event group alloc failed");
     }
 
+    if (!s_watchdog_timer) {
+        s_watchdog_timer = xTimerCreate("core_link_wd", CORE_LINK_WATCHDOG_PERIOD_TICKS, pdTRUE, NULL, watchdog_timer_cb);
+        ESP_RETURN_ON_FALSE(s_watchdog_timer, ESP_ERR_NO_MEM, TAG, "watchdog timer alloc failed");
+    }
+
+    s_last_state_tick = xTaskGetTickCount();
+    s_last_ping_tick = s_last_state_tick;
+    s_ping_in_flight = false;
+    s_watchdog_triggered = false;
+    s_link_alive = false;
+
     s_initialized = true;
     ESP_LOGI(TAG, "UART bridge ready on port %d (TX=%d RX=%d @ %d bps)", s_config.uart_port, s_config.tx_gpio, s_config.rx_gpio, s_config.baud_rate);
     return ESP_OK;
@@ -94,6 +122,11 @@ esp_err_t core_link_start(void)
 
     BaseType_t task_ok = xTaskCreatePinnedToCore(rx_task, "core_link_rx", s_config.task_stack_size, NULL, s_config.task_priority, &s_rx_task, 0);
     ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "rx task creation failed");
+
+    if (!xTimerIsTimerActive(s_watchdog_timer)) {
+        ESP_RETURN_ON_FALSE(xTimerStart(s_watchdog_timer, 0) == pdPASS, ESP_FAIL, TAG, "watchdog timer start failed");
+    }
+
     s_started = true;
     return ESP_OK;
 }
@@ -102,6 +135,13 @@ esp_err_t core_link_register_state_callback(core_link_state_cb_t cb, void *ctx)
 {
     s_state_cb = cb;
     s_state_ctx = ctx;
+    return ESP_OK;
+}
+
+esp_err_t core_link_register_status_callback(core_link_status_cb_t cb, void *ctx)
+{
+    s_status_cb = cb;
+    s_status_ctx = ctx;
     return ESP_OK;
 }
 
@@ -138,7 +178,7 @@ esp_err_t core_link_wait_for_handshake(TickType_t ticks_to_wait)
 
 bool core_link_is_ready(void)
 {
-    return s_handshake_done;
+    return s_handshake_done && s_link_alive;
 }
 
 uint8_t core_link_get_peer_version(void)
@@ -173,6 +213,70 @@ static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload,
     }
     uart_write_bytes(s_config.uart_port, (const char *)&checksum, sizeof(checksum));
     return ESP_OK;
+}
+
+static void update_link_alive(bool alive)
+{
+    if (s_link_alive == alive) {
+        return;
+    }
+
+    s_link_alive = alive;
+    if (!alive) {
+        if (!s_watchdog_triggered) {
+            ESP_LOGE(TAG, "DevKitC link watchdog expired, switching to local simulation");
+        }
+        s_watchdog_triggered = true;
+        s_ping_in_flight = false;
+    } else {
+        if (s_watchdog_triggered) {
+            s_watchdog_triggered = false;
+            if (s_handshake_done) {
+                ESP_LOGI(TAG, "DevKitC link restored, requesting state resynchronization");
+                esp_err_t err = core_link_request_state_sync();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "State resync request failed: %s", esp_err_to_name(err));
+                }
+            }
+        }
+    }
+
+    if (s_status_cb) {
+        s_status_cb(alive, s_status_ctx);
+    }
+}
+
+static void watchdog_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    if (!s_started || !s_handshake_done || !s_link_alive) {
+        return;
+    }
+
+    TickType_t now = xTaskGetTickCount();
+    TickType_t elapsed = now - s_last_state_tick;
+
+    if (elapsed < CORE_LINK_STATE_TIMEOUT_TICKS) {
+        return;
+    }
+
+    if (!s_ping_in_flight) {
+        esp_err_t err = uart_send_frame(CORE_LINK_MSG_PING, NULL, 0);
+        if (err == ESP_OK) {
+            s_ping_in_flight = true;
+            s_last_ping_tick = now;
+            ESP_LOGW(TAG, "STATE_FULL timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+        } else {
+            ESP_LOGE(TAG, "Failed to send watchdog ping: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    TickType_t ping_elapsed = now - s_last_ping_tick;
+    if (ping_elapsed >= CORE_LINK_PING_TIMEOUT_TICKS) {
+        ESP_LOGE(TAG, "Ping timeout after %d ms, declaring DevKitC offline", CONFIG_APP_CORE_LINK_PING_TIMEOUT_MS);
+        update_link_alive(false);
+    }
 }
 
 typedef struct __attribute__((packed)) {
@@ -253,19 +357,18 @@ static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length)
 static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length)
 {
     switch (type) {
-        case CORE_LINK_MSG_HELLO:
+        case CORE_LINK_MSG_HELLO: {
             if (length >= 1) {
                 s_peer_version = payload[0];
             } else {
                 s_peer_version = 0;
             }
-            {
-                core_link_hello_ack_payload_t ack = {
-                    .protocol_version = CORE_LINK_PROTOCOL_VERSION,
-                    .capabilities = 0x01, // display endpoint
-                };
-                uart_send_frame(CORE_LINK_MSG_HELLO_ACK, &ack, sizeof(ack));
-            }
+            core_link_hello_ack_payload_t ack = {
+                .protocol_version = CORE_LINK_PROTOCOL_VERSION,
+                .capabilities = 0x01, // display endpoint
+            };
+            uart_send_frame(CORE_LINK_MSG_HELLO_ACK, &ack, sizeof(ack));
+
             if (!s_handshake_done) {
                 s_handshake_done = true;
                 xEventGroupSetBits(s_events, CORE_LINK_EVENT_HANDSHAKE);
@@ -273,16 +376,40 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             } else {
                 ESP_LOGI(TAG, "Handshake refreshed (peer protocol v%u)", s_peer_version);
             }
-            core_link_request_state_sync();
+
+            TickType_t now = xTaskGetTickCount();
+            s_last_state_tick = now;
+            s_last_ping_tick = now;
+            s_ping_in_flight = false;
+            bool triggered = s_watchdog_triggered;
+            update_link_alive(true);
+            if (!triggered) {
+                core_link_request_state_sync();
+            }
             break;
-        case CORE_LINK_MSG_STATE_FULL:
+        }
+        case CORE_LINK_MSG_STATE_FULL: {
+            TickType_t now = xTaskGetTickCount();
+            s_last_state_tick = now;
+            s_last_ping_tick = now;
+            s_ping_in_flight = false;
+            update_link_alive(true);
             if (handle_state_frame(payload, length) != ESP_OK) {
                 ESP_LOGW(TAG, "Invalid state frame received");
             }
             break;
+        }
         case CORE_LINK_MSG_PING:
             uart_send_frame(CORE_LINK_MSG_PONG, payload, length);
             break;
+        case CORE_LINK_MSG_PONG: {
+            TickType_t now = xTaskGetTickCount();
+            s_last_state_tick = now;
+            s_last_ping_tick = now;
+            s_ping_in_flight = false;
+            update_link_alive(true);
+            break;
+        }
         default:
             ESP_LOGW(TAG, "Unhandled frame type 0x%02X", type);
             break;

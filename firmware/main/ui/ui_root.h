@@ -24,6 +24,7 @@ void ui_root_show_dashboard(void);
 void ui_root_show_slots(void);
 void ui_root_show_docs(void);
 void ui_root_show_settings(void);
+void ui_root_set_link_alert(bool visible, const char *message);
 
 #ifdef __cplusplus
 }

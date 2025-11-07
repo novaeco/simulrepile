@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 typedef void (*core_link_state_cb_t)(const core_link_state_frame_t *frame, void *ctx);
+typedef void (*core_link_status_cb_t)(bool connected, void *ctx);
 
 typedef struct {
     int uart_port;
@@ -27,6 +28,7 @@ typedef struct {
 esp_err_t core_link_init(const core_link_config_t *config);
 esp_err_t core_link_start(void);
 esp_err_t core_link_register_state_callback(core_link_state_cb_t cb, void *ctx);
+esp_err_t core_link_register_status_callback(core_link_status_cb_t cb, void *ctx);
 esp_err_t core_link_send_touch_event(const core_link_touch_event_t *event);
 esp_err_t core_link_send_display_ready(void);
 esp_err_t core_link_request_state_sync(void);
