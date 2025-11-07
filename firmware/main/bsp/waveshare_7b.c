@@ -404,6 +404,10 @@ static void touch_handle_point(uint8_t id, uint8_t event_flag, uint16_t x, uint1
 
 static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16_t x, uint16_t y)
 {
+    if (id != 0) {
+        return;
+    }
+
     core_link_touch_event_t event = {
         .type = type,
         .point_id = id,
@@ -411,17 +415,15 @@ static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16
         .y = y,
     };
 
-    esp_err_t err = core_link_send_touch_event(&event);
+    esp_err_t err = core_link_queue_touch_event(&event);
     if (err == ESP_ERR_INVALID_STATE) {
         ESP_LOGD(TAG, "Touch event dropped (link not ready)");
     } else if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to send touch event: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Failed to queue touch event: %s", esp_err_to_name(err));
     }
 
-    if (id == 0) {
-        bool pressed = (type != CORE_LINK_TOUCH_UP);
-        lvgl_port_feed_touch_event(pressed, x, y);
-    }
+    bool pressed = (type != CORE_LINK_TOUCH_UP);
+    lvgl_port_feed_touch_event(pressed, x, y);
 }
 
 esp_err_t bsp_backlight_enable(bool enable)
