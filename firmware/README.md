@@ -21,6 +21,8 @@ vitesse (par défaut 2 Mbps sur UART1, GPIO43↔GPIO44) encapsulant un protocole
   résolution dans un message `DISPLAY_READY`.
 - **Synchronisation d’état** : le DevKitC pousse des trames `STATE_FULL` contenant jusqu’à 4 instantanés de terrariums. Le
   module d’affichage les stocke via `sim_engine_apply_remote_snapshot()` et désactive la simulation locale.
+- *Note :* le type `STATE_DELTA` auparavant réservé a été retiré du protocole pour éviter toute ambiguïté. Toute mise à jour
+  d’état passe intégralement par `STATE_FULL`.
 - **Événements tactiles** : l’API `core_link_send_touch_event()` prépare l’intégration future du driver I²C pour remonter les
   contacts vers le cœur.
 
