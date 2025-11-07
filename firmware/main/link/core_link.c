@@ -6,6 +6,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "sdkconfig.h"
@@ -13,6 +14,8 @@
 #define CORE_LINK_SOF 0xA5
 #define CORE_LINK_MAX_PAYLOAD 512
 #define CORE_LINK_EVENT_HANDSHAKE BIT0
+#define CORE_LINK_TOUCH_QUEUE_LENGTH 8
+#define CORE_LINK_TOUCH_DISPATCH_STACK 3072
 
 static const char *TAG = "core_link";
 
@@ -50,6 +53,14 @@ static TickType_t s_last_state_tick = 0;
 static TickType_t s_last_ping_tick = 0;
 static bool s_ping_in_flight = false;
 static bool s_watchdog_triggered = false;
+static SemaphoreHandle_t s_touch_queue_sem = NULL;
+static TaskHandle_t s_touch_dispatch_task = NULL;
+static core_link_touch_event_t s_touch_queue_storage[CORE_LINK_TOUCH_QUEUE_LENGTH];
+static size_t s_touch_queue_head = 0;
+static size_t s_touch_queue_count = 0;
+static portMUX_TYPE s_touch_queue_lock = portMUX_INITIALIZER_UNLOCKED;
+static core_link_touch_event_t s_touch_last_sent = {0};
+static bool s_touch_last_sent_valid = false;
 
 #define CORE_LINK_WATCHDOG_PERIOD_MS 250
 #define CORE_LINK_STATE_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS)
@@ -63,6 +74,37 @@ static esp_err_t handle_state_frame(const uint8_t *payload, uint16_t length);
 static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length);
 static void update_link_alive(bool alive);
 static void watchdog_timer_cb(TimerHandle_t timer);
+static void touch_dispatch_task(void *arg);
+static bool touch_queue_pop(core_link_touch_event_t *event);
+static void touch_queue_reset(void);
+
+static void touch_queue_reset(void)
+{
+    portENTER_CRITICAL(&s_touch_queue_lock);
+    memset(s_touch_queue_storage, 0, sizeof(s_touch_queue_storage));
+    s_touch_queue_head = 0;
+    s_touch_queue_count = 0;
+    s_touch_last_sent_valid = false;
+    portEXIT_CRITICAL(&s_touch_queue_lock);
+}
+
+static bool touch_queue_pop(core_link_touch_event_t *event)
+{
+    bool has_event = false;
+
+    portENTER_CRITICAL(&s_touch_queue_lock);
+    if (s_touch_queue_count > 0) {
+        if (event) {
+            *event = s_touch_queue_storage[s_touch_queue_head];
+        }
+        s_touch_queue_head = (s_touch_queue_head + 1) % CORE_LINK_TOUCH_QUEUE_LENGTH;
+        s_touch_queue_count--;
+        has_event = true;
+    }
+    portEXIT_CRITICAL(&s_touch_queue_lock);
+
+    return has_event;
+}
 
 esp_err_t core_link_init(const core_link_config_t *config)
 {
@@ -102,6 +144,12 @@ esp_err_t core_link_init(const core_link_config_t *config)
         ESP_RETURN_ON_FALSE(s_watchdog_timer, ESP_ERR_NO_MEM, TAG, "watchdog timer alloc failed");
     }
 
+    if (!s_touch_queue_sem) {
+        s_touch_queue_sem = xSemaphoreCreateCounting(CORE_LINK_TOUCH_QUEUE_LENGTH, 0);
+        ESP_RETURN_ON_FALSE(s_touch_queue_sem, ESP_ERR_NO_MEM, TAG, "touch queue semaphore alloc failed");
+    }
+    touch_queue_reset();
+
     s_last_state_tick = xTaskGetTickCount();
     s_last_ping_tick = s_last_state_tick;
     s_ping_in_flight = false;
@@ -123,6 +171,16 @@ esp_err_t core_link_start(void)
     BaseType_t task_ok = xTaskCreatePinnedToCore(rx_task, "core_link_rx", s_config.task_stack_size, NULL, s_config.task_priority, &s_rx_task, 0);
     ESP_RETURN_ON_FALSE(task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "rx task creation failed");
 
+    if (!s_touch_dispatch_task) {
+        uint32_t dispatch_stack = (uint32_t)s_config.task_stack_size / 2U;
+        if (dispatch_stack < CORE_LINK_TOUCH_DISPATCH_STACK) {
+            dispatch_stack = CORE_LINK_TOUCH_DISPATCH_STACK;
+        }
+        BaseType_t touch_task_ok = xTaskCreatePinnedToCore(touch_dispatch_task, "core_link_touch", dispatch_stack, NULL,
+                                                           s_config.task_priority, &s_touch_dispatch_task, tskNO_AFFINITY);
+        ESP_RETURN_ON_FALSE(touch_task_ok == pdPASS, ESP_ERR_NO_MEM, TAG, "touch dispatch task creation failed");
+    }
+
     if (!xTimerIsTimerActive(s_watchdog_timer)) {
         ESP_RETURN_ON_FALSE(xTimerStart(s_watchdog_timer, 0) == pdPASS, ESP_FAIL, TAG, "watchdog timer start failed");
     }
@@ -142,6 +200,54 @@ esp_err_t core_link_register_status_callback(core_link_status_cb_t cb, void *ctx
 {
     s_status_cb = cb;
     s_status_ctx = ctx;
+    return ESP_OK;
+}
+
+esp_err_t core_link_queue_touch_event(const core_link_touch_event_t *event)
+{
+    ESP_RETURN_ON_FALSE(event, ESP_ERR_INVALID_ARG, TAG, "touch event null");
+
+    if (event->point_id != 0) {
+        /* Protocol v1: mono-touch only. Drop additional points. */
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_FALSE(s_initialized && s_touch_queue_sem, ESP_ERR_INVALID_STATE, TAG, "core link not ready");
+
+    portENTER_CRITICAL(&s_touch_queue_lock);
+    if (s_touch_queue_count == 0 && s_touch_last_sent_valid &&
+        s_touch_last_sent.type == event->type && s_touch_last_sent.point_id == event->point_id &&
+        s_touch_last_sent.x == event->x && s_touch_last_sent.y == event->y) {
+        portEXIT_CRITICAL(&s_touch_queue_lock);
+        return ESP_OK;
+    }
+
+    if (s_touch_queue_count > 0) {
+        size_t last_index = (s_touch_queue_head + s_touch_queue_count - 1U) % CORE_LINK_TOUCH_QUEUE_LENGTH;
+        core_link_touch_event_t *last = &s_touch_queue_storage[last_index];
+        if (last->point_id == event->point_id && last->type == event->type) {
+            *last = *event;
+            portEXIT_CRITICAL(&s_touch_queue_lock);
+            return ESP_OK;
+        }
+    }
+
+    if (s_touch_queue_count == CORE_LINK_TOUCH_QUEUE_LENGTH) {
+        s_touch_queue_head = (s_touch_queue_head + 1U) % CORE_LINK_TOUCH_QUEUE_LENGTH;
+        s_touch_queue_count--;
+    }
+
+    size_t insert_index = (s_touch_queue_head + s_touch_queue_count) % CORE_LINK_TOUCH_QUEUE_LENGTH;
+    s_touch_queue_storage[insert_index] = *event;
+    s_touch_queue_count++;
+    portEXIT_CRITICAL(&s_touch_queue_lock);
+
+    BaseType_t give_ok = xSemaphoreGive(s_touch_queue_sem);
+    if (give_ok != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to signal touch dispatcher");
+        return ESP_FAIL;
+    }
+
     return ESP_OK;
 }
 
@@ -228,6 +334,7 @@ static void update_link_alive(bool alive)
         }
         s_watchdog_triggered = true;
         s_ping_in_flight = false;
+        touch_queue_reset();
     } else {
         if (s_watchdog_triggered) {
             s_watchdog_triggered = false;
@@ -276,6 +383,39 @@ static void watchdog_timer_cb(TimerHandle_t timer)
     if (ping_elapsed >= CORE_LINK_PING_TIMEOUT_TICKS) {
         ESP_LOGE(TAG, "Ping timeout after %d ms, declaring DevKitC offline", CONFIG_APP_CORE_LINK_PING_TIMEOUT_MS);
         update_link_alive(false);
+    }
+}
+
+static void touch_dispatch_task(void *arg)
+{
+    (void)arg;
+
+    while (true) {
+        if (!s_touch_queue_sem) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (xSemaphoreTake(s_touch_queue_sem, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        core_link_touch_event_t event;
+        if (!touch_queue_pop(&event)) {
+            continue;
+        }
+
+        esp_err_t err = core_link_send_touch_event(&event);
+        if (err == ESP_OK) {
+            portENTER_CRITICAL(&s_touch_queue_lock);
+            s_touch_last_sent = event;
+            s_touch_last_sent_valid = true;
+            portEXIT_CRITICAL(&s_touch_queue_lock);
+        } else if (err == ESP_ERR_INVALID_STATE) {
+            ESP_LOGD(TAG, "Queued touch event dropped (link not ready)");
+        } else {
+            ESP_LOGW(TAG, "Failed to dispatch touch event: %s", esp_err_to_name(err));
+        }
     }
 }
 

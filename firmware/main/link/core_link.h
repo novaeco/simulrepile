@@ -29,6 +29,7 @@ esp_err_t core_link_init(const core_link_config_t *config);
 esp_err_t core_link_start(void);
 esp_err_t core_link_register_state_callback(core_link_state_cb_t cb, void *ctx);
 esp_err_t core_link_register_status_callback(core_link_status_cb_t cb, void *ctx);
+esp_err_t core_link_queue_touch_event(const core_link_touch_event_t *event);
 esp_err_t core_link_send_touch_event(const core_link_touch_event_t *event);
 esp_err_t core_link_send_display_ready(void);
 esp_err_t core_link_request_state_sync(void);
