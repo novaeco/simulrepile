@@ -1,5 +1,6 @@
 #include "link/core_host_link.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "driver/uart.h"
@@ -63,6 +64,21 @@ typedef struct __attribute__((packed)) {
     float activity_score;
 } core_link_snapshot_wire_t;
 
+typedef struct __attribute__((packed)) {
+    uint32_t epoch_seconds;
+    uint8_t terrarium_count;
+    uint8_t changed_count;
+} core_link_state_delta_header_wire_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t terrarium_id;
+    core_link_delta_field_mask_t field_mask;
+} core_link_state_delta_entry_wire_t;
+
+#define CORE_HOST_DELTA_FLOAT_EPSILON (0.0005f)
+#define CORE_HOST_MAX_DELTAS_BEFORE_FULL 20U
+#define CORE_HOST_FULL_REFRESH_SECONDS 30U
+
 static core_host_link_config_t s_config;
 static bool s_initialized = false;
 static bool s_started = false;
@@ -84,6 +100,11 @@ static TickType_t s_last_ping_tick = 0;
 static bool s_ping_in_flight = false;
 static bool s_display_alive = false;
 static bool s_watchdog_triggered = false;
+static core_link_state_frame_t s_last_sent_state = {0};
+static bool s_last_state_valid = false;
+static bool s_force_next_full = true;
+static uint32_t s_delta_since_full = 0;
+static uint32_t s_last_full_epoch = 0;
 
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload);
 static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload, uint16_t length);
@@ -91,6 +112,14 @@ static void rx_task(void *arg);
 static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint16_t length);
 static void update_display_alive(bool alive);
 static void watchdog_timer_cb(TimerHandle_t timer);
+static esp_err_t send_state_full(const core_link_state_frame_t *frame);
+static esp_err_t send_state_delta(const core_link_state_frame_t *frame, bool *out_any_change);
+static const core_link_terrarium_snapshot_t *find_previous_snapshot(uint8_t terrarium_id);
+static void store_last_state(const core_link_state_frame_t *frame);
+static void schedule_full_frame(void);
+static bool ensure_baseline_compatible(const core_link_state_frame_t *frame);
+static bool float_field_changed(float a, float b);
+static bool string_field_changed(const char *a, const char *b);
 
 esp_err_t core_host_link_init(const core_host_link_config_t *config)
 {
@@ -169,11 +198,72 @@ esp_err_t core_host_link_send_state(const core_link_state_frame_t *frame)
     ESP_RETURN_ON_FALSE(frame, ESP_ERR_INVALID_ARG, TAG, "frame null");
     ESP_RETURN_ON_FALSE(core_host_link_is_display_ready(), ESP_ERR_INVALID_STATE, TAG, "display not ready");
 
-    if (frame->terrarium_count > CORE_LINK_MAX_TERRARIUMS) {
-        ESP_LOGW(TAG, "Clamping terrarium count from %u to %u", frame->terrarium_count, CORE_LINK_MAX_TERRARIUMS);
+    core_link_state_frame_t sanitized = {0};
+    uint8_t count = frame->terrarium_count;
+    if (count > CORE_LINK_MAX_TERRARIUMS) {
+        ESP_LOGW(TAG, "Clamping terrarium count from %u to %u", count, CORE_LINK_MAX_TERRARIUMS);
+        count = CORE_LINK_MAX_TERRARIUMS;
     }
 
-    uint8_t count = frame->terrarium_count > CORE_LINK_MAX_TERRARIUMS ? CORE_LINK_MAX_TERRARIUMS : frame->terrarium_count;
+    sanitized.epoch_seconds = frame->epoch_seconds;
+    sanitized.terrarium_count = count;
+    for (uint8_t i = 0; i < count; ++i) {
+        sanitized.terrariums[i] = frame->terrariums[i];
+    }
+
+    bool require_full = s_force_next_full || !s_last_state_valid;
+    if (!require_full) {
+        require_full = !ensure_baseline_compatible(&sanitized);
+    }
+
+    esp_err_t err = ESP_FAIL;
+    if (!require_full) {
+        bool any_change = false;
+        err = send_state_delta(&sanitized, &any_change);
+        if (err == ESP_OK) {
+            store_last_state(&sanitized);
+            if (any_change) {
+                s_delta_since_full++;
+                if (s_delta_since_full >= CORE_HOST_MAX_DELTAS_BEFORE_FULL) {
+                    s_force_next_full = true;
+                    s_delta_since_full = 0;
+                }
+            }
+            if (s_last_full_epoch != 0 && sanitized.epoch_seconds >= s_last_full_epoch) {
+                uint32_t elapsed = sanitized.epoch_seconds - s_last_full_epoch;
+                if (elapsed >= CORE_HOST_FULL_REFRESH_SECONDS) {
+                    s_force_next_full = true;
+                }
+            } else if (s_last_full_epoch != 0) {
+                s_force_next_full = true;
+            }
+            return ESP_OK;
+        }
+
+        ESP_LOGW(TAG, "STATE_DELTA encode failed (%s), falling back to STATE_FULL", esp_err_to_name(err));
+        require_full = true;
+    }
+
+    if (require_full) {
+        err = send_state_full(&sanitized);
+        if (err == ESP_OK) {
+            store_last_state(&sanitized);
+            s_last_full_epoch = sanitized.epoch_seconds;
+            s_delta_since_full = 0;
+            s_force_next_full = false;
+        }
+    }
+
+    return err;
+}
+
+static esp_err_t send_state_full(const core_link_state_frame_t *frame)
+{
+    if (!frame) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t count = frame->terrarium_count;
     core_link_state_header_wire_t header = {
         .epoch_seconds = frame->epoch_seconds,
         .terrarium_count = count,
@@ -193,7 +283,9 @@ esp_err_t core_host_link_send_state(const core_link_state_frame_t *frame)
         core_link_snapshot_wire_t wire = {0};
         wire.terrarium_id = snap->terrarium_id;
         strncpy(wire.scientific_name, snap->scientific_name, CORE_LINK_NAME_MAX_LEN);
+        wire.scientific_name[CORE_LINK_NAME_MAX_LEN] = '\0';
         strncpy(wire.common_name, snap->common_name, CORE_LINK_NAME_MAX_LEN);
+        wire.common_name[CORE_LINK_NAME_MAX_LEN] = '\0';
         wire.temp_day_c = snap->temp_day_c;
         wire.temp_night_c = snap->temp_night_c;
         wire.humidity_day_pct = snap->humidity_day_pct;
@@ -210,6 +302,255 @@ esp_err_t core_host_link_send_state(const core_link_state_frame_t *frame)
     }
 
     return uart_send_frame(CORE_LINK_MSG_STATE_FULL, buffer, payload_size);
+}
+
+static esp_err_t send_state_delta(const core_link_state_frame_t *frame, bool *out_any_change)
+{
+    if (out_any_change) {
+        *out_any_change = false;
+    }
+    if (!frame) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t buffer[CORE_LINK_MAX_PAYLOAD];
+    core_link_state_delta_header_wire_t header = {
+        .epoch_seconds = frame->epoch_seconds,
+        .terrarium_count = frame->terrarium_count,
+        .changed_count = 0,
+    };
+    memcpy(buffer, &header, sizeof(header));
+    size_t offset = sizeof(header);
+    uint8_t changed = 0;
+
+    for (uint8_t i = 0; i < frame->terrarium_count; ++i) {
+        const core_link_terrarium_snapshot_t *snap = &frame->terrariums[i];
+        const core_link_terrarium_snapshot_t *prev = find_previous_snapshot(snap->terrarium_id);
+        if (!prev) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        core_link_delta_field_mask_t mask = 0;
+        if (string_field_changed(snap->scientific_name, prev->scientific_name)) {
+            mask |= CORE_LINK_DELTA_FIELD_SCIENTIFIC_NAME;
+        }
+        if (string_field_changed(snap->common_name, prev->common_name)) {
+            mask |= CORE_LINK_DELTA_FIELD_COMMON_NAME;
+        }
+        if (float_field_changed(snap->temp_day_c, prev->temp_day_c)) {
+            mask |= CORE_LINK_DELTA_FIELD_TEMP_DAY;
+        }
+        if (float_field_changed(snap->temp_night_c, prev->temp_night_c)) {
+            mask |= CORE_LINK_DELTA_FIELD_TEMP_NIGHT;
+        }
+        if (float_field_changed(snap->humidity_day_pct, prev->humidity_day_pct)) {
+            mask |= CORE_LINK_DELTA_FIELD_HUMIDITY_DAY;
+        }
+        if (float_field_changed(snap->humidity_night_pct, prev->humidity_night_pct)) {
+            mask |= CORE_LINK_DELTA_FIELD_HUMIDITY_NIGHT;
+        }
+        if (float_field_changed(snap->lux_day, prev->lux_day)) {
+            mask |= CORE_LINK_DELTA_FIELD_LUX_DAY;
+        }
+        if (float_field_changed(snap->lux_night, prev->lux_night)) {
+            mask |= CORE_LINK_DELTA_FIELD_LUX_NIGHT;
+        }
+        if (float_field_changed(snap->hydration_pct, prev->hydration_pct)) {
+            mask |= CORE_LINK_DELTA_FIELD_HYDRATION;
+        }
+        if (float_field_changed(snap->stress_pct, prev->stress_pct)) {
+            mask |= CORE_LINK_DELTA_FIELD_STRESS;
+        }
+        if (float_field_changed(snap->health_pct, prev->health_pct)) {
+            mask |= CORE_LINK_DELTA_FIELD_HEALTH;
+        }
+        if (snap->last_feeding_timestamp != prev->last_feeding_timestamp) {
+            mask |= CORE_LINK_DELTA_FIELD_LAST_FEED;
+        }
+        if (float_field_changed(snap->activity_score, prev->activity_score)) {
+            mask |= CORE_LINK_DELTA_FIELD_ACTIVITY;
+        }
+
+        if (!mask) {
+            continue;
+        }
+
+        if (offset + sizeof(core_link_state_delta_entry_wire_t) > CORE_LINK_MAX_PAYLOAD) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        core_link_state_delta_entry_wire_t entry = {
+            .terrarium_id = snap->terrarium_id,
+            .field_mask = mask,
+        };
+        memcpy(buffer + offset, &entry, sizeof(entry));
+        offset += sizeof(entry);
+
+        if (mask & CORE_LINK_DELTA_FIELD_SCIENTIFIC_NAME) {
+            if (offset + CORE_LINK_DELTA_STRING_BYTES > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, snap->scientific_name, CORE_LINK_DELTA_STRING_BYTES);
+            offset += CORE_LINK_DELTA_STRING_BYTES;
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_COMMON_NAME) {
+            if (offset + CORE_LINK_DELTA_STRING_BYTES > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, snap->common_name, CORE_LINK_DELTA_STRING_BYTES);
+            offset += CORE_LINK_DELTA_STRING_BYTES;
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_TEMP_DAY) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->temp_day_c, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_TEMP_NIGHT) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->temp_night_c, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HUMIDITY_DAY) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->humidity_day_pct, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HUMIDITY_NIGHT) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->humidity_night_pct, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LUX_DAY) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->lux_day, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LUX_NIGHT) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->lux_night, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HYDRATION) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->hydration_pct, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_STRESS) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->stress_pct, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_HEALTH) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->health_pct, sizeof(float));
+            offset += sizeof(float);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_LAST_FEED) {
+            if (offset + sizeof(uint32_t) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->last_feeding_timestamp, sizeof(uint32_t));
+            offset += sizeof(uint32_t);
+        }
+        if (mask & CORE_LINK_DELTA_FIELD_ACTIVITY) {
+            if (offset + sizeof(float) > CORE_LINK_MAX_PAYLOAD) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(buffer + offset, &snap->activity_score, sizeof(float));
+            offset += sizeof(float);
+        }
+
+        ++changed;
+    }
+
+    ((core_link_state_delta_header_wire_t *)buffer)->changed_count = changed;
+    if (out_any_change) {
+        *out_any_change = changed > 0;
+    }
+
+    size_t payload_length = offset;
+    return uart_send_frame(CORE_LINK_MSG_STATE_DELTA, buffer, payload_length);
+}
+
+static const core_link_terrarium_snapshot_t *find_previous_snapshot(uint8_t terrarium_id)
+{
+    if (!s_last_state_valid) {
+        return NULL;
+    }
+
+    for (uint8_t i = 0; i < s_last_sent_state.terrarium_count; ++i) {
+        if (s_last_sent_state.terrariums[i].terrarium_id == terrarium_id) {
+            return &s_last_sent_state.terrariums[i];
+        }
+    }
+
+    return NULL;
+}
+
+static void store_last_state(const core_link_state_frame_t *frame)
+{
+    if (!frame) {
+        return;
+    }
+
+    memset(&s_last_sent_state, 0, sizeof(s_last_sent_state));
+    memcpy(&s_last_sent_state, frame, sizeof(*frame));
+    s_last_state_valid = true;
+}
+
+static void schedule_full_frame(void)
+{
+    s_force_next_full = true;
+}
+
+static bool ensure_baseline_compatible(const core_link_state_frame_t *frame)
+{
+    if (!frame || !s_last_state_valid) {
+        return false;
+    }
+
+    if (frame->terrarium_count != s_last_sent_state.terrarium_count) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < frame->terrarium_count; ++i) {
+        if (!find_previous_snapshot(frame->terrariums[i].terrarium_id)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool float_field_changed(float a, float b)
+{
+    return fabsf(a - b) > CORE_HOST_DELTA_FLOAT_EPSILON;
+}
+
+static bool string_field_changed(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return a != b;
+    }
+    return strncmp(a, b, CORE_LINK_DELTA_STRING_BYTES) != 0;
 }
 
 esp_err_t core_host_link_send_ping(void)
@@ -337,6 +678,7 @@ static void update_display_alive(bool alive)
     s_watchdog_triggered = true;
     s_display_alive = false;
     s_ping_in_flight = false;
+    schedule_full_frame();
     if (s_events) {
         xEventGroupClearBits(s_events, CORE_HOST_EVENT_DISPLAY_READY);
     }
@@ -405,6 +747,7 @@ static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint
                 s_display_info.height = info.height;
                 s_display_info.protocol_version = info.protocol_version;
                 xEventGroupSetBits(s_events, CORE_HOST_EVENT_DISPLAY_READY);
+                schedule_full_frame();
                 ESP_LOGI(TAG, "Display ready: %ux%u (protocol v%u)", info.width, info.height, info.protocol_version);
                 if (s_display_cb) {
                     s_display_cb(&s_display_info, s_display_ctx);
@@ -412,6 +755,7 @@ static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint
             }
             break;
         case CORE_LINK_MSG_REQUEST_STATE:
+            schedule_full_frame();
             if (s_request_cb) {
                 s_request_cb(s_request_ctx);
             }

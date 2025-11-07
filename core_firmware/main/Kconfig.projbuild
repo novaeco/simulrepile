@@ -53,7 +53,8 @@ config CORE_APP_STATE_PUBLISH_INTERVAL_MS
     int "State publish interval (ms)"
     default 500
     help
-        Intervalle entre deux envois périodiques de `STATE_FULL`.
+        Intervalle entre deux publications d'état (`STATE_FULL` initial
+        puis `STATE_DELTA`).
 
 config CORE_APP_STATE_BASE_EPOCH
     int "Base epoch timestamp"

@@ -19,10 +19,11 @@ vitesse (par défaut 2 Mbps sur UART1, GPIO43↔GPIO44) encapsulant un protocole
 
 - **Handshake & capabilities** : au démarrage, le DevKitC émet `HELLO`, la Waveshare acquitte avec `HELLO_ACK` et publie sa
   résolution dans un message `DISPLAY_READY`.
-- **Synchronisation d’état** : le DevKitC pousse des trames `STATE_FULL` contenant jusqu’à 4 instantanés de terrariums. Le
-  module d’affichage les stocke via `sim_engine_apply_remote_snapshot()` et désactive la simulation locale.
-- *Note :* le type `STATE_DELTA` auparavant réservé a été retiré du protocole pour éviter toute ambiguïté. Toute mise à jour
-  d’état passe intégralement par `STATE_FULL`.
+- **Synchronisation d’état** : le DevKitC diffuse un `STATE_FULL` initial puis des trames `STATE_DELTA` compactes (masques de
+  champs) pour ne pousser que les variations. L’afficheur fusionne incrémentalement ces deltas, conserve un cache local et
+  redemande un `STATE_FULL` en cas d’incohérence.
+- *Note :* un `STATE_FULL` rafraîchit périodiquement la base (≈30 s ou sur demande) afin de garantir une re-synchronisation
+  robuste même si des deltas sont perdus.
 - **Événements tactiles** : l’API `core_link_send_touch_event()` prépare l’intégration future du driver I²C pour remonter les
   contacts vers le cœur.
 
