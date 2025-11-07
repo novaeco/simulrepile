@@ -53,6 +53,14 @@ extern "C" {
  * `last_feeding_timestamp`) restent prises en charge pour assurer la
  * rétrocompatibilité.
  *
+ * Clés optionnelles supplémentaires :
+ * - `feeding_interval_hours` (racine ou `metrics.feeding.interval_hours`) pour
+ *   ajuster la fréquence de nourrissage simulée.
+ * - `feeding_intake_pct` (racine ou `metrics.feeding.intake_pct`) pour
+ *   calibrer l'impact des repas sur l'hydratation.
+ * - `metrics.hydration_pct`, `metrics.stress_pct`, `metrics.health_pct` et
+ *   `metrics.activity_score` afin d'imposer des valeurs de départ précises.
+ *
  * @param base_path Chemin racine à utiliser pour une recharge à chaud. Passer
  *                  `NULL` pour utiliser le chemin courant (menuconfig).
  * @return ESP_OK si des profils ont été chargés depuis un FS, ESP_ERR_NOT_FOUND

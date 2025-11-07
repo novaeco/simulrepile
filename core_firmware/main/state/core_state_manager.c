@@ -16,8 +16,11 @@
 #include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
 
-#define CORE_STATE_TERRARIUM_COUNT 4
+#define CORE_STATE_TERRARIUM_COUNT CORE_LINK_MAX_TERRARIUMS
 #define PROFILE_PATH_MAX 256
+
+_Static_assert(CORE_STATE_TERRARIUM_COUNT <= CORE_LINK_MAX_TERRARIUMS,
+               "State manager terrarium capacity must not exceed link payload");
 
 typedef struct {
     uint8_t id;
@@ -703,20 +706,28 @@ void core_state_manager_build_frame(core_link_state_frame_t *frame)
     }
 
     core_state_slot_t snapshot[CORE_STATE_TERRARIUM_COUNT];
+    memset(snapshot, 0, sizeof(snapshot));
     size_t count = 0;
 
     portENTER_CRITICAL(&s_slots_lock);
     if (s_slot_count > 0) {
-        memcpy(snapshot, s_slots, s_slot_count * sizeof(core_state_slot_t));
         count = s_slot_count;
+        if (count > CORE_STATE_TERRARIUM_COUNT) {
+            count = CORE_STATE_TERRARIUM_COUNT;
+        }
+        memcpy(snapshot, s_slots, count * sizeof(core_state_slot_t));
     }
     portEXIT_CRITICAL(&s_slots_lock);
 
     memset(frame, 0, sizeof(*frame));
     frame->epoch_seconds = current_epoch_seconds();
-    frame->terrarium_count = (uint8_t)count;
+    size_t serialized = count;
+    if (serialized > CORE_LINK_MAX_TERRARIUMS) {
+        serialized = CORE_LINK_MAX_TERRARIUMS;
+    }
+    frame->terrarium_count = (uint8_t)serialized;
 
-    for (uint8_t i = 0; i < count && i < CORE_LINK_MAX_TERRARIUMS; ++i) {
+    for (uint8_t i = 0; i < frame->terrarium_count; ++i) {
         core_link_terrarium_snapshot_t *snap = &frame->terrariums[i];
         const core_state_slot_t *slot = &snapshot[i];
 

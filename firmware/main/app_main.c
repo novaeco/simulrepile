@@ -15,6 +15,7 @@
 #include "persist/save_manager.h"
 #include "sim/sim_engine.h"
 #include "ui/ui_root.h"
+#include "ui/ui_settings.h"
 #include "updates/updates_manager.h"
 
 #include "sdkconfig.h"
@@ -27,6 +28,7 @@ static void ui_loop_task(void *ctx);
 static void handle_core_state(const core_link_state_frame_t *frame, void *ctx);
 static void handle_core_link_status(bool connected, void *ctx);
 static void handle_boot_updates(void);
+static void handle_command_ack(core_link_command_opcode_t opcode, esp_err_t status, uint8_t terrarium_count, void *ctx);
 
 void app_main(void)
 {
@@ -52,6 +54,7 @@ void app_main(void)
     ESP_ERROR_CHECK(core_link_init(&link_cfg));
     ESP_ERROR_CHECK(core_link_register_state_callback(handle_core_state, NULL));
     ESP_ERROR_CHECK(core_link_register_status_callback(handle_core_link_status, NULL));
+    ESP_ERROR_CHECK(core_link_register_command_ack_callback(handle_command_ack, NULL));
     ESP_ERROR_CHECK(core_link_start());
 
     esp_err_t wait_err = core_link_wait_for_handshake(link_cfg.handshake_timeout_ticks);
@@ -155,5 +158,28 @@ static void handle_core_link_status(bool connected, void *ctx)
         ESP_LOGW(TAG, "Core link watchdog tripped: falling back to local simulation");
         ui_root_set_link_alert(true, alert);
         s_resync_banner_active = false;
+    }
+}
+
+static void handle_command_ack(core_link_command_opcode_t opcode, esp_err_t status, uint8_t terrarium_count, void *ctx)
+{
+    (void)ctx;
+
+    if (opcode != CORE_LINK_CMD_RELOAD_PROFILES) {
+        return;
+    }
+
+    ui_settings_on_profiles_reload(status, terrarium_count);
+
+    if (status == ESP_OK || status == ESP_ERR_NOT_FOUND) {
+        sim_engine_hint_remote_count(terrarium_count);
+        if (core_link_is_ready()) {
+            esp_err_t err = core_link_request_state_sync();
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Échec requête sync après reload: %s", esp_err_to_name(err));
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "Reload profils rejeté: %s", esp_err_to_name(status));
     }
 }

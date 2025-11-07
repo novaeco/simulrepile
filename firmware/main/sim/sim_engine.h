@@ -16,6 +16,7 @@ size_t sim_engine_get_count(void);
 const terrarium_state_t *sim_engine_get_state(size_t index);
 esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame);
 const char *sim_engine_handle_link_status(bool connected);
+void sim_engine_hint_remote_count(size_t count);
 
 #ifdef __cplusplus
 }

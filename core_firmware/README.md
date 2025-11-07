@@ -88,6 +88,29 @@ alphabétiquement avant chargement pour garantir un ordre déterministe. Les anc
 au niveau racine (`hydration_pct`, `stress_pct`, `health_pct`, `activity_score`,
 `last_feeding_timestamp`) restent acceptées pour la rétrocompatibilité.
 
+Résumé des principales clés :
+
+| Champ | Type | Obligatoire | Description |
+| --- | --- | --- | --- |
+| `scientific_name` | Chaîne | Oui | Nom scientifique affiché dans l'UI et transmis au pont Core Link. |
+| `common_name` | Chaîne | Oui | Nom commun lisible par l'utilisateur. |
+| `environment.temp_day_c` | Nombre | Oui | Température diurne de référence (°C). |
+| `environment.temp_night_c` | Nombre | Oui | Température nocturne de référence (°C). |
+| `environment.humidity_day_pct` | Nombre | Oui | Humidité relative diurne (%). |
+| `environment.humidity_night_pct` | Nombre | Oui | Humidité relative nocturne (%). |
+| `environment.lux_day` | Nombre | Oui | Niveau lumineux diurne (lux). |
+| `environment.lux_night` | Nombre | Oui | Niveau lumineux nocturne (lux). |
+| `cycle_speed` | Nombre | Non | Vitesse de cycle circadien (rad/s) ; défaut selon le slot. |
+| `phase_offset` | Nombre | Non | Décalage de phase appliqué aux oscillations. |
+| `enrichment_factor` | Nombre | Non | Influence de l'enrichissement sur le stress/activité. |
+| `metrics.hydration_pct` | Nombre | Non | Hydratation initiale forcée (%). |
+| `metrics.stress_pct` | Nombre | Non | Stress initial forcé (%). |
+| `metrics.health_pct` | Nombre | Non | Santé initiale forcée (%). |
+| `metrics.activity_score` | Nombre | Non | Score d'activité initial (0.0 – 1.0). |
+| `metrics.feeding.interval_hours` | Nombre | Non | Intervalle de nourrissage simulé (heures). |
+| `metrics.feeding.intake_pct` | Nombre | Non | Intensité du repas (impact hydratation/stress). |
+| `metrics.feeding.last_timestamp` | Nombre | Non | Timestamp Unix du dernier repas enregistré. |
+
 Les profils peuvent être rechargés à chaud soit en invoquant directement
 `core_state_manager_reload_profiles("/nouveau/chemin")` côté DevKitC, soit via la commande
 UART `CORE_LINK_CMD_RELOAD_PROFILES` (exposée côté afficheur par

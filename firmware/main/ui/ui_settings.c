@@ -9,6 +9,8 @@
 
 #include "bsp/exio.h"
 #include "i18n/i18n_manager.h"
+#include "link/core_link.h"
+#include "lvgl_port.h"
 #include "updates/updates_manager.h"
 #include "ui/ui_theme.h"
 #include "esp_err.h"
@@ -38,6 +40,7 @@ static lv_obj_t *s_update_last_flash_label = NULL;
 static lv_obj_t *s_update_status_label = NULL;
 static lv_obj_t *s_update_check_btn = NULL;
 static lv_obj_t *s_update_apply_btn = NULL;
+static lv_obj_t *s_profiles_status_label = NULL;
 
 static uint32_t s_autosave_interval_s = CONFIG_APP_AUTOSAVE_INTERVAL_S;
 static bool s_usb_selected = true;
@@ -55,6 +58,7 @@ static void ui_settings_updates_refresh(void);
 static void ui_settings_updates_refresh_last_flash(void);
 static void ui_settings_updates_check_cb(lv_event_t *event);
 static void ui_settings_updates_apply_cb(lv_event_t *event);
+static void ui_settings_profiles_reload_cb(lv_event_t *event);
 
 void ui_settings_create(lv_obj_t *parent)
 {
@@ -220,6 +224,30 @@ static void ui_settings_build_layout(lv_obj_t *parent)
 
     s_autosave_label = lv_label_create(autosave_card);
     ui_theme_apply_label_style(s_autosave_label, false);
+    ui_settings_update_autosave_label();
+
+    lv_obj_t *profiles_card = lv_obj_create(s_root);
+    ui_theme_apply_panel_style(profiles_card);
+    lv_obj_set_size(profiles_card, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(profiles_card, 16, LV_PART_MAIN);
+    lv_obj_set_flex_flow(profiles_card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(profiles_card, 12, LV_PART_MAIN);
+
+    lv_obj_t *profiles_label = lv_label_create(profiles_card);
+    lv_label_set_text(profiles_label, "Profils terrarium depuis /sdcard/profiles");
+    ui_theme_apply_label_style(profiles_label, true);
+
+    lv_obj_t *profiles_reload_btn = lv_button_create(profiles_card);
+    lv_obj_set_size(profiles_reload_btn, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_add_event_cb(profiles_reload_btn, ui_settings_profiles_reload_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *reload_label = lv_label_create(profiles_reload_btn);
+    lv_label_set_text(reload_label, "Recharger les profils");
+    ui_theme_apply_label_style(reload_label, true);
+
+    s_profiles_status_label = lv_label_create(profiles_card);
+    lv_label_set_text(s_profiles_status_label, "Dernier rechargement : en attente");
+    ui_theme_apply_label_style(s_profiles_status_label, false);
 
     lv_obj_t *usb_card = lv_obj_create(s_root);
     ui_theme_apply_panel_style(usb_card);
@@ -447,4 +475,42 @@ static void ui_settings_updates_apply_cb(lv_event_t *event)
 
     ui_settings_updates_refresh_last_flash();
     s_events_suspended = false;
+}
+
+static void ui_settings_profiles_reload_cb(lv_event_t *event)
+{
+    (void)event;
+    if (!s_profiles_status_label) {
+        return;
+    }
+
+    esp_err_t err = core_link_request_profile_reload(NULL);
+    if (err == ESP_OK) {
+        lv_label_set_text(s_profiles_status_label, "Rechargement demandé... (voir journal)");
+    } else {
+        lv_label_set_text_fmt(s_profiles_status_label, "Échec requête : %s", esp_err_to_name(err));
+    }
+}
+
+void ui_settings_on_profiles_reload(esp_err_t status, uint8_t terrarium_count)
+{
+    if (!s_profiles_status_label) {
+        return;
+    }
+
+    lvgl_port_lock();
+    if (status == ESP_OK) {
+        lv_label_set_text_fmt(s_profiles_status_label,
+                              "Profils rechargés (%u terrariums)",
+                              (unsigned)terrarium_count);
+    } else if (status == ESP_ERR_NOT_FOUND) {
+        lv_label_set_text_fmt(s_profiles_status_label,
+                              "Fallback profils intégrés (%u terrariums)",
+                              (unsigned)terrarium_count);
+    } else {
+        lv_label_set_text_fmt(s_profiles_status_label,
+                              "Erreur rechargement : %s",
+                              esp_err_to_name(status));
+    }
+    lvgl_port_unlock();
 }
