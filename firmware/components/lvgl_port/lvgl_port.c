@@ -7,6 +7,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
+#include "bsp/waveshare_7b_lgfx.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -14,8 +16,8 @@
 
 #include "lvgl.h"
 
-#define LVGL_PORT_HOR_RES            1024
-#define LVGL_PORT_VER_RES            600
+#define LVGL_PORT_HOR_RES            WAVESHARE_7B_LCD_HOR_RES
+#define LVGL_PORT_VER_RES            WAVESHARE_7B_LCD_VER_RES
 #define LVGL_TICK_TASK_STACK_SIZE    2048
 #define LVGL_RENDER_TASK_STACK_SIZE  6144
 #define LVGL_TICK_TASK_PRIORITY      6
@@ -56,9 +58,6 @@ static void lvgl_drv_update_cb(lv_display_t *disp);
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data);
 static void lvgl_port_reset_state(void);
 
-extern esp_err_t waveshare_7b_lgfx_init(void);
-extern bool waveshare_7b_lgfx_flush(int32_t x, int32_t y, int32_t w, int32_t h, const void *pixel_data);
-
 esp_err_t lvgl_port_init(void)
 {
     esp_err_t err = ESP_OK;
@@ -78,7 +77,8 @@ esp_err_t lvgl_port_init(void)
     s_framebuffer_size = (size_t)LVGL_PORT_HOR_RES * LVGL_PORT_VER_RES * bytes_per_px;
 
     for (size_t i = 0; i < 2; ++i) {
-        s_framebuffers[i] = heap_caps_malloc(s_framebuffer_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_framebuffers[i] = heap_caps_malloc(s_framebuffer_size,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
         if (!s_framebuffers[i]) {
             err = ESP_ERR_NO_MEM;
             goto cleanup;
@@ -86,7 +86,8 @@ esp_err_t lvgl_port_init(void)
         memset(s_framebuffers[i], 0, s_framebuffer_size);
     }
 
-    ESP_GOTO_ON_ERROR(waveshare_7b_lgfx_init(), cleanup, TAG, "LovyanGFX init failed");
+    ESP_GOTO_ON_ERROR(waveshare_7b_lgfx_init(LVGL_PORT_HOR_RES, LVGL_PORT_VER_RES), cleanup, TAG,
+                      "LovyanGFX init failed");
 
     s_render_sem = xSemaphoreCreateBinary();
     if (!s_render_sem) {
@@ -282,7 +283,7 @@ static void lvgl_drv_update_cb(lv_display_t *disp)
 {
     (void)disp;
 
-    esp_err_t err = waveshare_7b_lgfx_init();
+    esp_err_t err = waveshare_7b_lgfx_init(LVGL_PORT_HOR_RES, LVGL_PORT_VER_RES);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "LovyanGFX re-init failed: %s", esp_err_to_name(err));
     }

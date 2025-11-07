@@ -12,11 +12,24 @@ public:
     {
         using namespace lgfx::v1;
 
+        auto detail_cfg = _panel.config_detail();
+        detail_cfg.use_psram = 2;
+        _panel.config_detail(detail_cfg);
+
+        _panel.setBus(&_bus);
+        _panel.setLight(&_light);
+        setPanel(&_panel);
+    }
+
+    void configure(uint16_t hor_res, uint16_t ver_res)
+    {
+        using namespace lgfx::v1;
+
         auto panel_cfg = _panel.config();
-        panel_cfg.memory_width = 1024;
-        panel_cfg.memory_height = 600;
-        panel_cfg.panel_width = 1024;
-        panel_cfg.panel_height = 600;
+        panel_cfg.memory_width = hor_res;
+        panel_cfg.memory_height = ver_res;
+        panel_cfg.panel_width = hor_res;
+        panel_cfg.panel_height = ver_res;
         panel_cfg.offset_x = 0;
         panel_cfg.offset_y = 0;
         panel_cfg.offset_rotation = 0;
@@ -61,10 +74,6 @@ public:
         _bus.config(bus_cfg);
         _panel.setBus(&_bus);
 
-        auto detail_cfg = _panel.config_detail();
-        detail_cfg.use_psram = 2;
-        _panel.config_detail(detail_cfg);
-
         auto light_cfg = _light.config();
         light_cfg.freq = 5000;
         light_cfg.pin_bl = LCD_PIN_BACKLIGHT;
@@ -72,8 +81,6 @@ public:
         light_cfg.invert = false;
         _light.config(light_cfg);
         _panel.setLight(&_light);
-
-        setPanel(&_panel);
     }
 
 private:
@@ -85,19 +92,23 @@ private:
 static LGFXWaveshare7B s_lgfx;
 static const char *TAG = "lgfx";
 
-extern "C" esp_err_t waveshare_7b_lgfx_init(void)
+extern "C" esp_err_t waveshare_7b_lgfx_init(uint16_t hor_res, uint16_t ver_res)
 {
-    static bool s_initialized = false;
-    if (s_initialized) {
-        return ESP_OK;
-    }
+    static bool s_first_init = true;
+
+    s_lgfx.configure(hor_res, ver_res);
+
     if (!s_lgfx.init()) {
         ESP_LOGE(TAG, "LovyanGFX init failed");
         return ESP_FAIL;
     }
-    s_lgfx.fillScreen(0x0000);
-    s_initialized = true;
-    ESP_LOGI(TAG, "LovyanGFX RGB panel ready");
+
+    if (s_first_init) {
+        s_lgfx.fillScreen(0x0000);
+        ESP_LOGI(TAG, "LovyanGFX RGB panel ready (%ux%u)", hor_res, ver_res);
+        s_first_init = false;
+    }
+
     return ESP_OK;
 }
 
