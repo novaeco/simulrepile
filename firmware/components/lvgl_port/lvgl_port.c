@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "esp_check.h"
+#include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
@@ -50,6 +51,8 @@ static struct {
 static void lvgl_tick_task(void *arg);
 static void lvgl_render_task(void *arg);
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map);
+static void lvgl_rounder_cb(lv_display_t *disp, lv_area_t *area);
+static void lvgl_drv_update_cb(lv_display_t *disp);
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data);
 static void lvgl_port_reset_state(void);
 
@@ -106,6 +109,8 @@ esp_err_t lvgl_port_init(void)
     lv_display_set_color_format(s_display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(s_display, s_framebuffers[0], s_framebuffers[1], s_framebuffer_size, LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(s_display, lvgl_flush_cb);
+    lv_display_set_rounder_cb(s_display, lvgl_rounder_cb);
+    lv_display_set_driver_update_cb(s_display, lvgl_drv_update_cb);
     lv_display_set_default(s_display);
 
     s_touch_indev = lv_indev_create();
@@ -253,6 +258,34 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     }
 
     lv_display_flush_ready(disp);
+}
+
+static void lvgl_rounder_cb(lv_display_t *disp, lv_area_t *area)
+{
+    (void)disp;
+
+    if (area->x1 < 0) {
+        area->x1 = 0;
+    }
+    if (area->y1 < 0) {
+        area->y1 = 0;
+    }
+    if (area->x2 >= (int32_t)(LVGL_PORT_HOR_RES - 1)) {
+        area->x2 = LVGL_PORT_HOR_RES - 1;
+    }
+    if (area->y2 >= (int32_t)(LVGL_PORT_VER_RES - 1)) {
+        area->y2 = LVGL_PORT_VER_RES - 1;
+    }
+}
+
+static void lvgl_drv_update_cb(lv_display_t *disp)
+{
+    (void)disp;
+
+    esp_err_t err = waveshare_7b_lgfx_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "LovyanGFX re-init failed: %s", esp_err_to_name(err));
+    }
 }
 
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
