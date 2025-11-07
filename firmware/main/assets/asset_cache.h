@@ -9,8 +9,10 @@ extern "C" {
 #endif
 
 typedef enum {
-    ASSET_TYPE_IMAGE,
+    ASSET_TYPE_IMAGE_PNG = 0,
+    ASSET_TYPE_JSON,
     ASSET_TYPE_TEXT,
+    ASSET_TYPE_BINARY,
 } asset_type_t;
 
 typedef struct {

@@ -53,6 +53,15 @@ config APP_THEME_HIGH_CONTRAST
         Enables the accessible color palette on first boot. Users may
         revert to the standard theme from the settings screen.
 
+config APP_ASSET_CACHE_CAPACITY
+    int "Asset cache capacity (entries)"
+    range 1 128
+    default 8
+    help
+        Maximum number of assets simultaneously kept in PSRAM by the
+        /sdcard-backed cache. Entries above this limit are evicted based
+        on a least-recently-used policy with periodic idle sweeps.
+
 menu "Core Link Bridge"
 
 config APP_CORE_LINK_UART_PORT
