@@ -112,3 +112,16 @@ extern "C" bool waveshare_7b_lgfx_flush(int32_t x, int32_t y, int32_t w, int32_t
     s_lgfx.endWrite();
     return true;
 }
+
+extern "C" void waveshare_7b_lgfx_set_backlight(uint8_t percent)
+{
+#if LCD_PIN_BACKLIGHT >= 0
+    if (percent > 100) {
+        percent = 100;
+    }
+    uint32_t brightness = (percent * 255U + 50U) / 100U;
+    s_lgfx.setBrightness((uint8_t)brightness);
+#else
+    (void)percent;
+#endif
+}

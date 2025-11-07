@@ -97,6 +97,8 @@ static esp_err_t configure_rgb_panel(void)
 {
     ESP_RETURN_ON_ERROR(waveshare_7b_lgfx_init(), TAG, "LovyanGFX init failed");
 
+    waveshare_7b_lgfx_set_backlight(s_backlight_enabled ? s_backlight_percent : 0);
+
 #if LCD_PIN_BACKLIGHT >= 0
     if (!s_pwm_initialized) {
         ledc_timer_config_t timer_cfg = {
@@ -433,9 +435,11 @@ esp_err_t bsp_backlight_enable(bool enable)
     if (enable) {
         ESP_RETURN_ON_ERROR(exio_enable_display(true), TAG, "Display enable failed");
         ESP_RETURN_ON_ERROR(exio_set_pwm(s_backlight_percent), TAG, "PWM restore failed");
+        waveshare_7b_lgfx_set_backlight(s_backlight_percent);
     } else {
         ESP_RETURN_ON_ERROR(exio_set_pwm(0), TAG, "PWM disable failed");
         ESP_RETURN_ON_ERROR(exio_enable_display(false), TAG, "Display disable failed");
+        waveshare_7b_lgfx_set_backlight(0);
     }
     return ESP_OK;
 }
@@ -458,6 +462,7 @@ esp_err_t bsp_backlight_set(uint8_t percent)
         ESP_RETURN_ON_ERROR(ledc_update_duty(BACKLIGHT_LEDC_MODE, BACKLIGHT_LEDC_CHANNEL), TAG, "LEDC update failed");
     }
 #endif
+    waveshare_7b_lgfx_set_backlight(percent);
     ESP_RETURN_ON_ERROR(exio_set_pwm(percent), TAG, "PWM update failed");
     return ESP_OK;
 }
