@@ -158,6 +158,41 @@ esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame)
     return ESP_OK;
 }
 
+void sim_engine_hint_remote_count(size_t count)
+{
+    if (count > MAX_TERRARIUMS) {
+        count = MAX_TERRARIUMS;
+    }
+
+    portENTER_CRITICAL(&s_state_lock);
+    size_t previous = s_terrarium_count;
+    if (count != previous) {
+        if (count < previous) {
+            for (size_t i = count; i < previous; ++i) {
+                memset(&s_remote_profiles[i], 0, sizeof(s_remote_profiles[i]));
+                memset(s_remote_scientific_names[i], 0, sizeof(s_remote_scientific_names[i]));
+                memset(s_remote_common_names[i], 0, sizeof(s_remote_common_names[i]));
+                memset(&s_terrariums[i], 0, sizeof(s_terrariums[i]));
+            }
+        } else {
+            for (size_t i = previous; i < count; ++i) {
+                memset(&s_remote_profiles[i], 0, sizeof(s_remote_profiles[i]));
+                memset(s_remote_scientific_names[i], 0, sizeof(s_remote_scientific_names[i]));
+                memset(s_remote_common_names[i], 0, sizeof(s_remote_common_names[i]));
+                memset(&s_terrariums[i], 0, sizeof(s_terrariums[i]));
+                s_terrariums[i].profile = NULL;
+            }
+        }
+        s_terrarium_count = count;
+    }
+    if (count == 0) {
+        s_remote_active = false;
+    }
+    portEXIT_CRITICAL(&s_state_lock);
+
+    ESP_LOGI(TAG, "Terrarium count hint updated to %u", (unsigned)count);
+}
+
 const char *sim_engine_handle_link_status(bool connected)
 {
     const char *alert = NULL;
