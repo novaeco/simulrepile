@@ -39,6 +39,11 @@ typedef struct {
     float stress_pct;
     float health_pct;
     float activity_score;
+    float target_hydration_pct;
+    float target_stress_pct;
+    float target_health_pct;
+    float feeding_interval_hours;
+    float feeding_intake_pct;
     float cycle_speed;
     float phase_offset;
     float enrichment_factor;
@@ -183,6 +188,34 @@ static void apply_slot_defaults(core_state_slot_t *slot, size_t idx, uint32_t no
         slot->activity_score = 0.5f;
     }
     slot->activity_score = clampf(slot->activity_score, 0.0f, 1.0f);
+
+    if (!isfinite(slot->target_hydration_pct)) {
+        slot->target_hydration_pct = slot->hydration_pct;
+    }
+    slot->target_hydration_pct = clampf(slot->target_hydration_pct, 0.0f, 100.0f);
+
+    if (!isfinite(slot->target_stress_pct)) {
+        slot->target_stress_pct = slot->stress_pct;
+    }
+    slot->target_stress_pct = clampf(slot->target_stress_pct, 0.0f, 100.0f);
+
+    if (!isfinite(slot->target_health_pct)) {
+        slot->target_health_pct = slot->health_pct;
+    }
+    slot->target_health_pct = clampf(slot->target_health_pct, 0.0f, 100.0f);
+
+    if (!isfinite(slot->feeding_interval_hours) || slot->feeding_interval_hours <= 0.0f) {
+        float base_interval = 72.0f - (float)idx * 6.0f;
+        if (base_interval < 24.0f) {
+            base_interval = 24.0f;
+        }
+        slot->feeding_interval_hours = base_interval;
+    }
+
+    if (!isfinite(slot->feeding_intake_pct) || slot->feeding_intake_pct <= 0.0f) {
+        slot->feeding_intake_pct = 75.0f;
+    }
+
     if (slot->last_feeding_timestamp == 0U) {
         slot->last_feeding_timestamp = now_epoch - (uint32_t)(6 * 3600 * (idx + 1));
     }
@@ -292,6 +325,11 @@ static bool parse_profile_from_json(const char *path, core_state_slot_t *slot, s
     slot->stress_pct = NAN;
     slot->health_pct = NAN;
     slot->activity_score = NAN;
+    slot->target_hydration_pct = NAN;
+    slot->target_stress_pct = NAN;
+    slot->target_health_pct = NAN;
+    slot->feeding_interval_hours = NAN;
+    slot->feeding_intake_pct = NAN;
 
     json_copy_string(root, "scientific_name", slot->scientific_name, sizeof(slot->scientific_name), "Unknown species");
     json_copy_string(root, "common_name", slot->common_name, sizeof(slot->common_name), "Terrarium");
@@ -319,9 +357,55 @@ static bool parse_profile_from_json(const char *path, core_state_slot_t *slot, s
     slot->health_pct = json_get_number(root, "health_pct", slot->health_pct);
     slot->activity_score = json_get_number(root, "activity_score", slot->activity_score);
 
+    if (isfinite(slot->hydration_pct)) {
+        slot->target_hydration_pct = slot->hydration_pct;
+    }
+    if (isfinite(slot->stress_pct)) {
+        slot->target_stress_pct = slot->stress_pct;
+    }
+    if (isfinite(slot->health_pct)) {
+        slot->target_health_pct = slot->health_pct;
+    }
+
     const cJSON *feeding_node = cJSON_GetObjectItemCaseSensitive(root, "last_feeding_timestamp");
     if (cJSON_IsNumber(feeding_node) && feeding_node->valuedouble >= 0.0) {
         slot->last_feeding_timestamp = (uint32_t)feeding_node->valuedouble;
+    }
+
+    const cJSON *metrics = cJSON_GetObjectItemCaseSensitive(root, "metrics");
+    if (cJSON_IsObject(metrics)) {
+        float hydration = json_get_number(metrics, "hydration_pct", slot->hydration_pct);
+        if (isfinite(hydration)) {
+            slot->hydration_pct = hydration;
+            slot->target_hydration_pct = hydration;
+        }
+
+        float stress = json_get_number(metrics, "stress_pct", slot->stress_pct);
+        if (isfinite(stress)) {
+            slot->stress_pct = stress;
+            slot->target_stress_pct = stress;
+        }
+
+        float health = json_get_number(metrics, "health_pct", slot->health_pct);
+        if (isfinite(health)) {
+            slot->health_pct = health;
+            slot->target_health_pct = health;
+        }
+
+        float activity = json_get_number(metrics, "activity_score", slot->activity_score);
+        if (isfinite(activity)) {
+            slot->activity_score = activity;
+        }
+
+        const cJSON *feeding = cJSON_GetObjectItemCaseSensitive(metrics, "feeding");
+        if (cJSON_IsObject(feeding)) {
+            slot->feeding_interval_hours = json_get_number(feeding, "interval_hours", slot->feeding_interval_hours);
+            slot->feeding_intake_pct = json_get_number(feeding, "intake_pct", slot->feeding_intake_pct);
+            const cJSON *feed_ts = cJSON_GetObjectItemCaseSensitive(feeding, "last_timestamp");
+            if (cJSON_IsNumber(feed_ts) && feed_ts->valuedouble >= 0.0) {
+                slot->last_feeding_timestamp = (uint32_t)feed_ts->valuedouble;
+            }
+        }
     }
 
     cJSON_Delete(root);
@@ -513,6 +597,8 @@ void core_state_manager_init(void)
 void core_state_manager_update(float delta_seconds)
 {
     float time_s = (float)(esp_timer_get_time() / 1000000.0);
+    uint32_t now_epoch = current_epoch_seconds();
+
     portENTER_CRITICAL(&s_slots_lock);
     for (size_t i = 0; i < s_slot_count; ++i) {
         core_state_slot_t *slot = &s_slots[i];
@@ -526,24 +612,56 @@ void core_state_manager_update(float delta_seconds)
         slot->current_lux_day = clampf(slot->base_lux_day + wave * 80.0f, 50.0f, 900.0f);
         slot->current_lux_night = clampf(slot->base_lux_night + (wave_secondary + 1.0f) * 2.0f, 0.0f, 20.0f);
 
-        slot->activity_score = clampf(0.45f + 0.4f * sinf(time_s * slot->cycle_speed * 1.3f + slot->phase_offset), 0.0f, 1.0f);
+        float enrichment = fmaxf(slot->enrichment_factor, 0.5f);
+        float hydration_target = isfinite(slot->target_hydration_pct) ? slot->target_hydration_pct : slot->hydration_pct;
+        float stress_target = isfinite(slot->target_stress_pct) ? slot->target_stress_pct : slot->stress_pct;
+        float health_target = isfinite(slot->target_health_pct) ? slot->target_health_pct : slot->health_pct;
+        float hydration_span = fmaxf(5.0f, 12.0f / enrichment);
 
-        float stress_trend = (30.0f - slot->activity_score * 45.0f + slot->enrichment_factor * 5.0f) * 0.015f;
-        slot->stress_pct = clampf(slot->stress_pct + stress_trend * delta_seconds, 5.0f, 85.0f);
-
-        float hydration_drain = slot->enrichment_factor * (0.20f + 0.05f * (1.0f - slot->activity_score));
-        slot->hydration_pct = clampf(slot->hydration_pct - hydration_drain * delta_seconds, 45.0f, 100.0f);
-
-        if (slot->hydration_pct < 55.0f) {
-            slot->hydration_pct = 90.0f;
-            slot->last_feeding_timestamp = current_epoch_seconds();
-            slot->stress_pct = clampf(slot->stress_pct - 6.0f, 0.0f, 85.0f);
-            slot->health_pct = clampf(slot->health_pct + 3.5f, 0.0f, 100.0f);
+        float interval_hours = slot->feeding_interval_hours;
+        float interval_seconds = (interval_hours > 0.0f) ? interval_hours * 3600.0f : 0.0f;
+        float elapsed_seconds = 0.0f;
+        if (interval_seconds > 0.0f && now_epoch >= slot->last_feeding_timestamp) {
+            elapsed_seconds = (float)(now_epoch - slot->last_feeding_timestamp);
         }
 
-        float hydration_penalty = (70.0f - slot->hydration_pct) * 0.01f;
-        float stress_penalty = slot->stress_pct * 0.006f;
-        slot->health_pct = clampf(slot->health_pct - (hydration_penalty + stress_penalty) * delta_seconds, 65.0f, 100.0f);
+        if (interval_seconds > 0.0f) {
+            if (elapsed_seconds >= interval_seconds) {
+                slot->last_feeding_timestamp = now_epoch;
+                float recovery = fminf(slot->feeding_intake_pct * 0.12f, 10.0f);
+                slot->hydration_pct = clampf(hydration_target + recovery, 0.0f, 100.0f);
+                slot->stress_pct = clampf(stress_target - recovery * 0.6f, 0.0f, 100.0f);
+                elapsed_seconds = 0.0f;
+            } else {
+                float progress = elapsed_seconds / interval_seconds;
+                float min_hydration = clampf(hydration_target - hydration_span, 0.0f, hydration_target);
+                float desired_hydration = hydration_target - (hydration_target - min_hydration) * progress;
+                float hydration_smooth = fminf(delta_seconds * 0.8f, 1.0f);
+                slot->hydration_pct += (desired_hydration - slot->hydration_pct) * hydration_smooth;
+            }
+        } else {
+            float hydration_wave = sinf(time_s * slot->cycle_speed * 0.8f + slot->phase_offset) * (hydration_span * 0.25f);
+            float desired_hydration = hydration_target + hydration_wave;
+            float hydration_smooth = fminf(delta_seconds * 0.8f, 1.0f);
+            slot->hydration_pct += (desired_hydration - slot->hydration_pct) * hydration_smooth;
+        }
+        slot->hydration_pct = clampf(slot->hydration_pct, 0.0f, 100.0f);
+
+        float stress_wave = cosf(time_s * slot->cycle_speed * 0.55f + slot->phase_offset) * (6.0f / enrichment);
+        float desired_stress = clampf(stress_target + stress_wave, 0.0f, 100.0f);
+        float stress_smooth = fminf(delta_seconds * 0.6f, 1.0f);
+        slot->stress_pct += (desired_stress - slot->stress_pct) * stress_smooth;
+        slot->stress_pct = clampf(slot->stress_pct, 0.0f, 100.0f);
+
+        float activity_base = 0.6f - slot->stress_pct * 0.0035f + slot->hydration_pct * 0.0025f;
+        float activity_variation = 0.15f * sinf(time_s * slot->cycle_speed * 1.4f + slot->phase_offset);
+        slot->activity_score = clampf(activity_base + activity_variation, 0.0f, 1.0f);
+
+        float health_offset = (slot->hydration_pct - hydration_target) * 0.2f - (slot->stress_pct - stress_target) * 0.25f;
+        float desired_health = clampf(health_target + health_offset, 0.0f, 100.0f);
+        float health_smooth = fminf(delta_seconds * 0.5f, 1.0f);
+        slot->health_pct += (desired_health - slot->health_pct) * health_smooth;
+        slot->health_pct = clampf(slot->health_pct, 0.0f, 100.0f);
     }
     portEXIT_CRITICAL(&s_slots_lock);
 }

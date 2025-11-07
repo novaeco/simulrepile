@@ -75,6 +75,8 @@ static core_host_request_state_cb_t s_request_cb = NULL;
 static void *s_request_ctx = NULL;
 static core_host_touch_cb_t s_touch_cb = NULL;
 static void *s_touch_ctx = NULL;
+static core_host_command_cb_t s_command_cb = NULL;
+static void *s_command_ctx = NULL;
 static core_host_display_info_t s_display_info = {0};
 static TimerHandle_t s_watchdog_timer = NULL;
 static TickType_t s_last_activity_tick = 0;
@@ -275,6 +277,13 @@ esp_err_t core_host_link_register_touch_cb(core_host_touch_cb_t cb, void *ctx)
     return ESP_OK;
 }
 
+esp_err_t core_host_link_register_command_cb(core_host_command_cb_t cb, void *ctx)
+{
+    s_command_cb = cb;
+    s_command_ctx = ctx;
+    return ESP_OK;
+}
+
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload)
 {
     uint32_t sum = type + (length & 0xFF) + (length >> 8);
@@ -414,6 +423,48 @@ static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint
                 s_touch_cb(&event, s_touch_ctx);
             }
             break;
+        case CORE_LINK_MSG_COMMAND: {
+            if (length < 1) {
+                ESP_LOGW(TAG, "Command frame too short");
+                break;
+            }
+
+            uint8_t opcode = payload[0];
+            const char *argument_ptr = NULL;
+            char argument[CORE_LINK_COMMAND_MAX_ARG_LEN] = {0};
+            if (length > 1) {
+                size_t arg_len = length - 1;
+                if (arg_len >= sizeof(argument)) {
+                    arg_len = sizeof(argument) - 1;
+                }
+                memcpy(argument, payload + 1, arg_len);
+                argument[arg_len] = '\0';
+                argument_ptr = argument;
+            }
+
+            uint8_t terrarium_count = 0;
+            esp_err_t status = ESP_ERR_NOT_SUPPORTED;
+            if (s_command_cb) {
+                ESP_LOGI(TAG, "Command opcode=0x%02X arg=%s", opcode,
+                         argument_ptr && argument_ptr[0] ? argument_ptr : "<default>");
+                status = s_command_cb((core_link_command_opcode_t)opcode, argument_ptr, &terrarium_count, s_command_ctx);
+            }
+
+            if (terrarium_count > CORE_LINK_MAX_TERRARIUMS) {
+                terrarium_count = CORE_LINK_MAX_TERRARIUMS;
+            }
+
+            core_link_command_ack_payload_t ack = {
+                .opcode = opcode,
+                .status = (int32_t)status,
+                .terrarium_count = terrarium_count,
+            };
+            esp_err_t ack_err = uart_send_frame(CORE_LINK_MSG_COMMAND_ACK, &ack, sizeof(ack));
+            if (ack_err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to send command ACK: %s", esp_err_to_name(ack_err));
+            }
+            break;
+        }
         case CORE_LINK_MSG_PING:
             uart_send_frame(CORE_LINK_MSG_PONG, payload, length);
             break;

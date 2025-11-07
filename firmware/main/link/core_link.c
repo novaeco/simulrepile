@@ -48,6 +48,8 @@ static void *s_state_ctx = NULL;
 static uint8_t s_peer_version = 0;
 static core_link_status_cb_t s_status_cb = NULL;
 static void *s_status_ctx = NULL;
+static core_link_command_ack_cb_t s_command_cb = NULL;
+static void *s_command_ctx = NULL;
 static TimerHandle_t s_watchdog_timer = NULL;
 static TickType_t s_last_state_tick = 0;
 static TickType_t s_last_ping_tick = 0;
@@ -205,6 +207,13 @@ esp_err_t core_link_register_status_callback(core_link_status_cb_t cb, void *ctx
     return ESP_OK;
 }
 
+esp_err_t core_link_register_command_ack_callback(core_link_command_ack_cb_t cb, void *ctx)
+{
+    s_command_cb = cb;
+    s_command_ctx = ctx;
+    return ESP_OK;
+}
+
 esp_err_t core_link_queue_touch_event(const core_link_touch_event_t *event)
 {
     ESP_RETURN_ON_FALSE(event, ESP_ERR_INVALID_ARG, TAG, "touch event null");
@@ -272,6 +281,32 @@ esp_err_t core_link_send_display_ready(void)
 esp_err_t core_link_request_state_sync(void)
 {
     return uart_send_frame(CORE_LINK_MSG_REQUEST_STATE, NULL, 0);
+}
+
+esp_err_t core_link_send_command(core_link_command_opcode_t opcode, const char *argument)
+{
+    ESP_RETURN_ON_FALSE(s_started, ESP_ERR_INVALID_STATE, TAG, "link not started");
+
+    core_link_command_payload_t payload = {
+        .opcode = (uint8_t)opcode,
+        .argument = {0},
+    };
+
+    uint16_t payload_len = 1;
+    if (argument && argument[0] != '\0') {
+        strlcpy(payload.argument, argument, sizeof(payload.argument));
+        size_t arg_len = strnlen(payload.argument, sizeof(payload.argument));
+        if (arg_len > 0) {
+            payload_len = (uint16_t)(1 + arg_len + 1);
+        }
+    }
+
+    return uart_send_frame(CORE_LINK_MSG_COMMAND, &payload, payload_len);
+}
+
+esp_err_t core_link_request_profile_reload(const char *base_path)
+{
+    return core_link_send_command(CORE_LINK_CMD_RELOAD_PROFILES, base_path);
 }
 
 esp_err_t core_link_wait_for_handshake(TickType_t ticks_to_wait)
@@ -546,6 +581,21 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             update_link_alive(true);
             if (handle_state_frame(payload, length) != ESP_OK) {
                 ESP_LOGW(TAG, "Invalid state frame received");
+            }
+            break;
+        }
+        case CORE_LINK_MSG_COMMAND_ACK: {
+            if (length < sizeof(core_link_command_ack_payload_t)) {
+                ESP_LOGW(TAG, "Command ACK too short (%u)", length);
+                break;
+            }
+            core_link_command_ack_payload_t ack;
+            memcpy(&ack, payload, sizeof(ack));
+            esp_err_t status = (esp_err_t)ack.status;
+            ESP_LOGI(TAG, "Command ACK opcode=0x%02X status=%s terrariums=%u", ack.opcode, esp_err_to_name(status),
+                     (unsigned)ack.terrarium_count);
+            if (s_command_cb) {
+                s_command_cb((core_link_command_opcode_t)ack.opcode, status, ack.terrarium_count, s_command_ctx);
             }
             break;
         }

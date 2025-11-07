@@ -10,18 +10,25 @@ extern "C" {
 #define CORE_LINK_PROTOCOL_VERSION 1
 #define CORE_LINK_MAX_TERRARIUMS 4
 #define CORE_LINK_NAME_MAX_LEN 31
+#define CORE_LINK_COMMAND_MAX_ARG_LEN 192
 
 typedef enum {
     CORE_LINK_MSG_HELLO = 0x01,
     CORE_LINK_MSG_HELLO_ACK = 0x02,
     CORE_LINK_MSG_REQUEST_STATE = 0x03,
     CORE_LINK_MSG_STATE_FULL = 0x10,
+    CORE_LINK_MSG_COMMAND = 0x30,
+    CORE_LINK_MSG_COMMAND_ACK = 0x31,
     CORE_LINK_MSG_PING = 0x1F,
     CORE_LINK_MSG_PONG = 0x20,
     CORE_LINK_MSG_TOUCH_EVENT = 0x80,
     CORE_LINK_MSG_DISPLAY_READY = 0x81,
     CORE_LINK_MSG_ERROR = 0xFE,
 } core_link_msg_type_t;
+
+typedef enum {
+    CORE_LINK_CMD_RELOAD_PROFILES = 0x01,
+} core_link_command_opcode_t;
 
 typedef enum {
     CORE_LINK_TOUCH_DOWN = 0,
@@ -58,6 +65,17 @@ typedef struct {
     uint16_t x;
     uint16_t y;
 } core_link_touch_event_t;
+
+typedef struct {
+    uint8_t opcode;
+    char argument[CORE_LINK_COMMAND_MAX_ARG_LEN];
+} core_link_command_payload_t;
+
+typedef struct {
+    uint8_t opcode;
+    int32_t status;
+    uint8_t terrarium_count;
+} core_link_command_ack_payload_t;
 
 #ifdef __cplusplus
 }
