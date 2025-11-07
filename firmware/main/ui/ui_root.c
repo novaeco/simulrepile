@@ -318,9 +318,11 @@ static void ui_root_on_tab_changed(lv_event_t *event)
         break;
     case 1:
         s_active_view = UI_ROOT_VIEW_SLOTS;
+        ui_slots_refresh();
         break;
     case 2:
         s_active_view = UI_ROOT_VIEW_DOCS;
+        ui_docs_refresh_category();
         break;
     case 3:
         s_active_view = UI_ROOT_VIEW_SETTINGS;
