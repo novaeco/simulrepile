@@ -106,6 +106,26 @@ config APP_CORE_LINK_HANDSHAKE_TIMEOUT_MS
         display endpoint during boot. If the timeout expires the display
         falls back to local stubs.
 
+config APP_CORE_LINK_STATE_TIMEOUT_MS
+    int "Core link state watchdog timeout (ms)"
+    range 500 60000
+    default 4000
+    help
+        Maximum delay tolerated between two STATE_FULL frames coming
+        from the DevKitC. When the timeout expires the display endpoint
+        probes the link with a ping and eventually falls back to the
+        internal simulation if the DevKitC stays silent.
+
+config APP_CORE_LINK_PING_TIMEOUT_MS
+    int "Core link ping response timeout (ms)"
+    range 100 5000
+    default 800
+    help
+        Duration to wait for a PONG response after emitting a watchdog
+        PING when the DevKitC stops publishing STATE_FULL frames. If the
+        timeout expires the bridge is considered lost and the UI falls
+        back to the local simulator while displaying an alert banner.
+
 endmenu
 
 menu "Board Support Package Options"

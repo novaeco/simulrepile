@@ -18,9 +18,11 @@ static size_t s_terrarium_count = 0;
 static float s_time_accumulator = 0.0f;
 static bool s_remote_active = false;
 static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
+static const reptile_profile_t *s_default_profiles[MAX_TERRARIUMS];
 static reptile_profile_t s_remote_profiles[MAX_TERRARIUMS];
 static char s_remote_scientific_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1];
 static char s_remote_common_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1];
+static void sim_engine_load_defaults_locked(void);
 
 void sim_engine_init(void)
 {
@@ -30,20 +32,35 @@ void sim_engine_init(void)
     memset(s_remote_scientific_names, 0, sizeof(s_remote_scientific_names));
     memset(s_remote_common_names, 0, sizeof(s_remote_common_names));
     s_remote_active = false;
-
-    size_t preset_count = 0;
-    const reptile_profile_t *presets = sim_presets_get_default(&preset_count);
-    s_terrarium_count = preset_count < MAX_TERRARIUMS ? preset_count : MAX_TERRARIUMS;
-    for (size_t i = 0; i < s_terrarium_count; ++i) {
-        s_terrariums[i].profile = &presets[i];
-        s_terrariums[i].current_environment = presets[i].environment;
-        s_terrariums[i].health.hydration_pct = 85.0f;
-        s_terrariums[i].health.health_pct = 95.0f;
-        s_terrariums[i].health.stress_pct = 10.0f;
-        s_terrariums[i].activity_score = 0.5f;
-    }
+    s_time_accumulator = 0.0f;
+    sim_engine_load_defaults_locked();
     portEXIT_CRITICAL(&s_state_lock);
     ESP_LOGI(TAG, "Simulation initialized with %d terrariums", (int)s_terrarium_count);
+}
+
+static void sim_engine_load_defaults_locked(void)
+{
+    size_t preset_count = 0;
+    const reptile_profile_t *presets = sim_presets_get_default(&preset_count);
+    size_t count = preset_count < MAX_TERRARIUMS ? preset_count : MAX_TERRARIUMS;
+    s_terrarium_count = count;
+
+    for (size_t i = 0; i < count; ++i) {
+        s_default_profiles[i] = &presets[i];
+        terrarium_state_t *state = &s_terrariums[i];
+        state->profile = s_default_profiles[i];
+        state->current_environment = s_default_profiles[i]->environment;
+        state->health.hydration_pct = 85.0f;
+        state->health.health_pct = 95.0f;
+        state->health.stress_pct = 10.0f;
+        state->health.last_feeding_timestamp = 0;
+        state->activity_score = 0.5f;
+    }
+
+    for (size_t i = count; i < MAX_TERRARIUMS; ++i) {
+        s_default_profiles[i] = NULL;
+        memset(&s_terrariums[i], 0, sizeof(s_terrariums[i]));
+    }
 }
 
 void sim_engine_step(float delta_seconds)
@@ -136,4 +153,24 @@ esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame)
 
     ESP_LOGD(TAG, "Applied remote snapshot (%u terrariums, epoch %u)", frame->terrarium_count, (unsigned)frame->epoch_seconds);
     return ESP_OK;
+}
+
+void sim_engine_handle_link_status(bool connected)
+{
+    portENTER_CRITICAL(&s_state_lock);
+    if (!connected) {
+        s_remote_active = false;
+        s_time_accumulator = 0.0f;
+        memset(s_remote_profiles, 0, sizeof(s_remote_profiles));
+        memset(s_remote_scientific_names, 0, sizeof(s_remote_scientific_names));
+        memset(s_remote_common_names, 0, sizeof(s_remote_common_names));
+        sim_engine_load_defaults_locked();
+    }
+    portEXIT_CRITICAL(&s_state_lock);
+
+    if (connected) {
+        ESP_LOGI(TAG, "Core link available, awaiting remote state updates");
+    } else {
+        ESP_LOGW(TAG, "Core link lost, resuming internal terrarium simulation");
+    }
 }

@@ -3,6 +3,8 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 
+#include <string.h>
+
 #include "lvgl.h"
 #include "lvgl_port.h"
 #include "sim/sim_engine.h"
@@ -13,6 +15,8 @@
 #include "ui/ui_theme.h"
 
 static const char *TAG = "ui_root";
+static const char *UI_ROOT_ALERT_DEFAULT_TEXT = "Connexion DevKitC perdue. Simulation locale active.";
+#define UI_ROOT_ALERT_TEXT_MAX 192
 
 static lv_obj_t *s_screen_boot = NULL;
 static lv_obj_t *s_screen_disclaimer = NULL;
@@ -23,6 +27,10 @@ static lv_obj_t *s_tab_slots = NULL;
 static lv_obj_t *s_tab_docs = NULL;
 static lv_obj_t *s_tab_settings = NULL;
 static ui_root_view_t s_active_view = UI_ROOT_VIEW_BOOT_SPLASH;
+static lv_obj_t *s_alert_banner = NULL;
+static lv_obj_t *s_alert_label = NULL;
+static bool s_alert_visible = false;
+static char s_alert_message[UI_ROOT_ALERT_TEXT_MAX] = "";
 
 static void ui_root_build_boot_screen(void);
 static void ui_root_build_disclaimer_screen(void);
@@ -147,6 +155,39 @@ esp_err_t ui_root_set_view(ui_root_view_t view)
     return ESP_OK;
 }
 
+void ui_root_set_link_alert(bool visible, const char *message)
+{
+    const char *resolved = message;
+    if (visible) {
+        if (!resolved || resolved[0] == '\0') {
+            resolved = UI_ROOT_ALERT_DEFAULT_TEXT;
+        }
+    } else if (!resolved) {
+        resolved = "";
+    }
+
+    lvgl_port_lock();
+    s_alert_visible = visible;
+    if (resolved) {
+        strncpy(s_alert_message, resolved, UI_ROOT_ALERT_TEXT_MAX - 1);
+        s_alert_message[UI_ROOT_ALERT_TEXT_MAX - 1] = '\0';
+    } else {
+        s_alert_message[0] = '\0';
+    }
+
+    if (s_alert_label) {
+        lv_label_set_text(s_alert_label, s_alert_message);
+    }
+    if (s_alert_banner) {
+        if (visible) {
+            lv_obj_clear_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    lvgl_port_unlock();
+}
+
 static void ui_root_build_boot_screen(void)
 {
     s_screen_boot = lv_obj_create(NULL);
@@ -213,8 +254,34 @@ static void ui_root_build_main_screen(void)
     s_screen_main = lv_obj_create(NULL);
     ui_theme_apply_screen_style(s_screen_main);
     lv_obj_set_style_pad_all(s_screen_main, 0, LV_PART_MAIN);
+    lv_obj_set_flex_flow(s_screen_main, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_screen_main, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    s_alert_banner = lv_obj_create(s_screen_main);
+    lv_obj_set_width(s_alert_banner, LV_PCT(100));
+    lv_obj_set_style_bg_color(s_alert_banner, lv_color_hex(0xB71C1C), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_alert_banner, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_alert_banner, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_alert_banner, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_alert_banner, 20, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(s_alert_banner, 0, LV_PART_MAIN);
+
+    s_alert_label = lv_label_create(s_alert_banner);
+    ui_theme_apply_label_style(s_alert_label, true);
+    lv_label_set_long_mode(s_alert_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_alert_label, LV_PCT(100));
+    lv_obj_set_style_text_color(s_alert_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    if (s_alert_message[0] != '\0') {
+        lv_label_set_text(s_alert_label, s_alert_message);
+    } else {
+        lv_label_set_text(s_alert_label, UI_ROOT_ALERT_DEFAULT_TEXT);
+    }
+    if (!s_alert_visible) {
+        lv_obj_add_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
+    }
 
     s_tabview = lv_tabview_create(s_screen_main, LV_DIR_TOP, 64);
+    lv_obj_set_flex_grow(s_tabview, 1);
     lv_obj_set_size(s_tabview, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_opa(s_tabview, LV_OPA_TRANSP, LV_PART_MAIN);
 
