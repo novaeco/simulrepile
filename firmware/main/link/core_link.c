@@ -53,10 +53,13 @@ static core_link_command_ack_cb_t s_command_cb = NULL;
 static void *s_command_ctx = NULL;
 static TimerHandle_t s_watchdog_timer = NULL;
 static TickType_t s_last_state_tick = 0;
+static TickType_t s_last_full_tick = 0;
 static TickType_t s_last_ping_tick = 0;
 static bool s_ping_in_flight = false;
 static bool s_state_timeout_logged = false;
 static bool s_watchdog_triggered = false;
+static bool s_full_frame_received = false;
+static bool s_full_resync_pending = false;
 static QueueHandle_t s_touch_queue = NULL;
 static TaskHandle_t s_touch_dispatch_task = NULL;
 static portMUX_TYPE s_touch_queue_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -68,6 +71,7 @@ static bool s_cached_state_valid = false;
 
 #define CORE_LINK_WATCHDOG_PERIOD_MS 250
 #define CORE_LINK_STATE_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS)
+#define CORE_LINK_FULL_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_FULL_REFRESH_TIMEOUT_MS)
 #define CORE_LINK_PING_TIMEOUT_TICKS pdMS_TO_TICKS(CONFIG_APP_CORE_LINK_PING_TIMEOUT_MS)
 #define CORE_LINK_WATCHDOG_PERIOD_TICKS pdMS_TO_TICKS(CORE_LINK_WATCHDOG_PERIOD_MS)
 
@@ -140,10 +144,13 @@ esp_err_t core_link_init(const core_link_config_t *config)
     touch_queue_reset();
 
     s_last_state_tick = xTaskGetTickCount();
+    s_last_full_tick = s_last_state_tick;
     s_last_ping_tick = s_last_state_tick;
     s_ping_in_flight = false;
     s_state_timeout_logged = false;
     s_watchdog_triggered = false;
+    s_full_frame_received = false;
+    s_full_resync_pending = false;
     s_link_alive = false;
 
     s_initialized = true;
@@ -350,7 +357,16 @@ esp_err_t core_link_send_display_ready(void)
 esp_err_t core_link_request_state_sync(void)
 {
     s_cached_state_valid = false;
-    return uart_send_frame(CORE_LINK_MSG_REQUEST_STATE, NULL, 0);
+    if (s_started) {
+        TickType_t now = xTaskGetTickCount();
+        s_last_full_tick = now;
+    }
+    s_full_frame_received = false;
+    esp_err_t err = uart_send_frame(CORE_LINK_MSG_REQUEST_STATE, NULL, 0);
+    if (err == ESP_OK) {
+        s_full_resync_pending = true;
+    }
+    return err;
 }
 
 esp_err_t core_link_send_command(core_link_command_opcode_t opcode, const char *argument)
@@ -442,6 +458,9 @@ static void update_link_alive(bool alive)
         s_watchdog_triggered = true;
         s_ping_in_flight = false;
         s_state_timeout_logged = false;
+        s_full_frame_received = false;
+        s_full_resync_pending = false;
+        s_last_full_tick = xTaskGetTickCount();
         touch_queue_reset();
         s_cached_state_valid = false;
         memset(&s_cached_state, 0, sizeof(s_cached_state));
@@ -449,6 +468,8 @@ static void update_link_alive(bool alive)
         if (s_watchdog_triggered) {
             s_watchdog_triggered = false;
             s_state_timeout_logged = false;
+            s_full_frame_received = false;
+            s_last_full_tick = xTaskGetTickCount();
             if (s_handshake_done) {
                 ESP_LOGI(TAG, "DevKitC link restored, requesting state resynchronization");
                 esp_err_t err = core_link_request_state_sync();
@@ -472,9 +493,13 @@ static void watchdog_timer_cb(TimerHandle_t timer)
     }
 
     TickType_t now = xTaskGetTickCount();
-    TickType_t elapsed = now - s_last_state_tick;
+    TickType_t state_elapsed = now - s_last_state_tick;
+    TickType_t full_elapsed = now - s_last_full_tick;
+    bool state_timeout = state_elapsed >= CORE_LINK_STATE_TIMEOUT_TICKS;
+    bool full_timeout = full_elapsed >= CORE_LINK_FULL_TIMEOUT_TICKS;
+    bool waiting_first_full = !s_full_frame_received;
 
-    if (elapsed < CORE_LINK_STATE_TIMEOUT_TICKS) {
+    if (!state_timeout && !full_timeout) {
         return;
     }
 
@@ -484,8 +509,38 @@ static void watchdog_timer_cb(TimerHandle_t timer)
             s_ping_in_flight = true;
             s_last_ping_tick = now;
             if (!s_state_timeout_logged) {
-                ESP_LOGW(TAG, "State update timeout (%d ms), probing DevKitC", CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+                if (state_timeout && full_timeout) {
+                    ESP_LOGW(TAG,
+                             "State watchdog triggered (no frames for %d ms, no STATE_FULL for %d ms) — probing DevKitC",
+                             CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS,
+                             CONFIG_APP_CORE_LINK_FULL_REFRESH_TIMEOUT_MS);
+                } else if (state_timeout) {
+                    ESP_LOGW(TAG,
+                             "State update timeout (%d ms), probing DevKitC",
+                             CONFIG_APP_CORE_LINK_STATE_TIMEOUT_MS);
+                } else {
+                    if (waiting_first_full) {
+                        ESP_LOGW(TAG,
+                                 "STATE_FULL not received within %d ms, probing DevKitC",
+                                 CONFIG_APP_CORE_LINK_FULL_REFRESH_TIMEOUT_MS);
+                    } else {
+                        ESP_LOGW(TAG,
+                                 "STATE_FULL refresh timeout (%d ms), probing DevKitC",
+                                 CONFIG_APP_CORE_LINK_FULL_REFRESH_TIMEOUT_MS);
+                    }
+                }
                 s_state_timeout_logged = true;
+            }
+            if (full_timeout && !s_full_resync_pending) {
+                esp_err_t sync_err = core_link_request_state_sync();
+                if (sync_err == ESP_OK) {
+                    s_full_resync_pending = true;
+                    ESP_LOGW(TAG, "STATE_FULL refresh watchdog requesting resynchronization");
+                } else {
+                    ESP_LOGW(TAG,
+                             "Failed to request state resync after full timeout: %s",
+                             esp_err_to_name(sync_err));
+                }
             }
         } else {
             ESP_LOGE(TAG, "Failed to send watchdog ping: %s", esp_err_to_name(err));
@@ -813,13 +868,18 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
 
             TickType_t now = xTaskGetTickCount();
             s_last_state_tick = now;
+            s_last_full_tick = now;
             s_last_ping_tick = now;
             s_ping_in_flight = false;
             s_state_timeout_logged = false;
+            s_full_frame_received = false;
             bool triggered = s_watchdog_triggered;
             update_link_alive(true);
             if (!triggered) {
-                core_link_request_state_sync();
+                esp_err_t err = core_link_request_state_sync();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Initial state sync request failed: %s", esp_err_to_name(err));
+                }
             }
             break;
         }
@@ -830,8 +890,13 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             s_ping_in_flight = false;
             s_state_timeout_logged = false;
             update_link_alive(true);
-            if (handle_state_full_frame(payload, length) != ESP_OK) {
+            esp_err_t status = handle_state_full_frame(payload, length);
+            if (status != ESP_OK) {
                 ESP_LOGW(TAG, "Invalid STATE_FULL frame received");
+            } else {
+                s_last_full_tick = now;
+                s_full_frame_received = true;
+                s_full_resync_pending = false;
             }
             break;
         }
@@ -845,6 +910,8 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             if (handle_state_delta_frame(payload, length) != ESP_OK) {
                 ESP_LOGW(TAG, "Invalid STATE_DELTA received, requesting resync");
                 s_cached_state_valid = false;
+                s_full_frame_received = false;
+                s_last_full_tick = now;
                 esp_err_t err = core_link_request_state_sync();
                 if (err != ESP_OK) {
                     ESP_LOGW(TAG, "State resync request failed: %s", esp_err_to_name(err));
@@ -872,6 +939,7 @@ static void dispatch_frame(core_link_msg_type_t type, const uint8_t *payload, ui
             break;
         case CORE_LINK_MSG_PONG: {
             TickType_t now = xTaskGetTickCount();
+            s_ping_in_flight = false;
             s_last_ping_tick = now;
             update_link_alive(true);
             break;

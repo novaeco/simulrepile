@@ -145,6 +145,17 @@ config APP_CORE_LINK_STATE_TIMEOUT_MS
         probes the link with a ping and eventually falls back to the
         internal simulation if the DevKitC stays silent.
 
+config APP_CORE_LINK_FULL_REFRESH_TIMEOUT_MS
+    int "Core link STATE_FULL refresh timeout (ms)"
+    range 1000 60000
+    default 12000
+    help
+        Maximum delay tolerated between two complete `STATE_FULL`
+        snapshots. When the DevKitC only streams incremental deltas for
+        too long the display endpoint pings the peer and forces a
+        resynchronization before falling back to the internal
+        simulation.
+
 config APP_CORE_LINK_PING_TIMEOUT_MS
     int "Core link ping response timeout (ms)"
     range 100 5000
