@@ -62,6 +62,34 @@ config APP_ASSET_CACHE_CAPACITY
         /sdcard-backed cache. Entries above this limit are evicted based
         on a least-recently-used policy with periodic idle sweeps.
 
+config APP_ASSET_CACHE_HASH_BUCKETS
+    int "Asset cache hash buckets"
+    range 8 512
+    default 64
+    help
+        Number of buckets in the asset cache hash table. Increase this
+        value when storing many assets simultaneously to limit
+        collisions. Lower values reduce RAM consumption at the cost of
+        lookup speed.
+
+config APP_ASSET_CACHE_IDLE_GRACE_TICKS
+    int "Asset cache idle grace (ticks)"
+    range 0 600
+    default 3
+    help
+        Number of scheduler ticks an unused asset remains cached before
+        the periodic sweep evicts it. Set to zero to evict immediately
+        when the reference count drops to zero.
+
+config APP_ASSET_CACHE_MAX_PATH
+    int "Asset cache maximum path length"
+    range 64 512
+    default 256
+    help
+        Maximum length of normalized asset paths handled by the cache.
+        Must be large enough to cover the longest path stored on the SD
+        card, including the /sdcard prefix.
+
 menu "Core Link Bridge"
 
 config APP_CORE_LINK_UART_PORT
