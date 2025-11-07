@@ -34,6 +34,7 @@ static lv_obj_t *s_contrast_switch = NULL;
 static lv_obj_t *s_autosave_slider = NULL;
 static lv_obj_t *s_autosave_label = NULL;
 static lv_obj_t *s_usb_switch = NULL;
+static lv_obj_t *s_update_last_flash_label = NULL;
 static lv_obj_t *s_update_status_label = NULL;
 static lv_obj_t *s_update_check_btn = NULL;
 static lv_obj_t *s_update_apply_btn = NULL;
@@ -51,6 +52,7 @@ static void ui_settings_contrast_changed_cb(lv_event_t *event);
 static void ui_settings_autosave_changed_cb(lv_event_t *event);
 static void ui_settings_usb_changed_cb(lv_event_t *event);
 static void ui_settings_updates_refresh(void);
+static void ui_settings_updates_refresh_last_flash(void);
 static void ui_settings_updates_check_cb(lv_event_t *event);
 static void ui_settings_updates_apply_cb(lv_event_t *event);
 
@@ -247,6 +249,10 @@ static void ui_settings_build_layout(lv_obj_t *parent)
     lv_label_set_text(updates_title, "Mise à jour via SD");
     ui_theme_apply_label_style(updates_title, true);
 
+    s_update_last_flash_label = lv_label_create(updates_card);
+    ui_theme_apply_label_style(s_update_last_flash_label, false);
+    lv_label_set_text(s_update_last_flash_label, "Dernier flash : inconnu");
+
     s_update_status_label = lv_label_create(updates_card);
     ui_theme_apply_label_style(s_update_status_label, false);
     lv_label_set_text(s_update_status_label, "Vérification en attente");
@@ -321,6 +327,54 @@ static void ui_settings_usb_changed_cb(lv_event_t *event)
     ui_settings_set_usb_mode(usb_enabled);
 }
 
+static void ui_settings_updates_refresh_last_flash(void)
+{
+    if (!s_update_last_flash_label) {
+        return;
+    }
+
+    updates_flash_report_t report;
+    esp_err_t err = updates_get_last_flash_report(&report);
+    if (err == ESP_ERR_NOT_FOUND) {
+        lv_label_set_text(s_update_last_flash_label, "Dernier flash : aucun historique");
+        return;
+    }
+    if (err != ESP_OK) {
+        lv_label_set_text_fmt(s_update_last_flash_label,
+                              "Dernier flash : erreur (%s)",
+                              esp_err_to_name(err));
+        return;
+    }
+
+    const char *version = report.manifest.version[0] ? report.manifest.version : "?";
+    const char *partition = report.partition_label[0] ? report.partition_label : "?";
+    const char *error_name = esp_err_to_name(report.error);
+
+    switch (report.outcome) {
+        case UPDATES_FLASH_OUTCOME_SUCCESS:
+            lv_label_set_text_fmt(s_update_last_flash_label,
+                                  "Dernier flash : succès v%s → %s",
+                                  version,
+                                  partition);
+            break;
+        case UPDATES_FLASH_OUTCOME_ERROR:
+            lv_label_set_text_fmt(s_update_last_flash_label,
+                                  "Dernier flash : échec (%s)",
+                                  error_name);
+            break;
+        case UPDATES_FLASH_OUTCOME_ROLLBACK:
+            lv_label_set_text_fmt(s_update_last_flash_label,
+                                  "Dernier flash : rollback %s (%s)",
+                                  partition,
+                                  error_name);
+            break;
+        case UPDATES_FLASH_OUTCOME_NONE:
+        default:
+            lv_label_set_text(s_update_last_flash_label, "Dernier flash : aucun historique");
+            break;
+    }
+}
+
 static void ui_settings_updates_refresh(void)
 {
     if (!s_update_status_label) {
@@ -355,6 +409,8 @@ static void ui_settings_updates_refresh(void)
             lv_obj_add_state(s_update_apply_btn, LV_STATE_DISABLED);
         }
     }
+
+    ui_settings_updates_refresh_last_flash();
 }
 
 static void ui_settings_updates_check_cb(lv_event_t *event)
@@ -389,5 +445,6 @@ static void ui_settings_updates_apply_cb(lv_event_t *event)
         ui_settings_updates_refresh();
     }
 
+    ui_settings_updates_refresh_last_flash();
     s_events_suspended = false;
 }

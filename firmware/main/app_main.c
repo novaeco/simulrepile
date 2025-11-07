@@ -15,14 +15,17 @@
 #include "persist/save_manager.h"
 #include "sim/sim_engine.h"
 #include "ui/ui_root.h"
+#include "updates/updates_manager.h"
 
 #include "sdkconfig.h"
+#include "esp_system.h"
 
 static const char *TAG = "simulrepile";
 
 static void ui_loop_task(void *ctx);
 static void handle_core_state(const core_link_state_frame_t *frame, void *ctx);
 static void handle_core_link_status(bool connected, void *ctx);
+static void handle_boot_updates(void);
 
 void app_main(void)
 {
@@ -32,6 +35,8 @@ void app_main(void)
     ESP_ERROR_CHECK(save_manager_init("/sdcard/saves"));
     ESP_ERROR_CHECK(i18n_manager_init("/sdcard/i18n"));
     ESP_ERROR_CHECK(doc_reader_init("/sdcard/docs"));
+
+    handle_boot_updates();
 
     core_link_config_t link_cfg = {
         .uart_port = CONFIG_APP_CORE_LINK_UART_PORT,
@@ -71,6 +76,34 @@ void app_main(void)
     xTaskCreatePinnedToCore(ui_loop_task, "ui_loop", 4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "Initialization complete");
+}
+
+static void handle_boot_updates(void)
+{
+    esp_err_t err = updates_finalize_boot_state();
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "OTA finalize reported %s", esp_err_to_name(err));
+    }
+
+    updates_manifest_info_t manifest;
+    err = updates_check_available(&manifest);
+    if (err == ESP_OK) {
+        const char *version = manifest.version[0] ? manifest.version : "?";
+        ESP_LOGI(TAG,
+                 "SD update detected (v%s, %u KiB) → flashing before UI",
+                 version,
+                 (unsigned)((manifest.size_bytes + 1023) / 1024));
+        esp_err_t apply_err = updates_apply(&manifest);
+        if (apply_err == ESP_OK) {
+            ESP_LOGI(TAG, "Update copied to OTA slot. Rebooting...");
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "SD update apply failed: %s", esp_err_to_name(apply_err));
+        }
+    } else if (err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "SD update manifest check failed: %s", esp_err_to_name(err));
+    }
 }
 
 static void ui_loop_task(void *ctx)
