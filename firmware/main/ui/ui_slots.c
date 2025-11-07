@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,7 @@ typedef struct {
     lv_obj_t *button;
     lv_obj_t *label;
     lv_obj_t *save_label;
+    lv_obj_t *alerts_label;
 } slot_widget_t;
 
 static const char *TAG = "ui_slots";
@@ -40,6 +42,10 @@ static void ui_slots_format_save_status(const save_slot_status_t *status,
                                         char *buffer,
                                         size_t buffer_len);
 static void ui_slots_format_timestamp(uint64_t unix_seconds, char *buffer, size_t buffer_len);
+static void ui_slots_update_alert_label(slot_widget_t *slot,
+                                        const terrarium_state_t *state,
+                                        const save_slot_status_t *status,
+                                        esp_err_t status_err);
 
 void ui_slots_create(lv_obj_t *parent)
 {
@@ -117,6 +123,11 @@ static void ui_slots_create_slot(size_t index)
     lv_obj_set_width(slot->save_label, LV_PCT(100));
     ui_theme_apply_label_style(slot->save_label, false);
 
+    slot->alerts_label = lv_label_create(slot->button);
+    lv_label_set_long_mode(slot->alerts_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(slot->alerts_label, LV_PCT(100));
+    ui_theme_apply_label_style(slot->alerts_label, false);
+
     lv_obj_add_event_cb(slot->button, ui_slots_button_event_cb, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)index);
 }
 
@@ -185,6 +196,8 @@ static void ui_slots_update_slot(size_t index,
         }
         lv_label_set_text(slot->save_label, save_buffer);
     }
+
+    ui_slots_update_alert_label(slot, state, status, status_err);
 
     s_ignore_events = false;
 }
@@ -272,4 +285,55 @@ static void ui_slots_format_timestamp(uint64_t unix_seconds, char *buffer, size_
     if (strftime(buffer, buffer_len, "%Y-%m-%d %H:%MZ", &tm_buf) == 0) {
         snprintf(buffer, buffer_len, "epoch %llu", (unsigned long long)unix_seconds);
     }
+}
+
+static void ui_slots_update_alert_label(slot_widget_t *slot,
+                                        const terrarium_state_t *state,
+                                        const save_slot_status_t *status,
+                                        esp_err_t status_err)
+{
+    if (!slot || !slot->alerts_label) {
+        return;
+    }
+
+    const char *message = "Alertes : aucune";
+    char buffer[160];
+
+    if (status_err != ESP_OK) {
+        snprintf(buffer, sizeof(buffer), "%s Sauvegardes indisponibles (%s)", LV_SYMBOL_WARNING, esp_err_to_name(status_err));
+        message = buffer;
+    } else if (status) {
+        if (status->primary.exists && !status->primary.valid) {
+            snprintf(buffer,
+                     sizeof(buffer),
+                     "%s Sauvegarde primaire corrompue", LV_SYMBOL_WARNING);
+            message = buffer;
+        } else if (status->backup.exists && !status->backup.valid) {
+            snprintf(buffer,
+                     sizeof(buffer),
+                     "%s Sauvegarde secours corrompue", LV_SYMBOL_WARNING);
+            message = buffer;
+        }
+    }
+
+    if (message == buffer) {
+        lv_label_set_text(slot->alerts_label, message);
+        return;
+    }
+
+    if (state) {
+        uint32_t now = (uint32_t)time(NULL);
+        if (terrarium_state_needs_feeding(state, now)) {
+            snprintf(buffer, sizeof(buffer), "%s Terrarium à nourrir", LV_SYMBOL_WARNING);
+            message = buffer;
+        } else if (state->health.stress_pct > 70.0f) {
+            snprintf(buffer, sizeof(buffer), "%s Stress élevé (%.0f %%)", LV_SYMBOL_WARNING, state->health.stress_pct);
+            message = buffer;
+        } else if (state->health.hydration_pct < 45.0f) {
+            snprintf(buffer, sizeof(buffer), "%s Hydratation faible (%.0f %%)", LV_SYMBOL_WARNING, state->health.hydration_pct);
+            message = buffer;
+        }
+    }
+
+    lv_label_set_text(slot->alerts_label, message);
 }

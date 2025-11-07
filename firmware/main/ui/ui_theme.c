@@ -14,6 +14,9 @@ typedef struct {
     lv_color_t panel_border;
     lv_color_t text_primary;
     lv_color_t text_accent;
+    lv_color_t focus_outline;
+    lv_opa_t focus_outline_opa;
+    lv_coord_t focus_outline_width;
     const lv_font_t *font_body;
     const lv_font_t *font_accent;
 } ui_theme_palette_t;
@@ -50,6 +53,9 @@ void ui_theme_apply_default(void)
         .panel_border = lv_color_hex(0xd0d7de),
         .text_primary = lv_color_hex(0x1b1f24),
         .text_accent = lv_color_hex(0x0057b7),
+        .focus_outline = lv_color_hex(0x1b1f24),
+        .focus_outline_opa = LV_OPA_TRANSP,
+        .focus_outline_width = 0,
         .font_body = ui_theme_select_font_default(),
         .font_accent = ui_theme_select_font_large(),
     };
@@ -70,6 +76,9 @@ void ui_theme_apply_high_contrast(bool enabled)
         .panel_border = lv_color_hex(0x444444),
         .text_primary = lv_color_hex(0xf5f5f5),
         .text_accent = lv_color_hex(0xffd600),
+        .focus_outline = lv_color_hex(0xffd600),
+        .focus_outline_opa = LV_OPA_COVER,
+        .focus_outline_width = 4,
         .font_body = ui_theme_select_font_large(),
         .font_accent = ui_theme_select_font_large(),
     };
@@ -135,6 +144,7 @@ static void ui_theme_init_styles(void)
     lv_style_set_radius(&s_style_panel, 12);
     lv_style_set_border_width(&s_style_panel, 2);
     lv_style_set_border_opa(&s_style_panel, LV_OPA_80);
+    lv_style_set_outline_pad(&s_style_panel, 4);
 
     lv_style_set_text_line_space(&s_style_label_primary, 6);
     lv_style_set_text_letter_space(&s_style_label_primary, 1);
@@ -163,6 +173,9 @@ static void ui_theme_apply_palette(const ui_theme_palette_t *palette)
     lv_style_set_shadow_color(&s_style_panel, palette->panel_border);
     lv_style_set_text_color(&s_style_panel, palette->text_primary);
     lv_style_set_text_font(&s_style_panel, palette->font_body);
+    lv_style_set_outline_color(&s_style_panel, palette->focus_outline);
+    lv_style_set_outline_opa(&s_style_panel, palette->focus_outline_opa);
+    lv_style_set_outline_width(&s_style_panel, palette->focus_outline_width);
 
     lv_style_set_text_color(&s_style_label_primary, palette->text_primary);
     lv_style_set_text_font(&s_style_label_primary, palette->font_body);
