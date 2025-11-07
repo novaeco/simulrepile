@@ -23,12 +23,14 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 #include "hal/ledc_types.h"
 #include "hal/usb_phy_types.h"
 
 #include "sdmmc_cmd.h"
 #include "usb/usb_phy.h"
+#include "tinyusb.h"
 
 #include "sdkconfig.h"
 
@@ -40,8 +42,11 @@ static bool s_pwm_initialized = false;
 static i2c_master_dev_handle_t s_touch_dev = NULL;
 static bool s_touch_isr_attached = false;
 static TaskHandle_t s_touch_task_handle = NULL;
+static QueueHandle_t s_touch_irq_queue = NULL;
 static sdmmc_card_t *s_sd_card = NULL;
 static usb_phy_handle_t s_usb_phy = NULL;
+static bool s_sd_host_initialized = false;
+static bool s_tinyusb_started = false;
 
 #define BACKLIGHT_LEDC_TIMER        LEDC_TIMER_0
 #define BACKLIGHT_LEDC_MODE         LEDC_LOW_SPEED_MODE
@@ -55,6 +60,7 @@ static usb_phy_handle_t s_usb_phy = NULL;
 #define TOUCH_TASK_STACK_SIZE       4096
 #define TOUCH_TASK_PRIORITY         5
 #define TOUCH_TASK_CORE             1
+#define TOUCH_IRQ_QUEUE_LENGTH      8
 
 typedef struct {
     bool active;
@@ -73,12 +79,15 @@ static void IRAM_ATTR touch_irq_handler(void *arg)
 {
     (void)arg;
 
-    if (!s_touch_task_handle) {
+    if (!s_touch_irq_queue) {
         return;
     }
 
+    uint32_t signal = 1;
     BaseType_t higher_woken = pdFALSE;
-    vTaskNotifyGiveFromISR(s_touch_task_handle, &higher_woken);
+    if (xQueueSendFromISR(s_touch_irq_queue, &signal, &higher_woken) != pdTRUE) {
+        /* Queue full: rely on task to drain pending events */
+    }
     if (higher_woken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
@@ -138,6 +147,11 @@ static esp_err_t configure_touch(void)
     ESP_RETURN_ON_ERROR(exio_set(EXIO_LINE_TOUCH_RST, true), TAG, "Touch reset release failed");
     vTaskDelay(pdMS_TO_TICKS(50));
 
+    if (!s_touch_irq_queue) {
+        s_touch_irq_queue = xQueueCreate(TOUCH_IRQ_QUEUE_LENGTH, sizeof(uint32_t));
+        ESP_RETURN_ON_FALSE(s_touch_irq_queue, ESP_ERR_NO_MEM, TAG, "Touch IRQ queue alloc failed");
+    }
+
     gpio_config_t irq_cfg = {
         .pin_bit_mask = 1ULL << TOUCH_PIN_IRQ,
         .mode = GPIO_MODE_INPUT,
@@ -156,6 +170,7 @@ static esp_err_t configure_touch(void)
         ESP_RETURN_ON_ERROR(gpio_isr_handler_add(TOUCH_PIN_IRQ, touch_irq_handler, NULL), TAG, "Touch ISR add failed");
         s_touch_isr_attached = true;
     }
+    ESP_RETURN_ON_ERROR(gpio_intr_enable(TOUCH_PIN_IRQ), TAG, "Touch IRQ enable failed");
 
     uint8_t reg = 0xA8;
     uint8_t id = 0;
@@ -178,7 +193,7 @@ static esp_err_t configure_sd(void)
     }
 
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.flags = CONFIG_BSP_SD_BUS_WIDTH_4BIT ? SDMMC_HOST_FLAG_4BIT : 0;
+    host.flags = CONFIG_BSP_SD_BUS_WIDTH_4BIT ? SDMMC_HOST_FLAG_4BIT : SDMMC_HOST_FLAG_1BIT;
 
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
     slot_config.clk = SD_PIN_CLK;
@@ -196,13 +211,51 @@ static esp_err_t configure_sd(void)
         .allocation_unit_size = 32 * 1024,
     };
 
-    ESP_RETURN_ON_ERROR(esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &s_sd_card), TAG, "SD mount failed");
-    ESP_LOGI(TAG, "SD card mounted: %.6s", s_sd_card->cid.name);
+    bool host_started_here = false;
+    if (!s_sd_host_initialized) {
+        esp_err_t host_err = sdmmc_host_init();
+        if (host_err == ESP_ERR_INVALID_STATE) {
+            s_sd_host_initialized = true;
+        } else if (host_err == ESP_OK) {
+            s_sd_host_initialized = true;
+            host_started_here = true;
+        } else {
+            ESP_LOGE(TAG, "SD host init failed: %s", esp_err_to_name(host_err));
+            return host_err;
+        }
+    }
+
+    esp_err_t slot_err = sdmmc_host_init_slot(host.slot, &slot_config);
+    if (slot_err == ESP_ERR_INVALID_STATE) {
+        slot_err = ESP_OK;
+    }
+    if (slot_err != ESP_OK) {
+        ESP_LOGE(TAG, "SD slot init failed: %s", esp_err_to_name(slot_err));
+        if (host_started_here) {
+            sdmmc_host_deinit();
+            s_sd_host_initialized = false;
+        }
+        return slot_err;
+    }
+
+    esp_err_t mount_err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &s_sd_card);
+    if (mount_err != ESP_OK) {
+        ESP_LOGE(TAG, "SD mount failed: %s", esp_err_to_name(mount_err));
+        if (host_started_here) {
+            sdmmc_host_deinit();
+            s_sd_host_initialized = false;
+        }
+        return mount_err;
+    }
+
+    ESP_LOGI(TAG, "SD card mounted: %.6s (%s bus)", s_sd_card->cid.name, CONFIG_BSP_SD_BUS_WIDTH_4BIT ? "4-bit" : "1-bit");
     return ESP_OK;
 }
 
 static esp_err_t configure_usb(void)
 {
+    ESP_RETURN_ON_ERROR(exio_select_usb(true), TAG, "USB select failed");
+
     if (!s_usb_phy) {
         usb_phy_otg_io_conf_t otg_conf = USB_PHY_SELF_POWERED_DEVICE(-1);
         usb_phy_config_t phy_conf = {
@@ -218,7 +271,20 @@ static esp_err_t configure_usb(void)
         ESP_RETURN_ON_ERROR(usb_phy_otg_dev_set_speed(s_usb_phy, USB_PHY_SPEED_FULL), TAG, "USB set speed failed");
     }
 
-    ESP_RETURN_ON_ERROR(exio_select_usb(true), TAG, "USB select failed");
+#if CONFIG_TINYUSB_ENABLED
+    if (!s_tinyusb_started) {
+        tinyusb_config_t tusb_cfg = {0};
+        tusb_cfg.external_phy = false;
+        ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG, "TinyUSB install failed");
+        s_tinyusb_started = true;
+    }
+#else
+    if (!s_tinyusb_started) {
+        ESP_LOGW(TAG, "TinyUSB support disabled at build time");
+        s_tinyusb_started = true;
+    }
+#endif
+
     ESP_LOGI(TAG, "USB PHY ready in device mode");
     return ESP_OK;
 }
@@ -239,15 +305,20 @@ esp_err_t bsp_init(void)
 static void touch_task(void *arg)
 {
     (void)arg;
+    uint32_t signal = 0;
 
     while (true) {
-        if (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 0) {
+        if (!s_touch_irq_queue) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        if (xQueueReceive(s_touch_irq_queue, &signal, portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
         touch_process_sample();
 
-        while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
+        while (xQueueReceive(s_touch_irq_queue, &signal, 0) == pdTRUE) {
             touch_process_sample();
         }
     }
