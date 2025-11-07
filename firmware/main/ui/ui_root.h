@@ -13,6 +13,7 @@ typedef enum {
     UI_ROOT_VIEW_SLOTS,
     UI_ROOT_VIEW_DOCS,
     UI_ROOT_VIEW_SETTINGS,
+    UI_ROOT_VIEW_ABOUT,
 } ui_root_view_t;
 
 esp_err_t ui_root_init(void);
@@ -24,6 +25,8 @@ void ui_root_show_dashboard(void);
 void ui_root_show_slots(void);
 void ui_root_show_docs(void);
 void ui_root_show_settings(void);
+void ui_root_show_about(void);
+void ui_root_refresh_language(void);
 void ui_root_set_link_alert(bool visible, const char *message);
 
 #ifdef __cplusplus

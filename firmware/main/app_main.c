@@ -13,7 +13,9 @@
 #include "link/core_link.h"
 #include "lvgl_port.h"
 #include "persist/save_manager.h"
+#include "persist/save_service.h"
 #include "sim/sim_engine.h"
+#include "tts/tts_stub.h"
 #include "ui/ui_root.h"
 #include "ui/ui_settings.h"
 #include "updates/updates_manager.h"
@@ -38,6 +40,8 @@ void app_main(void)
     ESP_ERROR_CHECK(save_manager_init("/sdcard/saves"));
     ESP_ERROR_CHECK(i18n_manager_init("/sdcard/i18n"));
     ESP_ERROR_CHECK(doc_reader_init("/sdcard/docs"));
+    ESP_ERROR_CHECK(tts_stub_init());
+    ESP_ERROR_CHECK(save_service_init());
 
     handle_boot_updates();
 

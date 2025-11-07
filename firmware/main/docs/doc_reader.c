@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "assets/asset_cache.h"
 #include "esp_check.h"
 #include "esp_log.h"
 
@@ -169,42 +170,40 @@ esp_err_t doc_reader_load(const doc_descriptor_t *doc, char *buffer, int buffer_
         return ESP_ERR_INVALID_SIZE;
     }
 
-    FILE *file = fopen(full_path, "rb");
-    if (!file) {
-        ESP_LOGE(TAG, "Failed to open %s (errno=%d)", full_path, errno);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    size_t total = 0;
-    bool truncated = false;
-    while (total < (size_t)(buffer_len - 1)) {
-        size_t to_read = (size_t)(buffer_len - 1) - total;
-        size_t just_read = fread(buffer + total, 1, to_read, file);
-        total += just_read;
-        if (just_read < to_read) {
-            if (feof(file)) {
-                break;
-            }
-            fclose(file);
-            ESP_LOGE(TAG, "Read error on %s", full_path);
-            return ESP_FAIL;
+    asset_handle_t handle;
+    esp_err_t err = asset_cache_get(full_path, &handle);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Document %s missing", full_path);
+        } else {
+            ESP_LOGE(TAG, "Asset cache error %s for %s", esp_err_to_name(err), full_path);
         }
+        return err;
     }
 
-    if (!feof(file)) {
+    size_t available = handle.size;
+    size_t to_copy = available;
+    bool truncated = false;
+    if (buffer_len <= 1) {
+        to_copy = 0;
+        truncated = available > 0;
+    } else if (to_copy > (size_t)(buffer_len - 1)) {
+        to_copy = (size_t)(buffer_len - 1);
         truncated = true;
     }
-    fclose(file);
 
-    buffer[total] = '\0';
+    if (to_copy > 0 && handle.data) {
+        memcpy(buffer, handle.data, to_copy);
+    }
+    buffer[to_copy] = '\0';
     if (out_len) {
-        *out_len = (int)total;
+        *out_len = (int)to_copy;
     }
 
     if (truncated) {
-        ESP_LOGW(TAG, "Document %s truncated to %zu bytes", full_path, total);
-        return ESP_ERR_INVALID_SIZE;
+        ESP_LOGW(TAG, "Document %s truncated to %zu/%zu bytes", full_path, to_copy, available);
     }
 
-    return ESP_OK;
+    asset_cache_release(&handle);
+    return truncated ? ESP_ERR_INVALID_SIZE : ESP_OK;
 }

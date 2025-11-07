@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 
+#include "i18n/i18n_manager.h"
 #include "sim/sim_engine.h"
 #include "ui/ui_theme.h"
 
@@ -82,6 +83,55 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
         return;
     }
 
+    const char *default_name = i18n_manager_get_string("dashboard_default_name");
+    if (!default_name || default_name[0] == '\0') {
+        default_name = "Terrarium";
+    }
+    const char *title_fmt = i18n_manager_get_string("dashboard_title_fmt");
+    if (!title_fmt) {
+        title_fmt = "#%u %s";
+    }
+    const char *temp_fmt = i18n_manager_get_string("dashboard_temperature_fmt");
+    if (!temp_fmt) {
+        temp_fmt = "Temp %.1f °C";
+    }
+    const char *humidity_fmt = i18n_manager_get_string("dashboard_humidity_fmt");
+    if (!humidity_fmt) {
+        humidity_fmt = "Humidity %.0f %%";
+    }
+    const char *hydration_fmt = i18n_manager_get_string("dashboard_hydration_fmt");
+    if (!hydration_fmt) {
+        hydration_fmt = "Hydration %.0f %%";
+    }
+    const char *health_fmt = i18n_manager_get_string("dashboard_health_fmt");
+    if (!health_fmt) {
+        health_fmt = "Health %.0f %%";
+    }
+    const char *stress_fmt = i18n_manager_get_string("dashboard_stress_fmt");
+    if (!stress_fmt) {
+        stress_fmt = "Stress %.0f %%";
+    }
+    const char *activity_fmt = i18n_manager_get_string("dashboard_activity_fmt");
+    if (!activity_fmt) {
+        activity_fmt = "Activity %.0f %%";
+    }
+    const char *feeding_interval_fmt = i18n_manager_get_string("dashboard_feeding_interval_fmt");
+    if (!feeding_interval_fmt) {
+        feeding_interval_fmt = "Last feeding: %s (every %u d)";
+    }
+    const char *feeding_simple_fmt = i18n_manager_get_string("dashboard_feeding_simple_fmt");
+    if (!feeding_simple_fmt) {
+        feeding_simple_fmt = "Last feeding: %s";
+    }
+    const char *alerts_title_text = i18n_manager_get_string("dashboard_alerts_title");
+    if (!alerts_title_text) {
+        alerts_title_text = "Alerts";
+    }
+    const char *alerts_none_text = i18n_manager_get_string("dashboard_alerts_none");
+    if (!alerts_none_text) {
+        alerts_none_text = "Alerts (none)";
+    }
+
     for (size_t i = 0; i < UI_DASHBOARD_MAX_TERRARIUMS; ++i) {
         terrarium_card_t *card = &s_cards[i];
         if (!card->card) {
@@ -99,8 +149,8 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
             continue;
         }
 
-        const char *name = (state->profile && state->profile->common_name) ? state->profile->common_name : "Terrarium";
-        lv_label_set_text_fmt(card->title, "#%u %s", (unsigned)(i + 1), name);
+        const char *name = (state->profile && state->profile->common_name) ? state->profile->common_name : default_name;
+        lv_label_set_text_fmt(card->title, title_fmt, (unsigned)(i + 1), name);
 
         float temperature = state->current_environment.temp_day_c;
         float humidity = state->current_environment.humidity_day_pct;
@@ -140,7 +190,7 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
             activity_pct = 100.0f;
         }
 
-        lv_label_set_text_fmt(card->temperature, "Température : %.1f °C", temperature);
+        lv_label_set_text_fmt(card->temperature, temp_fmt, temperature);
         if (card->temperature_bar) {
             lv_bar_set_range(card->temperature_bar, 0, 600);
             int32_t temp_value = (int32_t)(temperature * 10.0f);
@@ -153,14 +203,14 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
             lv_bar_set_value(card->temperature_bar, temp_value, LV_ANIM_OFF);
         }
 
-        lv_label_set_text_fmt(card->humidity, "Hygrométrie : %.0f %%", humidity);
+        lv_label_set_text_fmt(card->humidity, humidity_fmt, humidity);
         if (card->humidity_bar) {
             lv_bar_set_range(card->humidity_bar, 0, 100);
             lv_bar_set_value(card->humidity_bar, (int32_t)humidity, LV_ANIM_OFF);
         }
 
         if (card->hydration) {
-            lv_label_set_text_fmt(card->hydration, "Hydratation : %.0f %%", hydration);
+            lv_label_set_text_fmt(card->hydration, hydration_fmt, hydration);
         }
         if (card->hydration_bar) {
             lv_bar_set_range(card->hydration_bar, 0, 100);
@@ -168,19 +218,19 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
         }
 
         if (card->health) {
-            lv_label_set_text_fmt(card->health, "Santé : %.0f %%", health);
+            lv_label_set_text_fmt(card->health, health_fmt, health);
         }
         if (card->health_bar) {
             lv_bar_set_value(card->health_bar, (int32_t)health, LV_ANIM_OFF);
         }
 
-        lv_label_set_text_fmt(card->stress, "Stress : %.0f %%", stress);
+        lv_label_set_text_fmt(card->stress, stress_fmt, stress);
         if (card->stress_bar) {
             lv_bar_set_range(card->stress_bar, 0, 100);
             lv_bar_set_value(card->stress_bar, (int32_t)stress, LV_ANIM_OFF);
         }
 
-        lv_label_set_text_fmt(card->activity, "Activité : %.0f %%", activity_pct);
+        lv_label_set_text_fmt(card->activity, activity_fmt, activity_pct);
         if (card->activity_bar) {
             lv_bar_set_range(card->activity_bar, 0, 100);
             lv_bar_set_value(card->activity_bar, (int32_t)activity_pct, LV_ANIM_OFF);
@@ -193,11 +243,11 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
             ui_dashboard_format_timestamp(state->health.last_feeding_timestamp, buffer, sizeof(buffer));
             if (state->profile && state->profile->feeding_interval_days > 0) {
                 lv_label_set_text_fmt(card->feeding,
-                                      "Dernier repas : %s (intervalle %u j)",
+                                      feeding_interval_fmt,
                                       buffer,
                                       state->profile->feeding_interval_days);
             } else {
-                lv_label_set_text_fmt(card->feeding, "Dernier repas : %s", buffer);
+                lv_label_set_text_fmt(card->feeding, feeding_simple_fmt, buffer);
             }
         }
 
@@ -206,7 +256,7 @@ void ui_dashboard_refresh(size_t terrarium_count, const terrarium_state_t *first
             bool has_alert = ui_dashboard_format_alerts(state, now, alert_buffer, sizeof(alert_buffer));
             lv_label_set_text(card->alerts, alert_buffer);
             if (card->alerts_title) {
-                lv_label_set_text(card->alerts_title, has_alert ? "Alertes" : "Alertes (aucune)");
+                lv_label_set_text(card->alerts_title, has_alert ? alerts_title_text : alerts_none_text);
             }
         }
 
@@ -310,19 +360,31 @@ static void ui_dashboard_format_timestamp(uint32_t timestamp, char *buffer, size
     }
 
     if (timestamp == 0 || timestamp == TERRARIUM_INVALID_TIMESTAMP) {
-        snprintf(buffer, buffer_len, "%s", "non enregistré");
+        const char *missing = i18n_manager_get_string("dashboard_timestamp_missing");
+        if (!missing) {
+            missing = "not recorded";
+        }
+        snprintf(buffer, buffer_len, "%s", missing);
         return;
     }
 
     time_t ts = (time_t)timestamp;
     struct tm tm_buf;
     if (gmtime_r(&ts, &tm_buf) == NULL) {
-        snprintf(buffer, buffer_len, "epoch %u", (unsigned)timestamp);
+        const char *epoch_fmt = i18n_manager_get_string("dashboard_timestamp_epoch_fmt");
+        if (!epoch_fmt) {
+            epoch_fmt = "epoch %u";
+        }
+        snprintf(buffer, buffer_len, epoch_fmt, (unsigned)timestamp);
         return;
     }
 
     if (strftime(buffer, buffer_len, "%Y-%m-%d %H:%MZ", &tm_buf) == 0) {
-        snprintf(buffer, buffer_len, "epoch %u", (unsigned)timestamp);
+        const char *epoch_fmt = i18n_manager_get_string("dashboard_timestamp_epoch_fmt");
+        if (!epoch_fmt) {
+            epoch_fmt = "epoch %u";
+        }
+        snprintf(buffer, buffer_len, epoch_fmt, (unsigned)timestamp);
     }
 }
 
@@ -338,7 +400,11 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
     buffer[0] = '\0';
 
     if (!state) {
-        snprintf(buffer, buffer_len, "%s", "Aucune donnée disponible");
+        const char *no_data = i18n_manager_get_string("dashboard_alerts_unavailable");
+        if (!no_data) {
+            no_data = "No data available";
+        }
+        snprintf(buffer, buffer_len, "%s", no_data);
         return false;
     }
 
@@ -346,13 +412,42 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
     bool has_alert = false;
     const environment_profile_t *target = state->profile ? &state->profile->environment : NULL;
 
+    const char *temp_fmt = i18n_manager_get_string("dashboard_alert_temp_fmt");
+    if (!temp_fmt) {
+        temp_fmt = "%s Temperature drift %.1f °C\n";
+    }
+    const char *humidity_fmt = i18n_manager_get_string("dashboard_alert_humidity_fmt");
+    if (!humidity_fmt) {
+        humidity_fmt = "%s Humidity ±%.0f %%\n";
+    }
+    const char *lux_fmt = i18n_manager_get_string("dashboard_alert_lux_fmt");
+    if (!lux_fmt) {
+        lux_fmt = "%s Light variation %.0f lux\n";
+    }
+    const char *hydration_fmt = i18n_manager_get_string("dashboard_alert_hydration_fmt");
+    if (!hydration_fmt) {
+        hydration_fmt = "%s Low hydration (%.0f %%)\n";
+    }
+    const char *stress_fmt = i18n_manager_get_string("dashboard_alert_stress_fmt");
+    if (!stress_fmt) {
+        stress_fmt = "%s High stress (%.0f %%)\n";
+    }
+    const char *feeding_fmt = i18n_manager_get_string("dashboard_alert_feeding_fmt");
+    if (!feeding_fmt) {
+        feeding_fmt = "%s Feeding required (overdue)\n";
+    }
+    const char *no_alerts_text = i18n_manager_get_string("dashboard_alerts_no_active");
+    if (!no_alerts_text) {
+        no_alerts_text = "No critical alerts";
+    }
+
     if (target) {
         float delta_temp = fabsf(state->current_environment.temp_day_c - target->temp_day_c);
         if (delta_temp > 3.0f) {
             has_alert |= ui_dashboard_append_line(buffer,
                                                   buffer_len,
                                                   &written,
-                                                  "%s Température dérive de %.1f °C\n",
+                                                  temp_fmt,
                                                   LV_SYMBOL_WARNING,
                                                   delta_temp);
         }
@@ -362,7 +457,7 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
             has_alert |= ui_dashboard_append_line(buffer,
                                                   buffer_len,
                                                   &written,
-                                                  "%s Hygrométrie ±%.0f %%\n",
+                                                  humidity_fmt,
                                                   LV_SYMBOL_WARNING,
                                                   delta_humidity);
         }
@@ -372,7 +467,7 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
             has_alert |= ui_dashboard_append_line(buffer,
                                                   buffer_len,
                                                   &written,
-                                                  "%s Luminosité variation %.0f lux\n",
+                                                  lux_fmt,
                                                   LV_SYMBOL_WARNING,
                                                   delta_lux);
         }
@@ -382,7 +477,7 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
         has_alert |= ui_dashboard_append_line(buffer,
                                               buffer_len,
                                               &written,
-                                              "%s Hydratation faible (%.0f %%)\n",
+                                              hydration_fmt,
                                               LV_SYMBOL_WARNING,
                                               state->health.hydration_pct);
     }
@@ -391,7 +486,7 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
         has_alert |= ui_dashboard_append_line(buffer,
                                               buffer_len,
                                               &written,
-                                              "%s Stress élevé (%.0f %%)\n",
+                                              stress_fmt,
                                               LV_SYMBOL_WARNING,
                                               state->health.stress_pct);
     }
@@ -400,12 +495,12 @@ static bool ui_dashboard_format_alerts(const terrarium_state_t *state,
         has_alert |= ui_dashboard_append_line(buffer,
                                               buffer_len,
                                               &written,
-                                              "%s Repas requis (intervalle dépassé)\n",
+                                              feeding_fmt,
                                               LV_SYMBOL_WARNING);
     }
 
     if (!has_alert) {
-        snprintf(buffer, buffer_len, "Aucune alerte critique");
+        snprintf(buffer, buffer_len, "%s", no_alerts_text);
         return false;
     }
 
@@ -425,7 +520,11 @@ static void ui_dashboard_format_history(const terrarium_state_t *state,
     }
 
     if (!state) {
-        snprintf(buffer, buffer_len, "%s", "Historique indisponible");
+        const char *text = i18n_manager_get_string("dashboard_history_unavailable");
+        if (!text) {
+            text = "History unavailable";
+        }
+        snprintf(buffer, buffer_len, "%s", text);
         return;
     }
 
@@ -435,30 +534,46 @@ static void ui_dashboard_format_history(const terrarium_state_t *state,
     uint32_t elapsed_minutes = (elapsed % 3600U) / 60U;
 
     if (elapsed == 0) {
-        snprintf(buffer, buffer_len, "Historique : alimentation récente ou inconnue");
+        const char *text = i18n_manager_get_string("dashboard_history_recent");
+        if (!text) {
+            text = "History: feeding just occurred or unknown";
+        }
+        snprintf(buffer, buffer_len, "%s", text);
         return;
     }
 
     if (elapsed_days > 0) {
+        const char *fmt = i18n_manager_get_string("dashboard_history_days_fmt");
+        if (!fmt) {
+            fmt = "Last feeding %u d %u h ago\nActivity %.0f %% | Health %.0f %%";
+        }
         snprintf(buffer,
                  buffer_len,
-                 "Dernier repas il y a %u j %u h\nActivité %.0f %% | Santé %.0f %%",
+                 fmt,
                  (unsigned)elapsed_days,
                  (unsigned)(elapsed_hours % 24U),
                  state->activity_score * 100.0f,
                  state->health.health_pct);
     } else if (elapsed_hours > 0) {
+        const char *fmt = i18n_manager_get_string("dashboard_history_hours_fmt");
+        if (!fmt) {
+            fmt = "Last feeding %u h %u min ago\nActivity %.0f %% | Health %.0f %%";
+        }
         snprintf(buffer,
                  buffer_len,
-                 "Dernier repas il y a %u h %u min\nActivité %.0f %% | Santé %.0f %%",
+                 fmt,
                  (unsigned)elapsed_hours,
                  (unsigned)elapsed_minutes,
                  state->activity_score * 100.0f,
                  state->health.health_pct);
     } else {
+        const char *fmt = i18n_manager_get_string("dashboard_history_minutes_fmt");
+        if (!fmt) {
+            fmt = "Last feeding %u min ago\nActivity %.0f %% | Health %.0f %%";
+        }
         snprintf(buffer,
                  buffer_len,
-                 "Dernier repas il y a %u min\nActivité %.0f %% | Santé %.0f %%",
+                 fmt,
                  (unsigned)elapsed_minutes,
                  state->activity_score * 100.0f,
                  state->health.health_pct);
