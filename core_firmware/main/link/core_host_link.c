@@ -105,6 +105,7 @@ static bool s_last_state_valid = false;
 static bool s_force_next_full = true;
 static uint32_t s_delta_since_full = 0;
 static uint32_t s_last_full_epoch = 0;
+static bool s_peer_supports_delta = false;
 
 static uint8_t checksum_compute(uint8_t type, uint16_t length, const uint8_t *payload);
 static esp_err_t uart_send_frame(core_link_msg_type_t type, const void *payload, uint16_t length);
@@ -165,6 +166,11 @@ esp_err_t core_host_link_init(const core_host_link_config_t *config)
     s_ping_in_flight = false;
     s_display_alive = false;
     s_watchdog_triggered = false;
+    s_last_state_valid = false;
+    s_force_next_full = true;
+    s_delta_since_full = 0;
+    s_last_full_epoch = 0;
+    s_peer_supports_delta = false;
 
     s_initialized = true;
     ESP_LOGI(TAG, "UART host ready on port %d (TX=%d RX=%d @ %d bps)", s_config.uart_port, s_config.tx_gpio, s_config.rx_gpio, s_config.baud_rate);
@@ -211,7 +217,7 @@ esp_err_t core_host_link_send_state(const core_link_state_frame_t *frame)
         sanitized.terrariums[i] = frame->terrariums[i];
     }
 
-    bool require_full = s_force_next_full || !s_last_state_valid;
+    bool require_full = s_force_next_full || !s_last_state_valid || !s_peer_supports_delta;
     if (!require_full) {
         require_full = !ensure_baseline_compatible(&sanitized);
     }
@@ -731,8 +737,14 @@ static void handle_frame(core_link_msg_type_t type, const uint8_t *payload, uint
                 core_link_hello_ack_payload_t ack;
                 memcpy(&ack, payload, sizeof(ack));
                 s_peer_version = ack.protocol_version;
+                s_peer_supports_delta = (ack.protocol_version >= CORE_LINK_PROTOCOL_VERSION);
+                if (!s_peer_supports_delta) {
+                    ESP_LOGW(TAG, "Peer protocol v%u does not advertise STATE_DELTA support, forcing full frames", s_peer_version);
+                    schedule_full_frame();
+                }
             } else {
                 s_peer_version = 0;
+                s_peer_supports_delta = false;
             }
             if (!core_host_link_is_handshake_complete()) {
                 xEventGroupSetBits(s_events, CORE_HOST_EVENT_HANDSHAKE);
