@@ -25,6 +25,7 @@ typedef struct {
 } asset_handle_t;
 
 esp_err_t asset_cache_init(void);
+void asset_cache_deinit(void);
 void asset_cache_tick(void);
 esp_err_t asset_cache_get(const char *path, asset_handle_t *handle);
 void asset_cache_release(asset_handle_t *handle);
