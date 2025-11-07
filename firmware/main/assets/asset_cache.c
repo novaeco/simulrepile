@@ -44,6 +44,11 @@ typedef struct {
 static const char *TAG = "asset_cache";
 static asset_cache_context_t s_cache;
 
+static void asset_cache_reset_context(void)
+{
+    memset(&s_cache, 0, sizeof(s_cache));
+}
+
 static uint32_t asset_cache_hash(const char *path)
 {
     const uint8_t *bytes = (const uint8_t *)path;
@@ -147,6 +152,28 @@ static void asset_cache_free_entry(asset_cache_entry_t *entry)
     free(entry->path);
     entry->path = NULL;
     free(entry);
+}
+
+void asset_cache_deinit(void)
+{
+    if (!s_cache.initialized) {
+        return;
+    }
+
+    size_t released = s_cache.count;
+    asset_cache_entry_t *cursor = s_cache.head;
+    while (cursor) {
+        asset_cache_entry_t *next = cursor->next;
+        asset_cache_free_entry(cursor);
+        cursor = next;
+    }
+
+    asset_cache_reset_context();
+    if (released > 0U) {
+        ESP_LOGI(TAG, "Asset cache flushed (%zu entries)", released);
+    } else {
+        ESP_LOGD(TAG, "Asset cache flushed (empty)");
+    }
 }
 
 static bool asset_cache_evict_entry(asset_cache_entry_t *entry)
@@ -330,7 +357,11 @@ static esp_err_t asset_cache_create_entry(const char *path, asset_cache_entry_t 
 
 esp_err_t asset_cache_init(void)
 {
-    memset(&s_cache, 0, sizeof(s_cache));
+    if (s_cache.initialized) {
+        asset_cache_deinit();
+    }
+
+    asset_cache_reset_context();
     s_cache.capacity = CONFIG_APP_ASSET_CACHE_CAPACITY;
     if (s_cache.capacity == 0U) {
         s_cache.capacity = 1U;
