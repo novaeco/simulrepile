@@ -193,6 +193,110 @@ config BSP_USB_CAN_SELECTABLE
         between native USB (CDC) and CAN functionality from the
         settings screen.
 
+config BSP_BATTERY_MONITOR
+    bool "Enable on-board battery monitor"
+    default y
+    help
+        Enables the lithium battery voltage monitor. When enabled the
+        BSP samples the configured ADC channel periodically and reports
+        the filtered cell voltage to the user interface.
+
+if BSP_BATTERY_MONITOR
+
+choice BSP_BATTERY_ADC_UNIT
+    prompt "ADC unit for battery sensing"
+    default BSP_BATTERY_ADC_UNIT_1
+    help
+        Selects the ADC peripheral used to monitor the battery divider.
+
+config BSP_BATTERY_ADC_UNIT_1
+    bool "ADC unit 1"
+
+config BSP_BATTERY_ADC_UNIT_2
+    bool "ADC unit 2"
+endchoice
+
+config BSP_BATTERY_ADC_CHANNEL
+    int "ADC channel index"
+    range 0 9
+    default 4
+    help
+        Numeric ADC channel connected to the battery sense divider.
+        Refer to the carrier schematic when adjusting this value.
+
+choice BSP_BATTERY_ATTEN
+    prompt "ADC attenuation"
+    default BSP_BATTERY_ATTEN_DB_11
+    help
+        Select the attenuation applied to the ADC channel. Higher
+        attenuation allows measuring higher voltages at the cost of
+        precision for low voltages.
+
+config BSP_BATTERY_ATTEN_DB_0
+    bool "0 dB"
+
+config BSP_BATTERY_ATTEN_DB_2_5
+    bool "2.5 dB"
+
+config BSP_BATTERY_ATTEN_DB_6
+    bool "6 dB"
+
+config BSP_BATTERY_ATTEN_DB_11
+    bool "11 dB"
+endchoice
+
+config BSP_BATTERY_DIVIDER_RHIGH_KOHM
+    int "High-side resistor value (kΩ)"
+    range 1 1000
+    default 200
+    help
+        Value in kilo-ohms of the resistor connected between VBAT and
+        the ADC sense node. Used to convert the sense voltage back to
+        the cell voltage.
+
+config BSP_BATTERY_DIVIDER_RLOW_KOHM
+    int "Low-side resistor value (kΩ)"
+    range 1 1000
+    default 100
+    help
+        Value in kilo-ohms of the resistor connected between the sense
+        node and ground.
+
+config BSP_BATTERY_OFFSET_MV
+    int "Calibration offset (mV)"
+    range -500 500
+    default 0
+    help
+        Optional offset applied after converting the divider voltage to
+        millivolts. Tune this value with a calibrated multimeter to
+        cancel systematic errors.
+
+config BSP_BATTERY_SAMPLES
+    int "Samples per reading"
+    range 1 64
+    default 16
+    help
+        Number of ADC samples taken for each battery measurement. More
+        samples reduce noise at the cost of additional latency.
+
+config BSP_BATTERY_FILTER_ALPHA_NUM
+    int "Filter coefficient numerator"
+    range 1 64
+    default 1
+    help
+        Numerator of the exponential moving average applied to successive
+        battery readings. Must be less or equal to the denominator.
+
+config BSP_BATTERY_FILTER_ALPHA_DEN
+    int "Filter coefficient denominator"
+    range 1 128
+    default 4
+    help
+        Denominator of the exponential moving average applied to
+        successive battery readings.
+
+endif # BSP_BATTERY_MONITOR
+
 endmenu
 
 endmenu
