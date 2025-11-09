@@ -12,12 +12,16 @@
 
 #include "lvgl_port.h"
 
+#include "driver/adc_oneshot.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "driver/sdmmc_host.h"
 
 #include "esp_check.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc_cal.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 
@@ -48,6 +52,18 @@ static usb_phy_handle_t s_usb_phy = NULL;
 static bool s_sd_host_initialized = false;
 static bool s_tinyusb_started = false;
 
+#if CONFIG_BSP_BATTERY_MONITOR
+static adc_oneshot_unit_handle_t s_battery_adc_handle = NULL;
+static bool s_battery_adc_initialized = false;
+static adc_cali_handle_t s_battery_cali_handle = NULL;
+static bool s_battery_cali_ready = false;
+static esp_adc_cal_characteristics_t s_battery_legacy_cali = {0};
+static bool s_battery_legacy_cali_ready = false;
+static bool s_battery_monitor_ready = false;
+static int32_t s_battery_mv_filtered = -1;
+static portMUX_TYPE s_battery_filter_lock = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
 #define BACKLIGHT_LEDC_TIMER        LEDC_TIMER_0
 #define BACKLIGHT_LEDC_MODE         LEDC_LOW_SPEED_MODE
 #define BACKLIGHT_LEDC_CHANNEL      LEDC_CHANNEL_0
@@ -74,6 +90,40 @@ static void touch_task(void *arg);
 static void touch_process_sample(void);
 static void touch_handle_point(uint8_t id, uint8_t event_flag, uint16_t x, uint16_t y, bool *seen_points);
 static void touch_dispatch_event(core_link_touch_type_t type, uint8_t id, uint16_t x, uint16_t y);
+
+#if CONFIG_BSP_BATTERY_MONITOR
+static esp_err_t battery_monitor_init(void);
+static esp_err_t battery_configure_adc(void);
+static esp_err_t battery_configure_calibration(void);
+static int32_t battery_convert_raw_to_mv(int raw_sample);
+static int32_t battery_divider_to_cell_mv(int32_t sense_mv);
+static int32_t battery_filter_sample(int32_t cell_mv);
+#endif
+
+#if CONFIG_BSP_BATTERY_MONITOR
+#if CONFIG_BSP_BATTERY_ADC_UNIT_1
+#define BSP_BATTERY_ADC_UNIT        ADC_UNIT_1
+#else
+#define BSP_BATTERY_ADC_UNIT        ADC_UNIT_2
+#endif
+
+#if CONFIG_BSP_BATTERY_ATTEN_DB_0
+#define BSP_BATTERY_ADC_ATTEN       ADC_ATTEN_DB_0
+#elif CONFIG_BSP_BATTERY_ATTEN_DB_2_5
+#define BSP_BATTERY_ADC_ATTEN       ADC_ATTEN_DB_2_5
+#elif CONFIG_BSP_BATTERY_ATTEN_DB_6
+#define BSP_BATTERY_ADC_ATTEN       ADC_ATTEN_DB_6
+#else
+#define BSP_BATTERY_ADC_ATTEN       ADC_ATTEN_DB_11
+#endif
+
+#define BSP_BATTERY_ADC_CHANNEL     ((adc_channel_t)CONFIG_BSP_BATTERY_ADC_CHANNEL)
+#ifndef ADC_BITWIDTH_DEFAULT
+#define ADC_BITWIDTH_DEFAULT        ADC_BITWIDTH_12
+#endif
+#define BSP_BATTERY_ADC_BITWIDTH    ADC_BITWIDTH_DEFAULT
+#define ADC_RAW_MAX                 ((1 << 12) - 1)
+#endif
 
 static void IRAM_ATTR touch_irq_handler(void *arg)
 {
@@ -293,6 +343,161 @@ static esp_err_t configure_usb(void)
     return ESP_OK;
 }
 
+#if CONFIG_BSP_BATTERY_MONITOR
+static esp_err_t battery_monitor_init(void)
+{
+    if (s_battery_monitor_ready) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(battery_configure_adc(), TAG, "Battery ADC init failed");
+    esp_err_t cal_err = battery_configure_calibration();
+    if (cal_err == ESP_OK) {
+        ESP_LOGI(TAG, "Battery ADC calibration ready");
+    } else if (cal_err == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Battery calibration unsupported, falling back to nominal reference");
+    } else {
+        ESP_RETURN_ON_ERROR(cal_err, TAG, "Battery calibration failed");
+    }
+
+    s_battery_monitor_ready = true;
+    return ESP_OK;
+}
+
+static esp_err_t battery_configure_adc(void)
+{
+    if (s_battery_adc_initialized) {
+        return ESP_OK;
+    }
+
+    adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id = BSP_BATTERY_ADC_UNIT,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&unit_cfg, &s_battery_adc_handle), TAG, "ADC unit init failed");
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .bitwidth = BSP_BATTERY_ADC_BITWIDTH,
+        .atten = BSP_BATTERY_ADC_ATTEN,
+    };
+    ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(s_battery_adc_handle, BSP_BATTERY_ADC_CHANNEL, &chan_cfg), TAG,
+                        "ADC channel config failed");
+
+    s_battery_adc_initialized = true;
+    return ESP_OK;
+}
+
+static esp_err_t battery_configure_calibration(void)
+{
+    if (s_battery_cali_ready || s_battery_legacy_cali_ready) {
+        return ESP_OK;
+    }
+
+    esp_err_t cali_result = ESP_ERR_NOT_SUPPORTED;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!s_battery_cali_ready) {
+        adc_cali_curve_fitting_config_t cali_cfg = {
+            .unit_id = BSP_BATTERY_ADC_UNIT,
+            .atten = BSP_BATTERY_ADC_ATTEN,
+            .bitwidth = BSP_BATTERY_ADC_BITWIDTH,
+        };
+        esp_err_t err = adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_battery_cali_handle);
+        if (err == ESP_OK) {
+            s_battery_cali_ready = true;
+            return ESP_OK;
+        }
+        if (err != ESP_ERR_NOT_SUPPORTED && err != ESP_ERR_INVALID_STATE) {
+            cali_result = err;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINEAR_FITTING_SUPPORTED
+    if (!s_battery_cali_ready) {
+        adc_cali_linear_fitting_config_t cali_cfg = {
+            .unit_id = BSP_BATTERY_ADC_UNIT,
+            .atten = BSP_BATTERY_ADC_ATTEN,
+            .bitwidth = BSP_BATTERY_ADC_BITWIDTH,
+        };
+        esp_err_t err = adc_cali_create_scheme_linear_fitting(&cali_cfg, &s_battery_cali_handle);
+        if (err == ESP_OK) {
+            s_battery_cali_ready = true;
+            return ESP_OK;
+        }
+        if (err != ESP_ERR_NOT_SUPPORTED && err != ESP_ERR_INVALID_STATE) {
+            cali_result = err;
+        }
+    }
+#endif
+
+    if (!s_battery_legacy_cali_ready) {
+        esp_err_t efuse_status = esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP);
+        if (efuse_status != ESP_OK && efuse_status != ESP_ERR_NOT_FOUND) {
+            efuse_status = esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF);
+        }
+        if (efuse_status == ESP_OK || efuse_status == ESP_ERR_NOT_FOUND) {
+            esp_adc_cal_characterize(BSP_BATTERY_ADC_UNIT, BSP_BATTERY_ADC_ATTEN, BSP_BATTERY_ADC_BITWIDTH, 0,
+                                     &s_battery_legacy_cali);
+            s_battery_legacy_cali_ready = true;
+            return ESP_OK;
+        }
+    }
+
+    return cali_result;
+}
+
+static int32_t battery_convert_raw_to_mv(int raw_sample)
+{
+    int millivolts = 0;
+
+    if (s_battery_cali_ready) {
+        esp_err_t err = adc_cali_raw_to_voltage(s_battery_cali_handle, raw_sample, &millivolts);
+        if (err == ESP_OK) {
+            return millivolts;
+        }
+        ESP_LOGW(TAG, "ADC calibration conversion failed: %s", esp_err_to_name(err));
+    }
+
+    if (s_battery_legacy_cali_ready) {
+        millivolts = esp_adc_cal_raw_to_voltage(raw_sample, &s_battery_legacy_cali);
+        return millivolts;
+    }
+
+    millivolts = (int)(((int64_t)raw_sample * 1100) / ADC_RAW_MAX);
+    return millivolts;
+}
+
+static int32_t battery_divider_to_cell_mv(int32_t sense_mv)
+{
+    int64_t numerator = (int64_t)sense_mv * (CONFIG_BSP_BATTERY_DIVIDER_RHIGH_KOHM + CONFIG_BSP_BATTERY_DIVIDER_RLOW_KOHM);
+    int32_t cell_mv = (int32_t)(numerator / CONFIG_BSP_BATTERY_DIVIDER_RLOW_KOHM);
+    cell_mv += CONFIG_BSP_BATTERY_OFFSET_MV;
+    if (cell_mv < 0) {
+        cell_mv = 0;
+    }
+    return cell_mv;
+}
+
+static int32_t battery_filter_sample(int32_t cell_mv)
+{
+    int32_t alpha_num = CONFIG_BSP_BATTERY_FILTER_ALPHA_NUM;
+    int32_t alpha_den = CONFIG_BSP_BATTERY_FILTER_ALPHA_DEN;
+    if (alpha_num > alpha_den) {
+        alpha_num = alpha_den;
+    }
+
+    if (s_battery_mv_filtered < 0) {
+        s_battery_mv_filtered = cell_mv;
+    } else {
+        int64_t accum = (int64_t)s_battery_mv_filtered * (alpha_den - alpha_num) + (int64_t)cell_mv * alpha_num;
+        accum += alpha_den / 2;
+        s_battery_mv_filtered = (int32_t)(accum / alpha_den);
+    }
+    return s_battery_mv_filtered;
+}
+#endif
+
 esp_err_t bsp_init(void)
 {
     ESP_RETURN_ON_ERROR(exio_init(), TAG, "Failed to init EXIO");
@@ -302,6 +507,14 @@ esp_err_t bsp_init(void)
     ESP_RETURN_ON_ERROR(configure_sd(), TAG, "SD init failed");
     ESP_RETURN_ON_ERROR(configure_usb(), TAG, "USB init failed");
     ESP_RETURN_ON_ERROR(bsp_backlight_enable(true), TAG, "Backlight enable failed");
+#if CONFIG_BSP_BATTERY_MONITOR
+    esp_err_t battery_err = battery_monitor_init();
+    if (battery_err == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Battery monitor calibration unavailable, using coarse reference");
+    } else {
+        ESP_RETURN_ON_ERROR(battery_err, TAG, "Battery monitor init failed");
+    }
+#endif
     ESP_LOGI(TAG, "BSP initialized");
     return ESP_OK;
 }
@@ -470,8 +683,37 @@ esp_err_t bsp_backlight_set(uint8_t percent)
 esp_err_t bsp_battery_read_mv(uint16_t *millivolts)
 {
     ESP_RETURN_ON_FALSE(millivolts, ESP_ERR_INVALID_ARG, TAG, "Null pointer");
-    *millivolts = 3800 + s_backlight_percent;
+#if CONFIG_BSP_BATTERY_MONITOR
+    ESP_RETURN_ON_ERROR(battery_monitor_init(), TAG, "Battery monitor unavailable");
+
+    int64_t accum_mv = 0;
+    for (int i = 0; i < CONFIG_BSP_BATTERY_SAMPLES; ++i) {
+        int raw_sample = 0;
+        ESP_RETURN_ON_ERROR(adc_oneshot_read(s_battery_adc_handle, BSP_BATTERY_ADC_CHANNEL, &raw_sample), TAG,
+                            "ADC read failed");
+        accum_mv += battery_convert_raw_to_mv(raw_sample);
+    }
+
+    int32_t sense_mv = (int32_t)(accum_mv / CONFIG_BSP_BATTERY_SAMPLES);
+    int32_t cell_mv = battery_divider_to_cell_mv(sense_mv);
+
+    portENTER_CRITICAL(&s_battery_filter_lock);
+    int32_t filtered_mv = battery_filter_sample(cell_mv);
+    portEXIT_CRITICAL(&s_battery_filter_lock);
+
+    if (filtered_mv < 0) {
+        filtered_mv = 0;
+    }
+    if (filtered_mv > UINT16_MAX) {
+        filtered_mv = UINT16_MAX;
+    }
+
+    *millivolts = (uint16_t)filtered_mv;
     return ESP_OK;
+#else
+    (void)millivolts;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 esp_err_t bsp_select_usb(bool usb_mode)
