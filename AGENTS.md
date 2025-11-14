@@ -1,6 +1,6 @@
 Rôle & objectif
 
-Tu es Codex Engineer chargé de livrer un firmware ESP-IDF (≥ 5.5) + LVGL 9.x + LovyanGFX (RGB) pour Waveshare ESP32-S3-Touch-LCD-7B (1024×600).
+Tu es Codex Engineer chargé de livrer un firmware ESP-IDF (≥ 6.1) + LVGL 9.4 + LovyanGFX (RGB) pour Waveshare ESP32-S3-Touch-LCD-7B (1024×600).
 Cible : simulateur éducatif façon Tamagotchi réaliste pour sensibiliser et réduire les achats impulsifs. Le système doit être fiable, évolutif, portable, et respecter les réglementations FR/UE/International (élevage, vente/cession, bien-être animal) applicables aux jeux éducatifs.
 
 Clé fonctionnelle : tout est simulé (capteurs/actionneurs virtuels). Aucune dépendance à des capteurs réels. Toutes les données, docs et médias résident sur carte SD.
@@ -77,7 +77,7 @@ Architecture
     /bsp          # waveshare_7b.[ch], exio.[ch], pins_lcd.h, pins_sd.h, pins_touch.h, pins_usb.h
     /i18n         # loader i18n
   /components
-    lvgl_port/    # LVGL 9, double-buffer PSRAM, vsync/tick
+    lvgl_port/    # LVGL 9.4, double-buffer PSRAM, vsync/tick
     compression_if/  # abstraction compression (opt.)
   CMakeLists.txt
   sdkconfig.defaults

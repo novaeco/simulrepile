@@ -42,7 +42,7 @@ Les valeurs par défaut correspondent à un câblage croisé direct UART1 entre 
 
 ## Dépendances
 
-Le projet s'appuie sur ESP-IDF ≥ 5.5. Aucun composant externe n'est nécessaire ; les structures de
+Le projet s'appuie sur ESP-IDF ≥ 6.1. Aucun composant externe n'est nécessaire ; les structures de
 protocole partagées se trouvent dans `../firmware/common/include/`.
 
 ## Profils terrarium (JSON)
