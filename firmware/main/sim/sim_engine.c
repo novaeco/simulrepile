@@ -11,11 +11,22 @@
 #include "sim/presets.h"
 
 #define MAX_TERRARIUMS 4
+#define SIM_TIME_ACCELERATION 240.0f
+#define SIM_SECONDS_PER_DAY (24.0f * 60.0f * 60.0f)
+#define SIM_SEASON_LENGTH_DAYS 120.0f
+
+typedef struct {
+    float circadian_phase;
+    float season_phase;
+    float hydration_reservoir;
+    float stress_trend;
+} sim_runtime_state_t;
 
 static const char *TAG = "sim_engine";
 static terrarium_state_t s_terrariums[MAX_TERRARIUMS];
 static size_t s_terrarium_count = 0;
 static float s_time_accumulator = 0.0f;
+static double s_simulated_seconds = 0.0;
 static bool s_remote_active = false;
 static bool s_watchdog_fault_latched = false;
 static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -26,13 +37,19 @@ static char s_remote_scientific_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1
 static char s_remote_common_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1];
 static char s_manual_scientific_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1];
 static char s_manual_common_names[MAX_TERRARIUMS][CORE_LINK_NAME_MAX_LEN + 1];
+static sim_runtime_state_t s_runtime[MAX_TERRARIUMS];
 
 static void sim_engine_load_defaults_locked(void);
 static void sim_engine_reset_manual_profile(size_t index);
+static void sim_engine_reset_runtime(size_t index);
+static void sim_engine_sync_runtime_from_state(size_t index, const terrarium_state_t *state);
+static void sim_engine_update_local_slot(size_t index, float scaled_delta, uint32_t now_seconds);
+static float sim_clampf(float value, float min_value, float max_value);
 
 void sim_engine_init(void)
 {
     portENTER_CRITICAL(&s_state_lock);
+    memset(s_runtime, 0, sizeof(s_runtime));
     memset(s_terrariums, 0, sizeof(s_terrariums));
     memset(s_remote_profiles, 0, sizeof(s_remote_profiles));
     memset(s_manual_profiles, 0, sizeof(s_manual_profiles));
@@ -42,9 +59,21 @@ void sim_engine_init(void)
     memset(s_manual_common_names, 0, sizeof(s_manual_common_names));
     s_remote_active = false;
     s_time_accumulator = 0.0f;
+    s_simulated_seconds = 0.0;
     sim_engine_load_defaults_locked();
     portEXIT_CRITICAL(&s_state_lock);
     ESP_LOGI(TAG, "Simulation initialized with %d terrariums", (int)s_terrarium_count);
+}
+
+static float sim_clampf(float value, float min_value, float max_value)
+{
+    if (value < min_value) {
+        return min_value;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
 }
 
 static void sim_engine_load_defaults_locked(void)
@@ -53,24 +82,21 @@ static void sim_engine_load_defaults_locked(void)
     const reptile_profile_t *presets = sim_presets_get_default(&preset_count);
     size_t count = preset_count < MAX_TERRARIUMS ? preset_count : MAX_TERRARIUMS;
     s_terrarium_count = count;
+    uint32_t now = (uint32_t)s_simulated_seconds;
 
     for (size_t i = 0; i < count; ++i) {
         s_default_profiles[i] = &presets[i];
         sim_engine_reset_manual_profile(i);
         terrarium_state_t *state = &s_terrariums[i];
-        state->profile = s_default_profiles[i];
-        state->current_environment = s_default_profiles[i]->environment;
-        state->health.hydration_pct = 85.0f;
-        state->health.health_pct = 95.0f;
-        state->health.stress_pct = 10.0f;
-        state->health.last_feeding_timestamp = 0;
-        state->activity_score = 0.5f;
+        terrarium_state_init(state, s_default_profiles[i], now);
+        sim_engine_sync_runtime_from_state(i, state);
     }
 
     for (size_t i = count; i < MAX_TERRARIUMS; ++i) {
         s_default_profiles[i] = NULL;
         sim_engine_reset_manual_profile(i);
         memset(&s_terrariums[i], 0, sizeof(s_terrariums[i]));
+        sim_engine_reset_runtime(i);
     }
 }
 
@@ -82,6 +108,108 @@ static void sim_engine_reset_manual_profile(size_t index)
     memset(&s_manual_profiles[index], 0, sizeof(s_manual_profiles[index]));
     memset(s_manual_scientific_names[index], 0, sizeof(s_manual_scientific_names[index]));
     memset(s_manual_common_names[index], 0, sizeof(s_manual_common_names[index]));
+    sim_engine_reset_runtime(index);
+}
+
+static void sim_engine_reset_runtime(size_t index)
+{
+    if (index >= MAX_TERRARIUMS) {
+        return;
+    }
+    sim_runtime_state_t *runtime = &s_runtime[index];
+    float offset = (float)(index + 1U) / (float)(MAX_TERRARIUMS + 1U);
+    runtime->circadian_phase = sim_clampf(offset, 0.0f, 1.0f);
+    runtime->season_phase = sim_clampf(offset * 0.37f, 0.0f, 1.0f);
+    runtime->hydration_reservoir = 0.75f;
+    runtime->stress_trend = 0.15f;
+}
+
+static void sim_engine_sync_runtime_from_state(size_t index, const terrarium_state_t *state)
+{
+    if (index >= MAX_TERRARIUMS || !state) {
+        return;
+    }
+    sim_runtime_state_t *runtime = &s_runtime[index];
+    runtime->hydration_reservoir = sim_clampf(state->health.hydration_pct / 100.0f, 0.0f, 1.0f);
+    runtime->stress_trend = sim_clampf(state->health.stress_pct / 100.0f, 0.0f, 1.0f);
+}
+
+static void sim_engine_update_local_slot(size_t index, float scaled_delta, uint32_t now_seconds)
+{
+    terrarium_state_t *state = &s_terrariums[index];
+    if (!state->profile) {
+        return;
+    }
+
+    sim_runtime_state_t *runtime = &s_runtime[index];
+    float day_increment = scaled_delta / SIM_SECONDS_PER_DAY;
+    runtime->circadian_phase += day_increment;
+    runtime->circadian_phase -= floorf(runtime->circadian_phase);
+    float season_increment = scaled_delta / (SIM_SECONDS_PER_DAY * SIM_SEASON_LENGTH_DAYS);
+    runtime->season_phase += season_increment;
+    runtime->season_phase -= floorf(runtime->season_phase);
+
+    float circadian = 0.5f - 0.5f * cosf(runtime->circadian_phase * 2.0f * (float)M_PI);
+    float seasonal = sinf(runtime->season_phase * 2.0f * (float)M_PI);
+    float micro = sinf((s_time_accumulator * 0.05f) + (float)index * 0.8f);
+
+    environment_profile_t target = state->profile->environment;
+    float temp_span = state->profile->environment.temp_day_c - state->profile->environment.temp_night_c;
+    target.temp_day_c = state->profile->environment.temp_night_c + temp_span * circadian + seasonal * 1.6f + micro * 0.8f;
+    float humidity_span = state->profile->environment.humidity_day_pct - state->profile->environment.humidity_night_pct;
+    target.humidity_day_pct = state->profile->environment.humidity_night_pct + humidity_span * circadian + seasonal * 4.0f;
+    target.humidity_day_pct = sim_clampf(target.humidity_day_pct, 30.0f, 95.0f);
+    float lux_span = state->profile->environment.lux_day - state->profile->environment.lux_night;
+    target.lux_day = state->profile->environment.lux_night + lux_span * circadian;
+    target.lux_day += state->profile->environment.lux_day * 0.05f * micro;
+    if (target.lux_day < state->profile->environment.lux_night) {
+        target.lux_day = state->profile->environment.lux_night;
+    }
+
+    float smoothing = sim_clampf(scaled_delta / 3600.0f, 0.05f, 1.0f);
+    terrarium_state_apply_environment(state, &target, smoothing);
+
+    float humidity_norm = sim_clampf((state->current_environment.humidity_day_pct - 40.0f) / 60.0f, 0.0f, 1.0f);
+    float hydration_rate = sim_clampf(scaled_delta / 7200.0f, 0.05f, 0.35f);
+    runtime->hydration_reservoir += (humidity_norm - runtime->hydration_reservoir) * hydration_rate;
+    runtime->hydration_reservoir = sim_clampf(runtime->hydration_reservoir, 0.0f, 1.0f);
+    state->health.hydration_pct = sim_clampf(55.0f + runtime->hydration_reservoir * 45.0f, 25.0f, 100.0f);
+
+    float temp_error = fabsf(state->current_environment.temp_day_c - state->profile->environment.temp_day_c);
+    float humidity_error = fabsf(state->current_environment.humidity_day_pct - state->profile->environment.humidity_day_pct);
+    float lux_target = state->profile->environment.lux_day > 1.0f ? state->profile->environment.lux_day : 1.0f;
+    float lux_error = fabsf(state->current_environment.lux_day - state->profile->environment.lux_day) / lux_target;
+    float environment_penalty = temp_error * 1.35f + humidity_error * 0.32f + lux_error * 22.0f;
+
+    uint32_t elapsed = terrarium_state_time_since_feeding(state, now_seconds);
+    float feeding_penalty = 0.0f;
+    if (state->profile->feeding_interval_days > 0U) {
+        float interval = (float)state->profile->feeding_interval_days * 24.0f * 3600.0f;
+        if (interval > 0.0f && (float)elapsed > interval) {
+            float overdue = (float)elapsed - interval;
+            feeding_penalty = sim_clampf((overdue / interval) * 60.0f, 0.0f, 45.0f);
+        }
+    }
+
+    float hydration_penalty = sim_clampf((80.0f - state->health.hydration_pct) * 0.45f, 0.0f, 35.0f);
+    float stress_target = sim_clampf(12.0f + environment_penalty + feeding_penalty * 0.5f + hydration_penalty * 0.6f, 0.0f, 100.0f);
+    float stress_rate = sim_clampf(scaled_delta / 5400.0f, 0.05f, 0.4f);
+    runtime->stress_trend += ((stress_target / 100.0f) - runtime->stress_trend) * stress_rate;
+    runtime->stress_trend = sim_clampf(runtime->stress_trend, 0.0f, 1.0f);
+    state->health.stress_pct = sim_clampf(runtime->stress_trend * 100.0f, 0.0f, 100.0f);
+
+    float health_target = sim_clampf(100.0f - (environment_penalty * 0.4f + feeding_penalty + hydration_penalty), 15.0f, 100.0f);
+    float health_rate = sim_clampf(scaled_delta / 7200.0f, 0.03f, 0.25f);
+    state->health.health_pct += (health_target - state->health.health_pct) * health_rate;
+    state->health.health_pct = sim_clampf(state->health.health_pct, 0.0f, 100.0f);
+
+    float temp_norm = 1.0f - sim_clampf(temp_error / 12.0f, 0.0f, 1.0f);
+    float stress_norm = 1.0f - state->health.stress_pct / 100.0f;
+    float hydration_norm = sim_clampf(state->health.hydration_pct / 100.0f, 0.0f, 1.0f);
+    float activity_target = sim_clampf(0.18f + 0.55f * temp_norm + 0.17f * stress_norm + 0.10f * hydration_norm, 0.05f, 0.98f);
+    float activity_rate = sim_clampf(scaled_delta / 3600.0f, 0.04f, 0.35f);
+    state->activity_score += (activity_target - state->activity_score) * activity_rate;
+    state->activity_score = sim_clampf(state->activity_score, 0.0f, 1.0f);
 }
 
 void sim_engine_step(float delta_seconds)
@@ -90,19 +218,16 @@ void sim_engine_step(float delta_seconds)
         (void)delta_seconds;
         return;
     }
+    if (delta_seconds <= 0.0f) {
+        return;
+    }
     portENTER_CRITICAL(&s_state_lock);
-    s_time_accumulator += delta_seconds;
+    float scaled_delta = delta_seconds * SIM_TIME_ACCELERATION;
+    s_time_accumulator += scaled_delta;
+    s_simulated_seconds += scaled_delta;
+    uint32_t now_seconds = (uint32_t)s_simulated_seconds;
     for (size_t i = 0; i < s_terrarium_count; ++i) {
-        terrarium_state_t *state = &s_terrariums[i];
-        if (!state->profile) {
-            continue;
-        }
-        float phase = sinf(s_time_accumulator * 0.01f + (float)i);
-        state->current_environment.temp_day_c = state->profile->environment.temp_day_c + phase;
-        state->current_environment.humidity_day_pct = state->profile->environment.humidity_day_pct + phase * 5.0f;
-        state->activity_score = 0.5f + 0.5f * phase;
-        state->health.stress_pct = 15.0f + 10.0f * (1.0f - state->activity_score);
-        state->health.health_pct = 90.0f + 5.0f * state->activity_score;
+        sim_engine_update_local_slot(i, scaled_delta, now_seconds);
     }
     portEXIT_CRITICAL(&s_state_lock);
 }
@@ -188,6 +313,7 @@ esp_err_t sim_engine_restore_slot(size_t index, const sim_saved_slot_t *state)
     slot->current_environment = state->environment;
     slot->health = state->health;
     slot->activity_score = state->activity_score;
+    sim_engine_sync_runtime_from_state(index, slot);
 
     if (index >= s_terrarium_count) {
         s_terrarium_count = index + 1;
@@ -246,6 +372,7 @@ esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame)
         state->health.health_pct = snap->health_pct;
         state->health.last_feeding_timestamp = snap->last_feeding_timestamp;
         state->activity_score = snap->activity_score;
+        sim_engine_sync_runtime_from_state(i, state);
     }
 
     for (size_t i = count; i < MAX_TERRARIUMS; ++i) {
@@ -257,6 +384,10 @@ esp_err_t sim_engine_apply_remote_snapshot(const core_link_state_frame_t *frame)
     }
 
     s_remote_active = count > 0;
+    if (frame->epoch_seconds != 0U) {
+        s_simulated_seconds = frame->epoch_seconds;
+        s_time_accumulator = (float)s_simulated_seconds;
+    }
     portEXIT_CRITICAL(&s_state_lock);
 
     ESP_LOGD(TAG,
