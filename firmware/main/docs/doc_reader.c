@@ -78,6 +78,26 @@ esp_err_t doc_reader_init(const char *root_path)
     }
     strlcpy(s_root, root_path, sizeof(s_root));
     ESP_LOGI(TAG, "Document root set to %s", s_root);
+
+    static const char *k_categories[] = {
+        "/reglementaires",
+        "/species",
+        "/guides",
+    };
+    for (size_t i = 0; i < sizeof(k_categories) / sizeof(k_categories[0]); ++i) {
+        char path[DOC_READER_MAX_PATH_LEN];
+        int written = snprintf(path, sizeof(path), "%s%s", s_root, k_categories[i]);
+        if (written <= 0 || written >= (int)sizeof(path)) {
+            ESP_LOGW(TAG, "Category path overflow for %s", k_categories[i]);
+            continue;
+        }
+        struct stat st = {0};
+        if (stat(path, &st) != 0) {
+            ESP_LOGW(TAG, "Document category missing: %s (errno=%d)", path, errno);
+        } else if (!S_ISDIR(st.st_mode)) {
+            ESP_LOGW(TAG, "Document category path is not a directory: %s", path);
+        }
+    }
     return ESP_OK;
 }
 

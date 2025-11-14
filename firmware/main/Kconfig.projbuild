@@ -31,13 +31,79 @@ config APP_ENABLE_WIFI_OTA
         Allow firmware upgrades through Wi-Fi in addition to SD card
         based updates. Requires Wi-Fi credentials management.
 
+config APP_ENABLE_TTS_SYNTH
+    bool "Enable embedded TTS synthesizer"
+    default y
+    help
+        Enable the lightweight formant-based speech synthesizer used to
+        vocalise alerts and menu interactions. The synthesizer streams
+        16-bit PCM samples over the dedicated I2S bus and requires the
+        I2S pins below to be wired to an external audio codec or class-D
+        amplifier. Disable this option if you rely solely on the logging
+        stub or an external audio source.
+
+if APP_ENABLE_TTS_SYNTH
+
+config APP_TTS_SAMPLE_RATE
+    int "TTS sample rate (Hz)"
+    range 8000 48000
+    default 16000
+    help
+        PCM output frequency for the embedded synthesizer. Higher sample
+        rates improve intelligibility at the cost of bandwidth on the
+        I2S bus and larger DMA buffers.
+
+config APP_TTS_I2S_PORT
+    int "TTS I2S controller"
+    range 0 1
+    default 0
+    help
+        I2S peripheral instance driving the audio path. Controller 0 is
+        mapped to the pins routed on the Waveshare carrier.
+
+config APP_TTS_I2S_BCK
+    int "TTS I2S BCK GPIO"
+    range 0 48
+    default 33
+    help
+        GPIO connected to the bit clock (BCK) line of the external audio
+        codec or DAC.
+
+config APP_TTS_I2S_WS
+    int "TTS I2S WS/LRCK GPIO"
+    range 0 48
+    default 34
+    help
+        GPIO connected to the word select (WS/LRCK) line of the external
+        audio codec or DAC.
+
+config APP_TTS_I2S_DATA
+    int "TTS I2S data GPIO"
+    range 0 48
+    default 35
+    help
+        GPIO carrying the serial audio data stream towards the external
+        codec or amplifier.
+
+config APP_TTS_SYNTH_GAIN_PERCENT
+    int "TTS output gain (%)"
+    range 10 100
+    default 70
+    help
+        Relative amplitude applied to the generated PCM waveforms. Lower
+        values reduce the risk of clipping on small speakers, higher
+        values provide a louder output at the cost of potential
+        distortion.
+
+endif # APP_ENABLE_TTS_SYNTH
+
 config APP_ENABLE_TTS_STUB
-    bool "Enable TTS stub"
+    bool "Enable TTS logging stub"
     default n
     help
         Provide a stub Text-To-Speech hook for accessibility testing.
-        Implementations can be swapped at runtime through the settings
-        screen.
+        When enabled alongside the synthesizer it is used as a fallback
+        if the audio pipeline cannot be initialised.
 
 config APP_LANG_DEFAULT
     string "Default language (ISO 639-1 code)"
