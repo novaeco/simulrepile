@@ -90,6 +90,14 @@ config APP_ASSET_CACHE_MAX_PATH
         Must be large enough to cover the longest path stored on the SD
         card, including the /sdcard prefix.
 
+config APP_SD_MOUNT_POINT
+    string "SD card mount point"
+    default "/sdcard"
+    help
+        Mount path used by the SDMMC driver. The LVGL file system glue
+        layer uses this prefix when resolving resource paths on the SD
+        card.
+
 menu "Core Link Bridge"
 
 config APP_CORE_LINK_UART_PORT

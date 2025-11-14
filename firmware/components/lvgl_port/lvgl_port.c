@@ -50,6 +50,9 @@ static struct {
     bool pressed;
 } s_touch_state;
 
+#if LV_USE_LOG
+static void lvgl_log_cb(lv_log_level_t level, const char *buf);
+#endif
 static void lvgl_tick_task(void *arg);
 static void lvgl_render_task(void *arg);
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map);
@@ -72,6 +75,9 @@ esp_err_t lvgl_port_init(void)
     }
 
     lv_init();
+#if LV_USE_LOG
+    lv_log_register_print_cb(lvgl_log_cb);
+#endif
 
     uint32_t bytes_per_px = lv_color_format_get_size(LV_COLOR_FORMAT_RGB565);
     s_framebuffer_size = (size_t)LVGL_PORT_HOR_RES * LVGL_PORT_VER_RES * bytes_per_px;
@@ -348,3 +354,31 @@ static void lvgl_port_reset_state(void)
 
     s_initialized = false;
 }
+
+#if LV_USE_LOG
+static void lvgl_log_cb(lv_log_level_t level, const char *buf)
+{
+    if (!buf) {
+        return;
+    }
+
+    switch (level) {
+        case LV_LOG_LEVEL_ERROR:
+            ESP_LOGE("lvgl", "%s", buf);
+            break;
+        case LV_LOG_LEVEL_WARN:
+            ESP_LOGW("lvgl", "%s", buf);
+            break;
+        case LV_LOG_LEVEL_INFO:
+            ESP_LOGI("lvgl", "%s", buf);
+            break;
+        case LV_LOG_LEVEL_USER:
+            ESP_LOGD("lvgl", "%s", buf);
+            break;
+        case LV_LOG_LEVEL_TRACE:
+        default:
+            ESP_LOGV("lvgl", "%s", buf);
+            break;
+    }
+}
+#endif
