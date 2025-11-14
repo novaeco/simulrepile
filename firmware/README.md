@@ -4,7 +4,7 @@ Ce firmware cible l'écran Waveshare ESP32-S3-Touch-LCD-7B et fournit l'interfac
 
 ## Fonctionnalités principales
 
-- LVGL 9.x + LovyanGFX avec thème haut contraste et navigation par onglets (Dashboard, Sauvegardes, Documents, Paramètres, À propos).
+- LVGL 9.4 + LovyanGFX avec thème haut contraste et navigation par onglets (Dashboard, Sauvegardes, Documents, Paramètres, À propos).
 - Internationalisation dynamique (FR/EN/DE/ES) chargée depuis `/sdcard/i18n/*.json` avec bascule à chaud.
 - Service d'autosauvegarde et sauvegardes manuelles (`persist/save_service.*`) avec journalisation, TTS optionnel et restauration instantanée.
 - Lecteur documentaire SD (TXT/HTML) adossé au cache d'assets PSRAM.
@@ -24,8 +24,8 @@ Ce firmware cible l'écran Waveshare ESP32-S3-Touch-LCD-7B et fournit l'interfac
 
 ## Pré-requis
 
-1. ESP-IDF ≥ 5.5 (`. ./export.sh`).
-2. LVGL 9 et LovyanGFX fournis via les composants inclus.
+1. ESP-IDF ≥ 6.1 (`. ./export.sh`).
+2. LVGL 9.4 (esp_lvgl_port 2.6.x) et LovyanGFX fournis via les composants inclus.
 3. Carte SD formatée FAT contenant au minimum les dossiers `i18n/`, `docs/`, `saves/`.
 
 ## Build & flash
